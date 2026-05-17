@@ -4,7 +4,18 @@
 
 ## Status
 
-**v0.4.0 cut — pending crates.io publish.** The wire shapes are frozen for the 1.x protocol. APIs in the Rust SDK crates may still see small renames before the first `cargo publish`. If you're prototyping today, depend on the git tags rather than the path or registry.
+**v0.1.0 scaffold — protocol design + wire types + spec landed; runtime helpers incomplete.** Animus core v0.4.0 ships these crates as workspace members (`crates/animus-{plugin,subject,provider}-protocol/` + `crates/animus-plugin-runtime/` in [`launchapp-dev/animus-cli`](https://github.com/launchapp-dev/animus-cli)), so the design + wire types have been exercised against a real codebase. This standalone repo holds the same content but the runtime crate isn't yet standalone-compilable. Honest state before the first `cargo publish` to crates.io:
+
+| Crate | Standalone-compilable? | Why / what's left |
+|---|---|---|
+| `animus-plugin-protocol` | ✅ yes | Wire types only; no external Animus deps. |
+| `animus-subject-protocol` | ✅ yes | Pure trait + schema definitions. |
+| `animus-provider-protocol` | ✅ yes | Pure trait + schema definitions. |
+| `animus-plugin-runtime` | ❌ not yet | Imports `cli_wrapper::session::*` from the core workspace and references `orchestrator_plugin_protocol` (the old in-tree name) instead of `animus_plugin_protocol`. Needs `cli-wrapper` extracted (probably as `animus-session-backend`) + rename + `subject_backend_main` entrypoint added before crates.io publish. |
+
+The protocol [`spec.md`](./spec.md) is the source of truth for cross-language plugin authors — it doesn't depend on any of the runtime crate gaps above and can be implemented in Python, TypeScript, Go, or any language that speaks newline-delimited JSON-RPC 2.0 over stdio.
+
+If you're prototyping a plugin today against the wire spec, the protocol+subject+provider crates are usable now via git path/tag dependency from this repo. The `animus-plugin-runtime` shortcut entrypoints (`run_provider`, `subject_backend_main`) become available once the gap closes.
 
 ## Crates
 
