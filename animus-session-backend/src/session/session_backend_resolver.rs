@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use super::{
     claude::ClaudeSessionBackend, codex::CodexSessionBackend, gemini::GeminiSessionBackend,
-    oai_runner::OaiRunnerSessionBackend, opencode::OpenCodeSessionBackend, session_backend::SessionBackend,
-    session_request::SessionRequest, session_run::SessionRun, subprocess_session_backend::SubprocessSessionBackend,
+    oai_runner::OaiRunnerSessionBackend, opencode::OpenCodeSessionBackend,
+    session_backend::SessionBackend, session_request::SessionRequest, session_run::SessionRun,
+    subprocess_session_backend::SubprocessSessionBackend,
 };
 use crate::error::Result;
 
@@ -48,7 +49,10 @@ impl SessionBackendResolver {
             return None;
         }
 
-        Some(format!("native backend not implemented for tool '{}'; using subprocess backend", request.tool))
+        Some(format!(
+            "native backend not implemented for tool '{}'; using subprocess backend",
+            request.tool
+        ))
     }
 
     /// Pick the backend that will service `request`.
@@ -65,7 +69,9 @@ impl SessionBackendResolver {
         if request.tool.eq_ignore_ascii_case("opencode") {
             return self.opencode.clone();
         }
-        if request.tool.eq_ignore_ascii_case("oai-runner") || request.tool.eq_ignore_ascii_case("animus-oai-runner") {
+        if request.tool.eq_ignore_ascii_case("oai-runner")
+            || request.tool.eq_ignore_ascii_case("animus-oai-runner")
+        {
             return self.oai_runner.clone();
         }
 
@@ -78,7 +84,10 @@ impl SessionBackendResolver {
     pub async fn start_session(&self, mut request: SessionRequest) -> Result<SessionRun> {
         if let Some(reason) = self.fallback_reason(&request) {
             if let Some(extras) = request.extras.as_object_mut() {
-                extras.insert("fallback_reason".to_string(), serde_json::Value::String(reason));
+                extras.insert(
+                    "fallback_reason".to_string(),
+                    serde_json::Value::String(reason),
+                );
             }
         }
 
@@ -118,15 +127,27 @@ mod tests {
     #[test]
     fn resolver_reports_subprocess_fallback_reason() {
         let resolver = SessionBackendResolver::new();
-        let reason = resolver.fallback_reason(&req("sh")).expect("fallback reason should exist");
+        let reason = resolver
+            .fallback_reason(&req("sh"))
+            .expect("fallback reason should exist");
         assert!(reason.contains("using subprocess backend"));
     }
 
     #[test]
     fn resolver_selects_native_backends_without_fallback() {
         let resolver = SessionBackendResolver::new();
-        for tool in ["claude", "codex", "gemini", "opencode", "oai-runner", "animus-oai-runner"] {
-            assert!(resolver.fallback_reason(&req(tool)).is_none(), "tool {tool} should not need fallback");
+        for tool in [
+            "claude",
+            "codex",
+            "gemini",
+            "opencode",
+            "oai-runner",
+            "animus-oai-runner",
+        ] {
+            assert!(
+                resolver.fallback_reason(&req(tool)).is_none(),
+                "tool {tool} should not need fallback"
+            );
         }
     }
 }

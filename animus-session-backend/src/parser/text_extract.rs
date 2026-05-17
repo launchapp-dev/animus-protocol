@@ -34,15 +34,21 @@ fn extract_claude(obj: &Value) -> NormalizedTextEvent {
     match event_type {
         "content_block_delta" => {
             if let Some(text) = obj.pointer("/delta/text").and_then(Value::as_str) {
-                return NormalizedTextEvent::TextChunk { text: text.to_string() };
+                return NormalizedTextEvent::TextChunk {
+                    text: text.to_string(),
+                };
             }
         }
         "result" => {
             if let Some(text) = obj.get("result").and_then(Value::as_str) {
-                return NormalizedTextEvent::FinalResult { text: text.to_string() };
+                return NormalizedTextEvent::FinalResult {
+                    text: text.to_string(),
+                };
             }
             if let Some(text) = obj.pointer("/result/text").and_then(Value::as_str) {
-                return NormalizedTextEvent::FinalResult { text: text.to_string() };
+                return NormalizedTextEvent::FinalResult {
+                    text: text.to_string(),
+                };
             }
         }
         "assistant" => {
@@ -61,13 +67,21 @@ fn extract_claude(obj: &Value) -> NormalizedTextEvent {
             }
         }
         "content_block_start" => {
-            if let Some(text) = obj.pointer("/content_block/text").and_then(Value::as_str).filter(|t| !t.is_empty()) {
-                return NormalizedTextEvent::TextChunk { text: text.to_string() };
+            if let Some(text) = obj
+                .pointer("/content_block/text")
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty())
+            {
+                return NormalizedTextEvent::TextChunk {
+                    text: text.to_string(),
+                };
             }
         }
         _ => {
             if let Some(text) = obj.get("content").and_then(Value::as_str) {
-                return NormalizedTextEvent::TextChunk { text: text.to_string() };
+                return NormalizedTextEvent::TextChunk {
+                    text: text.to_string(),
+                };
             }
         }
     }
@@ -93,7 +107,9 @@ fn extract_codex(obj: &Value) -> NormalizedTextEvent {
 
     if let Some(text) = item.get("text").and_then(Value::as_str) {
         if !text.is_empty() {
-            return NormalizedTextEvent::FinalResult { text: text.to_string() };
+            return NormalizedTextEvent::FinalResult {
+                text: text.to_string(),
+            };
         }
     }
 
@@ -120,20 +136,28 @@ fn extract_gemini(obj: &Value) -> NormalizedTextEvent {
 
     if event_type == "partialResult" {
         if let Some(text) = obj.pointer("/partialResult/text").and_then(Value::as_str) {
-            return NormalizedTextEvent::TextChunk { text: text.to_string() };
+            return NormalizedTextEvent::TextChunk {
+                text: text.to_string(),
+            };
         }
     }
 
     if let Some(text) = obj.get("text").and_then(Value::as_str) {
-        return NormalizedTextEvent::TextChunk { text: text.to_string() };
+        return NormalizedTextEvent::TextChunk {
+            text: text.to_string(),
+        };
     }
 
     if let Some(text) = obj.get("response").and_then(Value::as_str) {
-        return NormalizedTextEvent::FinalResult { text: text.to_string() };
+        return NormalizedTextEvent::FinalResult {
+            text: text.to_string(),
+        };
     }
 
     if let Some(text) = obj.pointer("/content/text").and_then(Value::as_str) {
-        return NormalizedTextEvent::FinalResult { text: text.to_string() };
+        return NormalizedTextEvent::FinalResult {
+            text: text.to_string(),
+        };
     }
 
     if let Some(parts) = obj.pointer("/content/parts").and_then(Value::as_array) {
@@ -150,7 +174,10 @@ fn extract_gemini(obj: &Value) -> NormalizedTextEvent {
 
     if let Some(candidates) = obj.get("candidates").and_then(Value::as_array) {
         for candidate in candidates {
-            if let Some(parts) = candidate.pointer("/content/parts").and_then(Value::as_array) {
+            if let Some(parts) = candidate
+                .pointer("/content/parts")
+                .and_then(Value::as_array)
+            {
                 let mut text = String::new();
                 for part in parts {
                     if let Some(t) = part.get("text").and_then(Value::as_str) {
@@ -172,12 +199,16 @@ fn extract_oai_runner(obj: &Value) -> NormalizedTextEvent {
     match event_type {
         "text_chunk" => {
             if let Some(text) = obj.get("text").and_then(Value::as_str) {
-                return NormalizedTextEvent::TextChunk { text: text.to_string() };
+                return NormalizedTextEvent::TextChunk {
+                    text: text.to_string(),
+                };
             }
         }
         "result" => {
             if let Some(text) = obj.get("text").and_then(Value::as_str) {
-                return NormalizedTextEvent::FinalResult { text: text.to_string() };
+                return NormalizedTextEvent::FinalResult {
+                    text: text.to_string(),
+                };
             }
         }
         _ => {}
@@ -190,12 +221,16 @@ fn extract_opencode(obj: &Value) -> NormalizedTextEvent {
 
     if event_type == "text" {
         if let Some(text) = obj.get("text").and_then(Value::as_str) {
-            return NormalizedTextEvent::TextChunk { text: text.to_string() };
+            return NormalizedTextEvent::TextChunk {
+                text: text.to_string(),
+            };
         }
     }
 
     if let Some(text) = obj.get("content").and_then(Value::as_str) {
-        return NormalizedTextEvent::TextChunk { text: text.to_string() };
+        return NormalizedTextEvent::TextChunk {
+            text: text.to_string(),
+        };
     }
 
     NormalizedTextEvent::Ignored
@@ -203,10 +238,14 @@ fn extract_opencode(obj: &Value) -> NormalizedTextEvent {
 
 fn extract_generic(obj: &Value) -> NormalizedTextEvent {
     if let Some(text) = obj.get("text").and_then(Value::as_str) {
-        return NormalizedTextEvent::TextChunk { text: text.to_string() };
+        return NormalizedTextEvent::TextChunk {
+            text: text.to_string(),
+        };
     }
     if let Some(text) = obj.get("content").and_then(Value::as_str) {
-        return NormalizedTextEvent::TextChunk { text: text.to_string() };
+        return NormalizedTextEvent::TextChunk {
+            text: text.to_string(),
+        };
     }
     NormalizedTextEvent::Ignored
 }
@@ -220,14 +259,21 @@ mod tests {
         let line = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello world"}}"#;
         assert_eq!(
             extract_text_from_line(line, "claude"),
-            NormalizedTextEvent::TextChunk { text: "Hello world".into() }
+            NormalizedTextEvent::TextChunk {
+                text: "Hello world".into()
+            }
         );
     }
 
     #[test]
     fn codex_item_completed_text() {
         let line = r#"{"type":"item.completed","item":{"type":"agent_message","text":"Done!"}}"#;
-        assert_eq!(extract_text_from_line(line, "codex"), NormalizedTextEvent::FinalResult { text: "Done!".into() });
+        assert_eq!(
+            extract_text_from_line(line, "codex"),
+            NormalizedTextEvent::FinalResult {
+                text: "Done!".into()
+            }
+        );
     }
 
     #[test]
@@ -235,14 +281,21 @@ mod tests {
         let line = r#"{"type":"partialResult","partialResult":{"text":"Streaming chunk"}}"#;
         assert_eq!(
             extract_text_from_line(line, "gemini"),
-            NormalizedTextEvent::TextChunk { text: "Streaming chunk".into() }
+            NormalizedTextEvent::TextChunk {
+                text: "Streaming chunk".into()
+            }
         );
     }
 
     #[test]
     fn oai_runner_text_chunk() {
         let line = r#"{"type":"text_chunk","text":"Hello"}"#;
-        assert_eq!(extract_text_from_line(line, "oai-runner"), NormalizedTextEvent::TextChunk { text: "Hello".into() });
+        assert_eq!(
+            extract_text_from_line(line, "oai-runner"),
+            NormalizedTextEvent::TextChunk {
+                text: "Hello".into()
+            }
+        );
     }
 
     #[test]
@@ -250,7 +303,9 @@ mod tests {
         let line = r#"{"type":"text","text":"OpenCode output"}"#;
         assert_eq!(
             extract_text_from_line(line, "opencode"),
-            NormalizedTextEvent::TextChunk { text: "OpenCode output".into() }
+            NormalizedTextEvent::TextChunk {
+                text: "OpenCode output".into()
+            }
         );
     }
 
@@ -259,12 +314,17 @@ mod tests {
         let line = r#"{"text":"generic output"}"#;
         assert_eq!(
             extract_text_from_line(line, "unknown-tool"),
-            NormalizedTextEvent::TextChunk { text: "generic output".into() }
+            NormalizedTextEvent::TextChunk {
+                text: "generic output".into()
+            }
         );
     }
 
     #[test]
     fn non_json_line_ignored() {
-        assert_eq!(extract_text_from_line("plain text line", "claude"), NormalizedTextEvent::Ignored);
+        assert_eq!(
+            extract_text_from_line("plain text line", "claude"),
+            NormalizedTextEvent::Ignored
+        );
     }
 }

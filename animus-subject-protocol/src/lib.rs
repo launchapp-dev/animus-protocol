@@ -565,12 +565,21 @@ mod tests {
     #[test]
     fn patch_double_option_distinguishes_clear_from_unset() {
         let unset = SubjectPatch::default();
-        let clear = SubjectPatch { assignee: Some(None), ..Default::default() };
-        let set_to_alice = SubjectPatch { assignee: Some(Some("alice".to_string())), ..Default::default() };
+        let clear = SubjectPatch {
+            assignee: Some(None),
+            ..Default::default()
+        };
+        let set_to_alice = SubjectPatch {
+            assignee: Some(Some("alice".to_string())),
+            ..Default::default()
+        };
 
         // Unset should not serialize an `assignee` key at all.
         let unset_v = serde_json::to_value(&unset).unwrap();
-        assert!(unset_v.get("assignee").is_none(), "unset should omit assignee");
+        assert!(
+            unset_v.get("assignee").is_none(),
+            "unset should omit assignee"
+        );
 
         // Clear serializes as JSON null.
         let clear_v = serde_json::to_value(&clear).unwrap();

@@ -50,7 +50,11 @@ impl SessionBackend for ClaudeSessionBackend {
         start_claude_session(request, None).await
     }
 
-    async fn resume_session(&self, request: SessionRequest, session_id: &str) -> Result<SessionRun> {
+    async fn resume_session(
+        &self,
+        request: SessionRequest,
+        session_id: &str,
+    ) -> Result<SessionRun> {
         start_claude_session(request, Some(session_id.to_string())).await
     }
 

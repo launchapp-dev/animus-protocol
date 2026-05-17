@@ -47,7 +47,11 @@ impl SessionBackend for CodexSessionBackend {
         start_codex_session(request, None).await
     }
 
-    async fn resume_session(&self, request: SessionRequest, session_id: &str) -> Result<SessionRun> {
+    async fn resume_session(
+        &self,
+        request: SessionRequest,
+        session_id: &str,
+    ) -> Result<SessionRun> {
         start_codex_session(request, Some(session_id)).await
     }
 

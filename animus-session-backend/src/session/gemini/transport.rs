@@ -10,7 +10,9 @@ use uuid::Uuid;
 
 use crate::cli::{ensure_flag_value, parse_launch_from_runtime_contract, LaunchInvocation};
 use crate::error::{Error, Result};
-use crate::session::{session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun};
+use crate::session::{
+    session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun,
+};
 
 use super::parser::parse_gemini_json_chunk;
 
@@ -41,8 +43,15 @@ pub(crate) async fn start_gemini_session(
         )
         .await
         {
-            let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
-            let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
+            let _ = event_tx
+                .send(SessionEvent::Error {
+                    message: error.to_string(),
+                    recoverable: false,
+                })
+                .await;
+            let _ = event_tx
+                .send(SessionEvent::Finished { exit_code: Some(1) })
+                .await;
         }
         unregister_session(&control_session_id);
     });
@@ -72,13 +81,18 @@ pub(crate) fn gemini_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
 ) -> Result<LaunchInvocation> {
-    if let Some(invocation) = parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))? {
+    if let Some(invocation) =
+        parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
+    {
         return Ok(invocation);
     }
 
     let mut args = Vec::new();
 
-    if let Some(session_id) = resume_session_id.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(session_id) = resume_session_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         args.push("--resume".to_string());
         args.push(session_id.to_string());
     } else if let Some(session_id) = configured_gemini_session_id(request) {
@@ -96,8 +110,12 @@ pub(crate) fn gemini_invocation_for_request(
     args.push("-p".to_string());
     args.push(request.prompt.clone());
 
-    let mut invocation =
-        LaunchInvocation { command: "gemini".to_string(), args, env: Default::default(), prompt_via_stdin: false };
+    let mut invocation = LaunchInvocation {
+        command: "gemini".to_string(),
+        args,
+        env: Default::default(),
+        prompt_via_stdin: false,
+    };
     let insert_at = invocation.args.len();
     ensure_flag_value(&mut invocation.args, "--output-format", "json", insert_at);
 
@@ -131,7 +149,13 @@ async fn run_gemini_session(
     let _ = pid_tx.send(child.id());
 
     let pid = child.id();
-    let _ = event_tx.send(SessionEvent::Started { backend, session_id, pid }).await;
+    let _ = event_tx
+        .send(SessionEvent::Started {
+            backend,
+            session_id,
+            pid,
+        })
+        .await;
 
     if let Some(mut stdin) = child.stdin.take() {
         if invocation.prompt_via_stdin && !request.prompt.is_empty() {
@@ -140,10 +164,14 @@ async fn run_gemini_session(
         drop(stdin);
     }
 
-    let stdout =
-        child.stdout.take().ok_or_else(|| Error::ExecutionFailed("failed to capture gemini stdout".to_string()))?;
-    let stderr =
-        child.stderr.take().ok_or_else(|| Error::ExecutionFailed("failed to capture gemini stderr".to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::ExecutionFailed("failed to capture gemini stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| Error::ExecutionFailed("failed to capture gemini stderr".to_string()))?;
 
     let stdout_tx = event_tx.clone();
     let stdout_task = tokio::spawn(async move {
@@ -192,7 +220,12 @@ async fn run_gemini_session(
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = stderr_tx.send(SessionEvent::Error { message: line, recoverable: true }).await;
+            let _ = stderr_tx
+                .send(SessionEvent::Error {
+                    message: line,
+                    recoverable: true,
+                })
+                .await;
         }
     });
 
@@ -206,7 +239,11 @@ async fn run_gemini_session(
     Ok(())
 }
 
-async fn emit_gemini_events(chunk: &str, tx: &mpsc::Sender<SessionEvent>, last_final_text: &mut Option<String>) {
+async fn emit_gemini_events(
+    chunk: &str,
+    tx: &mpsc::Sender<SessionEvent>,
+    last_final_text: &mut Option<String>,
+) {
     for event in parse_gemini_json_chunk(chunk) {
         if let SessionEvent::FinalText { text } = &event {
             if last_final_text.as_deref() == Some(text.as_str()) {
@@ -282,5 +319,8 @@ fn unregister_session(session_id: &str) {
 }
 
 fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
-    session_registry().lock().ok().and_then(|mut registry| registry.remove(session_id))
+    session_registry()
+        .lock()
+        .ok()
+        .and_then(|mut registry| registry.remove(session_id))
 }

@@ -366,7 +366,10 @@ pub trait ProviderBackend: Send + Sync + 'static {
     /// Resume a prior session by id. Providers without resume support
     /// should advertise `capabilities.resume = false` in the manifest and
     /// return [`BackendError::Other`] with a clear message if called.
-    async fn resume_agent(&self, request: AgentResumeRequest) -> Result<AgentRunResponse, BackendError>;
+    async fn resume_agent(
+        &self,
+        request: AgentResumeRequest,
+    ) -> Result<AgentRunResponse, BackendError>;
 
     /// Cancel an in-flight session.
     async fn cancel_agent(&self, session_id: &str) -> Result<(), BackendError>;

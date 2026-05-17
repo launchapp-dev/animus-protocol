@@ -10,7 +10,9 @@ use uuid::Uuid;
 
 use crate::cli::{ensure_flag_value, parse_launch_from_runtime_contract, LaunchInvocation};
 use crate::error::{Error, Result};
-use crate::session::{session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun};
+use crate::session::{
+    session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun,
+};
 
 use super::parser::parse_oai_runner_json_line;
 
@@ -41,8 +43,15 @@ pub(crate) async fn start_oai_runner_session(
         )
         .await
         {
-            let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
-            let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
+            let _ = event_tx
+                .send(SessionEvent::Error {
+                    message: error.to_string(),
+                    recoverable: false,
+                })
+                .await;
+            let _ = event_tx
+                .send(SessionEvent::Finished { exit_code: Some(1) })
+                .await;
         }
         unregister_session(&control_session_id);
     });
@@ -72,7 +81,9 @@ pub(crate) fn oai_runner_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
 ) -> Result<LaunchInvocation> {
-    if let Some(invocation) = parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))? {
+    if let Some(invocation) =
+        parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
+    {
         return Ok(invocation);
     }
 
@@ -83,7 +94,10 @@ pub(crate) fn oai_runner_invocation_for_request(
     }
     args.push("--format".to_string());
     args.push("json".to_string());
-    if let Some(session_id) = resume_session_id.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(session_id) = resume_session_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         args.push("--session-id".to_string());
         args.push(session_id.to_string());
     }
@@ -126,7 +140,13 @@ async fn run_oai_runner_session(
     let _ = pid_tx.send(child.id());
 
     let pid = child.id();
-    let _ = event_tx.send(SessionEvent::Started { backend, session_id, pid }).await;
+    let _ = event_tx
+        .send(SessionEvent::Started {
+            backend,
+            session_id,
+            pid,
+        })
+        .await;
 
     if let Some(mut stdin) = child.stdin.take() {
         if invocation.prompt_via_stdin && !request.prompt.is_empty() {
@@ -135,10 +155,14 @@ async fn run_oai_runner_session(
         drop(stdin);
     }
 
-    let stdout =
-        child.stdout.take().ok_or_else(|| Error::ExecutionFailed("failed to capture oai-runner stdout".to_string()))?;
-    let stderr =
-        child.stderr.take().ok_or_else(|| Error::ExecutionFailed("failed to capture oai-runner stderr".to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::ExecutionFailed("failed to capture oai-runner stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| Error::ExecutionFailed("failed to capture oai-runner stderr".to_string()))?;
 
     let stdout_tx = event_tx.clone();
     let stdout_task = tokio::spawn(async move {
@@ -161,11 +185,22 @@ async fn run_oai_runner_session(
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = stderr_tx.send(SessionEvent::Error { message: line, recoverable: true }).await;
+            let _ = stderr_tx
+                .send(SessionEvent::Error {
+                    message: line,
+                    recoverable: true,
+                })
+                .await;
         }
     });
 
-    let exit_code = wait_for_child(&mut child, request.timeout_secs, &mut cancel_rx, "oai-runner").await?;
+    let exit_code = wait_for_child(
+        &mut child,
+        request.timeout_secs,
+        &mut cancel_rx,
+        "oai-runner",
+    )
+    .await?;
     let _ = stdout_task.await;
     let _ = stderr_task.await;
     let _ = event_tx.send(SessionEvent::Finished { exit_code }).await;
@@ -224,5 +259,8 @@ fn unregister_session(session_id: &str) {
 }
 
 fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
-    session_registry().lock().ok().and_then(|mut registry| registry.remove(session_id))
+    session_registry()
+        .lock()
+        .ok()
+        .and_then(|mut registry| registry.remove(session_id))
 }

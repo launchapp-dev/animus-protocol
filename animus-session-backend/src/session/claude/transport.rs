@@ -8,11 +8,15 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::cli::{ensure_flag, ensure_flag_value, parse_launch_from_runtime_contract, LaunchInvocation};
+use crate::cli::{
+    ensure_flag, ensure_flag_value, parse_launch_from_runtime_contract, LaunchInvocation,
+};
 use crate::error::{Error, Result};
 
 use super::parser::parse_claude_stdout_line;
-use crate::session::{session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun};
+use crate::session::{
+    session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun,
+};
 
 pub(crate) async fn start_claude_session(
     request: SessionRequest,
@@ -41,8 +45,15 @@ pub(crate) async fn start_claude_session(
         )
         .await
         {
-            let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
-            let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
+            let _ = event_tx
+                .send(SessionEvent::Error {
+                    message: error.to_string(),
+                    recoverable: false,
+                })
+                .await;
+            let _ = event_tx
+                .send(SessionEvent::Finished { exit_code: Some(1) })
+                .await;
         }
         unregister_session(&control_session_id);
     });
@@ -72,12 +83,21 @@ pub(crate) fn claude_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
 ) -> Result<LaunchInvocation> {
-    if let Some(mut invocation) = parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))? {
+    if let Some(mut invocation) =
+        parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
+    {
         if !invocation.env.contains_key("ANTHROPIC_BASE_URL") {
-            if let Some((base_url, api_key)) = resolve_anthropic_compatible_provider(&request.model) {
-                invocation.env.insert("ANTHROPIC_BASE_URL".to_string(), base_url);
-                invocation.env.insert("ANTHROPIC_API_KEY".to_string(), api_key);
-                invocation.env.insert("DISABLE_PROMPT_CACHING".to_string(), "true".to_string());
+            if let Some((base_url, api_key)) = resolve_anthropic_compatible_provider(&request.model)
+            {
+                invocation
+                    .env
+                    .insert("ANTHROPIC_BASE_URL".to_string(), base_url);
+                invocation
+                    .env
+                    .insert("ANTHROPIC_API_KEY".to_string(), api_key);
+                invocation
+                    .env
+                    .insert("DISABLE_PROMPT_CACHING".to_string(), "true".to_string());
                 if let Some(pos) = invocation.args.iter().position(|a| a == "--model") {
                     if let Some(model_arg) = invocation.args.get_mut(pos + 1) {
                         if let Some(bare) = model_arg.split('/').nth(1) {
@@ -90,17 +110,29 @@ pub(crate) fn claude_invocation_for_request(
         return Ok(invocation);
     }
 
-    let mut args =
-        vec!["--print".to_string(), "--verbose".to_string(), "--output-format".to_string(), "stream-json".to_string()];
+    let mut args = vec![
+        "--print".to_string(),
+        "--verbose".to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+    ];
 
-    if let Some(permission_mode) = request.permission_mode.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(permission_mode) = request
+        .permission_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         args.push("--permission-mode".to_string());
         args.push(permission_mode.to_string());
     } else {
         args.push("--dangerously-skip-permissions".to_string());
     }
 
-    if let Some(session_id) = resume_session_id.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(session_id) = resume_session_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         args.push("--resume".to_string());
         args.push(session_id.to_string());
     } else if let Some(session_id) = configured_claude_session_id(request) {
@@ -113,7 +145,10 @@ pub(crate) fn claude_invocation_for_request(
     let mut env: std::collections::BTreeMap<String, String> = Default::default();
     for (key, value) in &request.env_vars {
         match key.as_str() {
-            "ANTHROPIC_BASE_URL" | "ANTHROPIC_API_KEY" | "ENABLE_TOOL_SEARCH" | "DISABLE_PROMPT_CACHING" => {
+            "ANTHROPIC_BASE_URL"
+            | "ANTHROPIC_API_KEY"
+            | "ENABLE_TOOL_SEARCH"
+            | "DISABLE_PROMPT_CACHING" => {
                 env.insert(key.clone(), value.clone());
             }
             _ => {}
@@ -134,7 +169,12 @@ pub(crate) fn claude_invocation_for_request(
         args.push(resolved_model);
     }
     args.push(request.prompt.clone());
-    let mut invocation = LaunchInvocation { command: "claude".to_string(), args, env, prompt_via_stdin: false };
+    let mut invocation = LaunchInvocation {
+        command: "claude".to_string(),
+        args,
+        env,
+        prompt_via_stdin: false,
+    };
     ensure_flag(&mut invocation.args, "--verbose", 1);
     ensure_flag_value(&mut invocation.args, "--output-format", "stream-json", 2);
 
@@ -153,21 +193,22 @@ fn resolve_anthropic_compatible_provider(model: &str) -> Option<(String, String)
     }
 
     let home = std::env::var("HOME").ok()?;
-    let creds_path = std::path::PathBuf::from(home).join(".animus").join("credentials.json");
+    let creds_path = std::path::PathBuf::from(home)
+        .join(".animus")
+        .join("credentials.json");
     let content = std::fs::read_to_string(&creds_path).ok()?;
     let creds: serde_json::Value = serde_json::from_str(&content).ok()?;
     let providers = creds.get("providers")?.as_object()?;
 
-    let entry =
-        providers.get(provider).or_else(|| {
-            providers.iter().find_map(|(key, val)| {
-                if normalized.contains(key) || key.contains(&normalized) {
-                    Some(val)
-                } else {
-                    None
-                }
-            })
-        })?;
+    let entry = providers.get(provider).or_else(|| {
+        providers.iter().find_map(|(key, val)| {
+            if normalized.contains(key) || key.contains(&normalized) {
+                Some(val)
+            } else {
+                None
+            }
+        })
+    })?;
     let base_url = entry.get("base_url")?.as_str()?.to_string();
     let api_key = entry.get("api_key")?.as_str()?.to_string();
 
@@ -205,7 +246,13 @@ async fn run_claude_session(
     let _ = pid_tx.send(child.id());
 
     let pid = child.id();
-    let _ = event_tx.send(SessionEvent::Started { backend, session_id, pid }).await;
+    let _ = event_tx
+        .send(SessionEvent::Started {
+            backend,
+            session_id,
+            pid,
+        })
+        .await;
 
     if let Some(mut stdin) = child.stdin.take() {
         if invocation.prompt_via_stdin && !request.prompt.is_empty() {
@@ -214,10 +261,14 @@ async fn run_claude_session(
         drop(stdin);
     }
 
-    let stdout =
-        child.stdout.take().ok_or_else(|| Error::ExecutionFailed("failed to capture claude stdout".to_string()))?;
-    let stderr =
-        child.stderr.take().ok_or_else(|| Error::ExecutionFailed("failed to capture claude stderr".to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::ExecutionFailed("failed to capture claude stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| Error::ExecutionFailed("failed to capture claude stderr".to_string()))?;
 
     let stdout_tx = event_tx.clone();
     let stdout_task = tokio::spawn(async move {
@@ -241,7 +292,12 @@ async fn run_claude_session(
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = stderr_tx.send(SessionEvent::Error { message: line, recoverable: true }).await;
+            let _ = stderr_tx
+                .send(SessionEvent::Error {
+                    message: line,
+                    recoverable: true,
+                })
+                .await;
         }
     });
 
@@ -309,7 +365,10 @@ fn unregister_session(session_id: &str) {
 }
 
 fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
-    session_registry().lock().ok().and_then(|mut registry| registry.remove(session_id))
+    session_registry()
+        .lock()
+        .ok()
+        .and_then(|mut registry| registry.remove(session_id))
 }
 
 fn configured_claude_session_id(request: &SessionRequest) -> Option<String> {

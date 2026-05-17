@@ -122,7 +122,12 @@ pub struct RpcRequest {
 impl RpcRequest {
     /// Build a request with the given id, method, and optional params.
     pub fn new(id: impl Into<Value>, method: impl Into<String>, params: Option<Value>) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id: Some(id.into()), method: method.into(), params }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: Some(id.into()),
+            method: method.into(),
+            params,
+        }
     }
 }
 
@@ -146,7 +151,11 @@ pub struct RpcNotification {
 impl RpcNotification {
     /// Build a notification with the given method and optional params.
     pub fn new(method: impl Into<String>, params: Option<Value>) -> Self {
-        Self { jsonrpc: "2.0".to_string(), method: method.into(), params }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            method: method.into(),
+            params,
+        }
     }
 }
 
@@ -173,12 +182,22 @@ pub struct RpcResponse {
 impl RpcResponse {
     /// Build a successful response carrying the given result value.
     pub fn ok(id: Option<Value>, result: Value) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     /// Build an error response carrying the given error payload.
     pub fn err(id: Option<Value>, error: RpcError) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id, result: None, error: Some(error) }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: None,
+            error: Some(error),
+        }
     }
 }
 
@@ -397,7 +416,11 @@ mod tests {
     fn response_err_sets_error_and_clears_result() {
         let response = RpcResponse::err(
             Some(serde_json::json!(1)),
-            RpcError { code: error_codes::METHOD_NOT_FOUND, message: "nope".into(), data: None },
+            RpcError {
+                code: error_codes::METHOD_NOT_FOUND,
+                message: "nope".into(),
+                data: None,
+            },
         );
         assert!(response.error.is_some());
         assert!(response.result.is_none());
@@ -413,7 +436,8 @@ mod tests {
             "protocol_version": "1.0.0",
             "capabilities": ["ticket/get"]
         });
-        let manifest: PluginManifest = serde_json::from_value(value).expect("manifest should parse");
+        let manifest: PluginManifest =
+            serde_json::from_value(value).expect("manifest should parse");
         assert_eq!(manifest.plugin_kind, "ticket_backend");
     }
 

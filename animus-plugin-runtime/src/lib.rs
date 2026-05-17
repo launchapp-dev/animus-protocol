@@ -46,21 +46,20 @@
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 
-use anyhow::Result;
 use animus_plugin_protocol::{
-    error_codes, HealthCheckResult, HealthStatus, InitializeResult, PluginCapabilities,
-    PluginInfo, PluginManifest, RpcError, RpcNotification, RpcRequest, RpcResponse,
-    PROTOCOL_VERSION,
+    error_codes, HealthCheckResult, HealthStatus, InitializeResult, PluginCapabilities, PluginInfo,
+    PluginManifest, RpcError, RpcNotification, RpcRequest, RpcResponse, PROTOCOL_VERSION,
 };
 use animus_provider_protocol::{
-    AgentCancelRequest, AgentResumeRequest, AgentRunRequest, ProviderBackend,
-    METHOD_AGENT_CANCEL, METHOD_AGENT_RESUME, METHOD_AGENT_RUN,
+    AgentCancelRequest, AgentResumeRequest, AgentRunRequest, ProviderBackend, METHOD_AGENT_CANCEL,
+    METHOD_AGENT_RESUME, METHOD_AGENT_RUN,
 };
 use animus_subject_protocol::{
     BackendError as SubjectBackendError, SubjectBackend, SubjectFilter, SubjectId, SubjectPatch,
     METHOD_SUBJECT_GET, METHOD_SUBJECT_LIST, METHOD_SUBJECT_SCHEMA, METHOD_SUBJECT_UPDATE,
     METHOD_SUBJECT_WATCH, NOTIFICATION_SUBJECT_CHANGED,
 };
+use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Stdout};
@@ -281,10 +280,7 @@ async fn handle_subject_request<B: SubjectBackend + 'static>(
                 id,
                 RpcError {
                     code: error_codes::METHOD_NOT_SUPPORTED,
-                    message: format!(
-                        "{} does not implement subject/watch",
-                        info.name
-                    ),
+                    message: format!("{} does not implement subject/watch", info.name),
                     data: None,
                 },
             )),
@@ -395,14 +391,13 @@ async fn handle_provider_request<P: ProviderBackend + 'static>(
             })
         }
         METHOD_AGENT_CANCEL => {
-            let params =
-                match deserialize_params::<AgentCancelRequest>(request.params, false) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        write_response(&stdout, &RpcResponse::err(id, error)).await;
-                        return;
-                    }
-                };
+            let params = match deserialize_params::<AgentCancelRequest>(request.params, false) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
             Some(match backend.cancel_agent(&params.session_id).await {
                 Ok(()) => RpcResponse::ok(
                     id,
@@ -460,7 +455,10 @@ pub(crate) async fn write_response(stdout: &Arc<Mutex<Stdout>>, response: &RpcRe
 
 /// Serialize and write a JSON-RPC notification frame to the shared stdout
 /// handle.
-pub(crate) async fn write_notification(stdout: &Arc<Mutex<Stdout>>, notification: &RpcNotification) {
+pub(crate) async fn write_notification(
+    stdout: &Arc<Mutex<Stdout>>,
+    notification: &RpcNotification,
+) {
     write_frame(stdout, notification).await;
 }
 
@@ -503,9 +501,7 @@ pub(crate) fn print_manifest_and_exit(info: &PluginInfo, capabilities: &PluginCa
 
 fn refuse_terminal_stdin(plugin_name: &str) {
     if io::stdin().is_terminal() {
-        eprintln!(
-            "{plugin_name} is a STDIO plugin; pipe JSON-RPC on stdin or pass --manifest"
-        );
+        eprintln!("{plugin_name} is a STDIO plugin; pipe JSON-RPC on stdin or pass --manifest");
         std::process::exit(2);
     }
 }
