@@ -1,0 +1,21 @@
+[package]
+name = "animus-session-backend"
+description = "Session-management primitives for Animus provider plugins that wrap CLI binaries. Subprocess spawn, stdio piping, session lifecycle, cancellation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+animus-plugin-protocol = { path = "../animus-plugin-protocol", version = "0.1.0" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "io-util", "process", "time"] }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing = "0.1"
+uuid = { version = "1.6", features = ["v4", "serde"] }

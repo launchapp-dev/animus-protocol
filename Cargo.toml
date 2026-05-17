@@ -4,6 +4,7 @@ members = [
     "animus-subject-protocol",
     "animus-provider-protocol",
     "animus-plugin-runtime",
+    "animus-session-backend",
 ]
 resolver = "2"
 
