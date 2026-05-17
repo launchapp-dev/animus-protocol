@@ -4,18 +4,18 @@
 
 ## Status
 
-**v0.1.0 scaffold — protocol design + wire types + spec landed; runtime helpers incomplete.** Animus core v0.4.0 ships these crates as workspace members (`crates/animus-{plugin,subject,provider}-protocol/` + `crates/animus-plugin-runtime/` in [`launchapp-dev/animus-cli`](https://github.com/launchapp-dev/animus-cli)), so the design + wire types have been exercised against a real codebase. This standalone repo holds the same content but the runtime crate isn't yet standalone-compilable. Honest state before the first `cargo publish` to crates.io:
+**v0.1.0 scaffold — protocol design + wire types + spec landed; runtime helpers standalone-compilable.** Animus core v0.4.0 ships these crates as workspace members (`crates/animus-{plugin,subject,provider}-protocol/` + `crates/animus-plugin-runtime/` in [`launchapp-dev/animus-cli`](https://github.com/launchapp-dev/animus-cli)), so the design + wire types have been exercised against a real codebase. The standalone repo now compiles cleanly end-to-end. Honest state before the first `cargo publish` to crates.io:
 
-| Crate | Standalone-compilable? | Why / what's left |
+| Crate | Standalone-compilable? | Notes |
 |---|---|---|
-| `animus-plugin-protocol` | ✅ yes | Wire types only; no external Animus deps. |
-| `animus-subject-protocol` | ✅ yes | Pure trait + schema definitions. |
-| `animus-provider-protocol` | ✅ yes | Pure trait + schema definitions. |
-| `animus-plugin-runtime` | ❌ not yet | Imports `cli_wrapper::session::*` from the core workspace and references `orchestrator_plugin_protocol` (the old in-tree name) instead of `animus_plugin_protocol`. Needs `cli-wrapper` extracted (probably as `animus-session-backend`) + rename + `subject_backend_main` entrypoint added before crates.io publish. |
+| `animus-plugin-protocol` | yes | Wire types only; no external Animus deps. |
+| `animus-subject-protocol` | yes | Pure trait + schema definitions. |
+| `animus-provider-protocol` | yes | Pure trait + schema definitions. |
+| `animus-plugin-runtime` | yes | Slim stdio JSON-RPC loop; exposes `subject_backend_main` and `provider_main`. Provider session helpers (event channels, child-process plumbing) will land in a separate `animus-session-backend` crate. |
 
-The protocol [`spec.md`](./spec.md) is the source of truth for cross-language plugin authors — it doesn't depend on any of the runtime crate gaps above and can be implemented in Python, TypeScript, Go, or any language that speaks newline-delimited JSON-RPC 2.0 over stdio.
+The protocol [`spec.md`](./spec.md) is the source of truth for cross-language plugin authors — it can be implemented in Python, TypeScript, Go, or any language that speaks newline-delimited JSON-RPC 2.0 over stdio.
 
-If you're prototyping a plugin today against the wire spec, the protocol+subject+provider crates are usable now via git path/tag dependency from this repo. The `animus-plugin-runtime` shortcut entrypoints (`run_provider`, `subject_backend_main`) become available once the gap closes.
+The protocol + subject + provider + runtime crates are usable today via git path/tag dependency from this repo. Plugin authors write `subject_backend_main(info, backend).await` or `provider_main(info, backend).await` from `main` and avoid hand-rolling the wire layer.
 
 ## Crates
 
@@ -24,7 +24,7 @@ If you're prototyping a plugin today against the wire spec, the protocol+subject
 | [`animus-plugin-protocol`](./animus-plugin-protocol) | Wire types every plugin uses: `RpcRequest`, `RpcResponse`, `RpcNotification`, `RpcError`, error codes, `InitializeParams` / `InitializeResult`, `PluginManifest`, `HealthCheckResult`. |
 | [`animus-subject-protocol`](./animus-subject-protocol) | `SubjectBackend` trait + normalized `Subject` schema for backends like Linear, Jira, GitHub Issues, Notion, Asana — anything with a system-of-record API. |
 | [`animus-provider-protocol`](./animus-provider-protocol) | `ProviderBackend` trait + `AgentRunRequest`/`AgentRunResponse` shapes for LLM provider plugins (Claude, Codex, Gemini, OpenAI-compatible, on-prem). |
-| [`animus-plugin-runtime`](./animus-plugin-runtime) | Shared stdio JSON-RPC loop, handshake, `--manifest` mode, streaming notification helpers. Plugin authors call `run_provider(...)` / `subject_backend_main(...)` from `main` and avoid hand-rolling the wire layer. |
+| [`animus-plugin-runtime`](./animus-plugin-runtime) | Shared stdio JSON-RPC loop, handshake, `--manifest` mode, notification helpers. Plugin authors call `subject_backend_main(...)` / `provider_main(...)` from `main` and avoid hand-rolling the wire layer. |
 
 `animus-plugin-protocol` is the only required dependency for non-Rust plugin authors — and even then only as a reference. Any process that emits the documented JSON over stdio is a compatible Animus plugin.
 
@@ -49,13 +49,20 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 src/main.rs:
 
 ```rust
+use animus_plugin_protocol::{PluginInfo, PLUGIN_KIND_SUBJECT_BACKEND};
 use animus_plugin_runtime::subject_backend_main;
 
 mod backend;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    subject_backend_main(backend::LinearBackend::new()).await
+    let info = PluginInfo {
+        name: "animus-subject-linear".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.into(),
+        description: Some("Linear subject backend for Animus".into()),
+    };
+    subject_backend_main(info, backend::LinearBackend::new()).await
 }
 ```
 
@@ -131,26 +138,26 @@ animus plugin install ./target/release/animus-subject-linear
 ## Provider quickstart (Rust)
 
 ```rust
-use animus_plugin_runtime::{run_provider, ProviderInfo, SessionBackendProvider};
-use std::sync::Arc;
+use animus_plugin_protocol::{PluginInfo, PLUGIN_KIND_PROVIDER};
+use animus_plugin_runtime::provider_main;
+
+mod provider;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let backend = Arc::new(/* your SessionBackend impl */);
-    run_provider(
-        ProviderInfo {
-            plugin_name: "animus-provider-claude",
-            plugin_version: env!("CARGO_PKG_VERSION"),
-            description: "Claude Code CLI provider",
-            default_tool: "claude",
-            default_model: "claude-sonnet-4-6",
-        },
-        SessionBackendProvider::new(backend),
-    ).await
+    let info = PluginInfo {
+        name: "animus-provider-claude".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        plugin_kind: PLUGIN_KIND_PROVIDER.into(),
+        description: Some("Claude Code CLI provider".into()),
+    };
+    provider_main(info, provider::ClaudeProvider::new()).await
 }
 ```
 
-The runtime handles `initialize`, `$/ping`, `health/check`, `agent/run`, `agent/resume`, `agent/cancel`, `shutdown`, `exit`, and streams `agent/output` / `agent/thinking` / `agent/toolCall` / `agent/toolResult` / `agent/error` notifications back to the host.
+`provider::ClaudeProvider` implements [`ProviderBackend`](./animus-provider-protocol) — `manifest`, `run_agent`, `resume_agent`, `cancel_agent`, and `health`. The runtime handles `initialize`, `$/ping`, `health/check`, `agent/run`, `agent/resume`, `agent/cancel`, and `shutdown`, and dispatches each call into the trait implementation.
+
+For v0.1.0 each `run_agent` call is request/response: the provider runs the session to completion inside the trait method and returns the aggregated [`AgentRunResponse`](./animus-provider-protocol). A streaming event-emitter API (so the runtime can flush `agent/output` / `agent/thinking` / `agent/toolCall` / `agent/toolResult` / `agent/error` notifications mid-run) will land in a follow-up `animus-session-backend` crate.
 
 ## Source of truth
 

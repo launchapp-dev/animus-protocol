@@ -1,302 +1,470 @@
-//! Shared runtime for AO STDIO provider plugins (claude/codex/gemini/opencode/oai).
+//! Shared stdio JSON-RPC 2.0 runtime for Animus plugins.
 //!
-//! Each provider binary plugs into this runtime by implementing
-//! [`ProviderBackend`] (or wiring a plain [`SessionBackend`] via
-//! [`SessionBackendProvider`]) and calling [`run_provider`] from `main`.
-//! The runtime takes care of:
+//! This crate is the wire layer plugin authors call from `main`. It owns the
+//! protocol envelope, the [`initialize`](animus_plugin_protocol::InitializeResult)
+//! / [`initialized`] / [`health/check`](animus_plugin_protocol::HealthCheckResult)
+//! / `$/ping` / `shutdown` lifecycle, the `--manifest` discovery shortcut, and
+//! dispatch to the kind-specific trait method on the supplied backend.
 //!
-//! - JSON-RPC stdin/stdout loop and lifecycle (initialize, $/ping, shutdown, exit)
-//! - `--manifest` and `--help` CLI shortcuts
-//! - `agent/run`, `agent/resume`, `agent/cancel`, `health/check` dispatch
-//! - Streaming `agent/output`, `agent/thinking`, `agent/toolCall`,
-//!   `agent/toolResult`, `agent/error` notifications back to the host as the
-//!   wrapped `SessionBackend` emits events
-//! - Final aggregated result with `output`, `metadata`, `tool_calls`,
-//!   `tool_results`, `thinking`, `errors`, `exit_code`, `duration_ms`, `backend`
+//! Plugin authors implement either
+//! [`SubjectBackend`](animus_subject_protocol::SubjectBackend) or
+//! [`ProviderBackend`](animus_provider_protocol::ProviderBackend), build a
+//! [`PluginInfo`](animus_plugin_protocol::PluginInfo), and call the matching
+//! entrypoint:
 //!
-//! With this contract, any wrapped session backend gets live-streaming and
-//! collect-and-return semantics simultaneously without per-provider plumbing.
+//! - [`subject_backend_main`] for subject backends (Linear, Jira, GitHub
+//!   Issues, native task store, ...).
+//! - [`provider_main`] for LLM provider plugins (Claude Code, Codex, Gemini,
+//!   OpenAI-compat, on-prem, ...).
+//!
+//! Each entrypoint runs the stdio loop indefinitely: it reads
+//! newline-delimited JSON-RPC frames from stdin, dispatches to the trait, and
+//! writes responses to stdout. The loop returns cleanly on stdin EOF and
+//! bubbles fatal errors up via [`anyhow::Result`].
+//!
+//! # Scope (v0.1.0)
+//!
+//! This crate intentionally has a small surface — the wire loop and the
+//! lifecycle helpers. It does **not** ship session-management helpers (e.g.
+//! event channels, `SessionRequest` builders, child-process plumbing). Those
+//! belong to a separate `animus-session-backend` crate that providers may
+//! depend on in the future. For v0.1.0, provider implementations handle their
+//! own session lifecycle inside
+//! [`ProviderBackend::run_agent`](animus_provider_protocol::ProviderBackend::run_agent)
+//! and return the aggregated [`AgentRunResponse`] when the run completes.
+//!
+//! # See also
+//!
+//! - The [`spec.md`](https://github.com/launchapp-dev/animus-protocol/blob/main/spec.md)
+//!   companion file in this repository — the language-agnostic protocol spec.
+//! - [`animus_plugin_protocol`] for the wire types this runtime serializes.
+//! - [`animus_subject_protocol`] for the subject-backend trait.
+//! - [`animus_provider_protocol`] for the provider-backend trait.
 
-use std::collections::HashMap;
+#![warn(missing_docs)]
+
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::Result;
-use async_trait::async_trait;
-use cli_wrapper::session::{
-    session_backend::SessionBackend, session_event::SessionEvent, session_request::SessionRequest,
+use animus_plugin_protocol::{
+    error_codes, HealthCheckResult, HealthStatus, InitializeResult, PluginCapabilities,
+    PluginInfo, PluginManifest, RpcError, RpcNotification, RpcRequest, RpcResponse,
+    PROTOCOL_VERSION,
 };
-use orchestrator_plugin_protocol::{
-    error_codes, HealthCheckResult, HealthStatus, InitializeResult, PluginCapabilities, PluginInfo, PluginManifest,
-    RpcError, RpcNotification, RpcRequest, RpcResponse, PROTOCOL_VERSION,
+use animus_provider_protocol::{
+    AgentCancelRequest, AgentResumeRequest, AgentRunRequest, ProviderBackend,
+    METHOD_AGENT_CANCEL, METHOD_AGENT_RESUME, METHOD_AGENT_RUN,
+};
+use animus_subject_protocol::{
+    BackendError as SubjectBackendError, SubjectBackend, SubjectFilter, SubjectId, SubjectPatch,
+    METHOD_SUBJECT_GET, METHOD_SUBJECT_LIST, METHOD_SUBJECT_SCHEMA, METHOD_SUBJECT_UPDATE,
+    METHOD_SUBJECT_WATCH, NOTIFICATION_SUBJECT_CHANGED,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Stdout};
 use tokio::sync::Mutex;
 
-/// Manifest + identity for a provider plugin.
-#[derive(Debug, Clone)]
-pub struct ProviderInfo {
-    pub plugin_name: &'static str,
-    pub plugin_version: &'static str,
-    pub description: &'static str,
-    /// Tool name passed through into the wrapped `SessionRequest`.
-    pub default_tool: &'static str,
-    /// Default model when callers omit one.
-    pub default_model: &'static str,
-}
+// =====================================================================
+// Public entrypoints
+// =====================================================================
 
-impl ProviderInfo {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest {
-            name: self.plugin_name.to_string(),
-            version: self.plugin_version.to_string(),
-            plugin_kind: orchestrator_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
-            description: self.description.to_string(),
-            protocol_version: PROTOCOL_VERSION.to_string(),
-            capabilities: vec![
-                "agent/run".to_string(),
-                "agent/cancel".to_string(),
-                "agent/resume".to_string(),
-                "health/check".to_string(),
-            ],
-        }
+/// Run a subject-backend plugin's stdio JSON-RPC loop.
+///
+/// Call this from `#[tokio::main]` in a plugin binary. `info` is the static
+/// identity returned in the `initialize` response and `--manifest` output;
+/// `backend` is the
+/// [`SubjectBackend`](animus_subject_protocol::SubjectBackend) implementation
+/// that handles the `subject/*` domain methods.
+///
+/// The function returns when stdin closes (clean shutdown) or on a fatal I/O
+/// error.
+///
+/// # CLI behavior
+///
+/// If `--manifest` (or `-m`) appears in `std::env::args()`, the function
+/// prints a [`PluginManifest`] derived from `info` and the backend's
+/// declared capabilities to stdout, then exits with code `0`.
+///
+/// # Example
+///
+/// ```ignore
+/// use animus_plugin_protocol::{PluginInfo, PLUGIN_KIND_SUBJECT_BACKEND};
+/// use animus_plugin_runtime::subject_backend_main;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let info = PluginInfo {
+///         name: "animus-subject-linear".into(),
+///         version: env!("CARGO_PKG_VERSION").into(),
+///         plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.into(),
+///         description: Some("Linear subject backend".into()),
+///     };
+///     subject_backend_main(info, my_backend::LinearBackend::new()).await
+/// }
+/// ```
+pub async fn subject_backend_main<B: SubjectBackend + 'static>(
+    info: PluginInfo,
+    backend: B,
+) -> Result<()> {
+    let capabilities = subject_capabilities(&backend);
+    if parse_manifest_flag() {
+        print_manifest_and_exit(&info, &capabilities);
     }
-
-    fn initialize_result(&self) -> InitializeResult {
-        InitializeResult {
-            protocol_version: PROTOCOL_VERSION.to_string(),
-            plugin_info: PluginInfo {
-                name: self.plugin_name.to_string(),
-                version: self.plugin_version.to_string(),
-                plugin_kind: orchestrator_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
-            },
-            capabilities: PluginCapabilities {
-                methods: vec![
-                    "agent/run".to_string(),
-                    "agent/cancel".to_string(),
-                    "agent/resume".to_string(),
-                    "health/check".to_string(),
-                ],
-                streaming: true,
-                projections: Vec::new(),
-                subject_kinds: Vec::new(),
-                mcp_tools: Vec::new(),
-            },
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentRunParams {
-    #[serde(default)]
-    session_id: Option<String>,
-    prompt: String,
-    #[serde(default)]
-    model: Option<String>,
-    cwd: PathBuf,
-    #[serde(default)]
-    project_root: Option<PathBuf>,
-    #[serde(default)]
-    system_prompt: Option<String>,
-    #[serde(default)]
-    permission_mode: Option<String>,
-    #[serde(default)]
-    timeout_secs: Option<u64>,
-    #[serde(default)]
-    env: HashMap<String, String>,
-    #[serde(default)]
-    claude_profile: Option<String>,
-    #[serde(default)]
-    mcp_servers: Option<Value>,
-    #[serde(default)]
-    tools: Option<Value>,
-    #[serde(default)]
-    response_schema: Option<Value>,
-    #[serde(default)]
-    runtime_contract: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentCancelParams {
-    session_id: String,
-}
-
-/// Trait wrapping a `SessionBackend`. Most providers can use the blanket impl on
-/// `Arc<dyn SessionBackend>` directly via [`SessionBackendProvider::new`].
-#[async_trait]
-pub trait ProviderBackend: Send + Sync + 'static {
-    async fn start(
-        &self,
-        request: SessionRequest,
-        resume_session: Option<&str>,
-    ) -> cli_wrapper::error::Result<cli_wrapper::session::session_run::SessionRun>;
-
-    async fn cancel(&self, session_id: &str) -> cli_wrapper::error::Result<()>;
-}
-
-/// Adapter that wraps any `Arc<dyn SessionBackend>` so the runtime can drive it.
-pub struct SessionBackendProvider {
-    backend: Arc<dyn SessionBackend>,
-}
-
-impl SessionBackendProvider {
-    pub fn new(backend: Arc<dyn SessionBackend>) -> Self {
-        Self { backend }
-    }
-}
-
-#[async_trait]
-impl ProviderBackend for SessionBackendProvider {
-    async fn start(
-        &self,
-        request: SessionRequest,
-        resume_session: Option<&str>,
-    ) -> cli_wrapper::error::Result<cli_wrapper::session::session_run::SessionRun> {
-        match resume_session {
-            Some(sid) => self.backend.resume_session(request, sid).await,
-            None => self.backend.start_session(request).await,
-        }
-    }
-
-    async fn cancel(&self, session_id: &str) -> cli_wrapper::error::Result<()> {
-        self.backend.terminate_session(session_id).await
-    }
-}
-
-/// Stable entrypoint for a provider plugin. Call this from `#[tokio::main]`.
-pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) -> Result<()> {
-    handle_cli_args(&info);
-
-    if io::stdin().is_terminal() {
-        eprintln!("{} is a STDIO plugin; pipe JSON-RPC on stdin or pass --manifest", info.plugin_name);
-        std::process::exit(2);
-    }
+    refuse_terminal_stdin(&info.name);
 
     let backend = Arc::new(backend);
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
-    let stdin = tokio::io::stdin();
-    let mut reader = BufReader::new(stdin).lines();
+    let mut reader = BufReader::new(tokio::io::stdin());
 
-    while let Some(line) = reader.next_line().await? {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let request: RpcRequest = match serde_json::from_str(trimmed) {
-            Ok(r) => r,
-            Err(error) => {
-                tracing::warn!(plugin = %info.plugin_name, %error, "invalid JSON-RPC frame");
-                continue;
-            }
-        };
-
+    while let Some(request) = read_frame(&mut reader).await? {
+        let info = info.clone();
+        let capabilities = capabilities.clone();
         let backend = backend.clone();
         let stdout = stdout.clone();
-        let info = info.clone();
         tokio::spawn(async move {
-            handle_request(request, info, backend, stdout).await;
+            handle_subject_request(request, info, capabilities, backend, stdout).await;
         });
     }
-
     Ok(())
 }
 
-fn handle_cli_args(info: &ProviderInfo) {
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--manifest" | "-m" => print_manifest_and_exit(info),
-            "--help" | "-h" => {
-                eprintln!("{} {} — STDIO provider plugin for AO", info.plugin_name, info.plugin_version);
-                eprintln!("Usage:");
-                eprintln!("  {} --manifest    Print plugin manifest as JSON and exit", info.plugin_name);
-                eprintln!("  {}               Run JSON-RPC loop on stdin/stdout", info.plugin_name);
-                std::process::exit(0);
-            }
-            _ => {}
-        }
+/// Run a provider-plugin stdio JSON-RPC loop.
+///
+/// Call this from `#[tokio::main]` in a plugin binary. `info` is the static
+/// identity returned in the `initialize` response and `--manifest` output;
+/// `backend` is the
+/// [`ProviderBackend`](animus_provider_protocol::ProviderBackend)
+/// implementation that handles the `agent/*` domain methods.
+///
+/// The function returns when stdin closes (clean shutdown) or on a fatal I/O
+/// error.
+///
+/// # CLI behavior
+///
+/// If `--manifest` (or `-m`) appears in `std::env::args()`, the function
+/// prints a [`PluginManifest`] derived from `info` and the provider's
+/// declared capabilities to stdout, then exits with code `0`.
+///
+/// # Example
+///
+/// ```ignore
+/// use animus_plugin_protocol::{PluginInfo, PLUGIN_KIND_PROVIDER};
+/// use animus_plugin_runtime::provider_main;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let info = PluginInfo {
+///         name: "animus-provider-claude".into(),
+///         version: env!("CARGO_PKG_VERSION").into(),
+///         plugin_kind: PLUGIN_KIND_PROVIDER.into(),
+///         description: Some("Claude Code CLI provider".into()),
+///     };
+///     provider_main(info, my_provider::ClaudeProvider::new()).await
+/// }
+/// ```
+pub async fn provider_main<P: ProviderBackend + 'static>(
+    info: PluginInfo,
+    backend: P,
+) -> Result<()> {
+    let capabilities = provider_capabilities(&backend);
+    if parse_manifest_flag() {
+        print_manifest_and_exit(&info, &capabilities);
     }
+    refuse_terminal_stdin(&info.name);
+
+    let backend = Arc::new(backend);
+    let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    let mut reader = BufReader::new(tokio::io::stdin());
+
+    while let Some(request) = read_frame(&mut reader).await? {
+        let info = info.clone();
+        let capabilities = capabilities.clone();
+        let backend = backend.clone();
+        let stdout = stdout.clone();
+        tokio::spawn(async move {
+            handle_provider_request(request, info, capabilities, backend, stdout).await;
+        });
+    }
+    Ok(())
 }
 
-fn print_manifest_and_exit(info: &ProviderInfo) -> ! {
-    let mut stdout = io::stdout().lock();
-    let _ = writeln!(stdout, "{}", serde_json::to_string(&info.manifest()).expect("serialize manifest"));
-    let _ = stdout.flush();
-    std::process::exit(0);
+// =====================================================================
+// Subject dispatch
+// =====================================================================
+
+#[derive(Debug, Deserialize)]
+struct SubjectGetParams {
+    id: SubjectId,
 }
 
-async fn handle_request<P: ProviderBackend>(
+#[derive(Debug, Deserialize)]
+struct SubjectUpdateParams {
+    id: SubjectId,
+    #[serde(default)]
+    patch: SubjectPatch,
+}
+
+async fn handle_subject_request<B: SubjectBackend + 'static>(
     request: RpcRequest,
-    info: ProviderInfo,
-    backend: Arc<P>,
-    stdout: Arc<Mutex<tokio::io::Stdout>>,
+    info: PluginInfo,
+    capabilities: PluginCapabilities,
+    backend: Arc<B>,
+    stdout: Arc<Mutex<Stdout>>,
 ) {
     let id = request.id.clone();
     let response = match request.method.as_str() {
-        "initialize" => Some(match serde_json::to_value(info.initialize_result()) {
-            Ok(value) => RpcResponse::ok(id, value),
-            Err(error) => RpcResponse::err(
-                id,
-                RpcError {
-                    code: error_codes::INTERNAL_ERROR,
-                    message: format!("failed to encode initialize result: {error}"),
-                    data: None,
-                },
-            ),
-        }),
+        "initialize" => Some(initialize_response(id, &info, &capabilities)),
         "initialized" => None,
         "$/ping" => Some(RpcResponse::ok(id, json!({}))),
-        "health/check" => Some(
-            match serde_json::to_value(HealthCheckResult {
-                status: HealthStatus::Healthy,
-                uptime_ms: None,
-                memory_usage_bytes: None,
-                last_error: None,
-            }) {
-                Ok(value) => RpcResponse::ok(id, value),
-                Err(error) => RpcResponse::err(
-                    id,
-                    RpcError {
-                        code: error_codes::INTERNAL_ERROR,
-                        message: format!("failed to encode health result: {error}"),
-                        data: None,
-                    },
-                ),
-            },
-        ),
-        "agent/run" => Some(handle_agent_run(id, request.params, &info, backend.clone(), stdout.clone(), None).await),
-        "agent/resume" => {
-            let resume_session = request
-                .params
-                .as_ref()
-                .and_then(|p| p.get("session_id"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-            Some(handle_agent_run(id, request.params, &info, backend.clone(), stdout.clone(), resume_session).await)
-        }
-        "agent/cancel" => Some(handle_agent_cancel(id, request.params, backend.clone(), &info).await),
+        "health/check" => Some(health_response(id, backend.health().await)),
         "shutdown" => Some(RpcResponse::ok(id, json!({}))),
-        "exit" => std::process::exit(0),
+        METHOD_SUBJECT_LIST => {
+            let filter = match deserialize_params::<SubjectFilter>(request.params, true) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            Some(match backend.list(filter).await {
+                Ok(list) => match serde_json::to_value(list) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(id, encoding_error("subject/list", error)),
+                },
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        METHOD_SUBJECT_GET => {
+            let params = match deserialize_params::<SubjectGetParams>(request.params, false) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            Some(match backend.get(&params.id).await {
+                Ok(subject) => match serde_json::to_value(subject) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(id, encoding_error("subject/get", error)),
+                },
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        METHOD_SUBJECT_UPDATE => {
+            let params = match deserialize_params::<SubjectUpdateParams>(request.params, false) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            Some(match backend.update(&params.id, params.patch).await {
+                Ok(subject) => match serde_json::to_value(subject) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(id, encoding_error("subject/update", error)),
+                },
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        METHOD_SUBJECT_WATCH => match backend.watch().await {
+            Some(stream) => {
+                let request_id = id.clone();
+                let stdout = stdout.clone();
+                tokio::spawn(async move {
+                    drive_watch_stream(request_id, stream, stdout).await;
+                });
+                Some(RpcResponse::ok(id, json!({ "watching": true })))
+            }
+            None => Some(RpcResponse::err(
+                id,
+                RpcError {
+                    code: error_codes::METHOD_NOT_SUPPORTED,
+                    message: format!(
+                        "{} does not implement subject/watch",
+                        info.name
+                    ),
+                    data: None,
+                },
+            )),
+        },
+        METHOD_SUBJECT_SCHEMA => Some(match serde_json::to_value(backend.schema()) {
+            Ok(value) => RpcResponse::ok(id, value),
+            Err(error) => RpcResponse::err(id, encoding_error("subject/schema", error)),
+        }),
         other if other.starts_with("$/") => None,
-        other => Some(RpcResponse::err(
-            id,
-            RpcError {
-                code: error_codes::METHOD_NOT_FOUND,
-                message: format!("method '{other}' not implemented by {}", info.plugin_name),
-                data: None,
-            },
-        )),
+        other => Some(method_not_found(id, &info.name, other)),
     };
 
     if let Some(response) = response {
-        write_frame(&stdout, &response).await;
+        write_response(&stdout, &response).await;
     }
 }
 
-async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<tokio::io::Stdout>>, frame: &T) {
+async fn drive_watch_stream(
+    request_id: Option<Value>,
+    mut stream: animus_subject_protocol::EventStream,
+    stdout: Arc<Mutex<Stdout>>,
+) {
+    use futures_core::Stream;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    // The outer `Pin<Box<dyn Stream>>` is `Unpin`, so `Pin::new(&mut stream)`
+    // suffices to project a `Pin<&mut dyn Stream>` for `poll_next`. We avoid
+    // pulling in `futures-util` and use `std::future::poll_fn` instead.
+    std::future::poll_fn(|cx: &mut Context<'_>| loop {
+        match Pin::new(&mut stream).poll_next(cx) {
+            Poll::Ready(Some(event)) => {
+                let event_value = match serde_json::to_value(&event) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let mut payload = serde_json::Map::new();
+                if let Some(id) = request_id.clone() {
+                    payload.insert("id".to_string(), id);
+                }
+                payload.insert("event".to_string(), event_value);
+                let notification = RpcNotification::new(
+                    NOTIFICATION_SUBJECT_CHANGED,
+                    Some(Value::Object(payload)),
+                );
+                let stdout = stdout.clone();
+                tokio::spawn(async move {
+                    write_notification(&stdout, &notification).await;
+                });
+            }
+            Poll::Ready(None) => return Poll::Ready(()),
+            Poll::Pending => return Poll::Pending,
+        }
+    })
+    .await;
+}
+
+// =====================================================================
+// Provider dispatch
+// =====================================================================
+
+async fn handle_provider_request<P: ProviderBackend + 'static>(
+    request: RpcRequest,
+    info: PluginInfo,
+    capabilities: PluginCapabilities,
+    backend: Arc<P>,
+    stdout: Arc<Mutex<Stdout>>,
+) {
+    let id = request.id.clone();
+    let response = match request.method.as_str() {
+        "initialize" => Some(initialize_response(id, &info, &capabilities)),
+        "initialized" => None,
+        "$/ping" => Some(RpcResponse::ok(id, json!({}))),
+        "health/check" => Some(provider_health_response(id, backend.health().await)),
+        "shutdown" => Some(RpcResponse::ok(id, json!({}))),
+        METHOD_AGENT_RUN => {
+            let request_payload = match deserialize_params::<AgentRunRequest>(request.params, false)
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            Some(match backend.run_agent(request_payload).await {
+                Ok(reply) => match serde_json::to_value(reply) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(id, encoding_error("agent/run", error)),
+                },
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        METHOD_AGENT_RESUME => {
+            let request_payload =
+                match deserialize_params::<AgentResumeRequest>(request.params, false) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        write_response(&stdout, &RpcResponse::err(id, error)).await;
+                        return;
+                    }
+                };
+            Some(match backend.resume_agent(request_payload).await {
+                Ok(reply) => match serde_json::to_value(reply) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(id, encoding_error("agent/resume", error)),
+                },
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        METHOD_AGENT_CANCEL => {
+            let params =
+                match deserialize_params::<AgentCancelRequest>(request.params, false) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        write_response(&stdout, &RpcResponse::err(id, error)).await;
+                        return;
+                    }
+                };
+            Some(match backend.cancel_agent(&params.session_id).await {
+                Ok(()) => RpcResponse::ok(
+                    id,
+                    json!({ "session_id": params.session_id, "cancelled": true }),
+                ),
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        other if other.starts_with("$/") => None,
+        other => Some(method_not_found(id, &info.name, other)),
+    };
+
+    if let Some(response) = response {
+        write_response(&stdout, &response).await;
+    }
+}
+
+// =====================================================================
+// Shared helpers
+// =====================================================================
+
+/// Read one newline-delimited JSON-RPC request frame from `reader`.
+///
+/// Returns `Ok(None)` on EOF and `Ok(Some(_))` for each successfully parsed
+/// frame. Frames that fail to parse are skipped (and the loop continues with
+/// the next line) — the JSON-RPC 2.0 spec advises against sending unsolicited
+/// error responses for parse failures on notifications, so the runtime errs
+/// on the side of silence here.
+pub(crate) async fn read_frame<R>(reader: &mut R) -> Result<Option<RpcRequest>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        let bytes = reader.read_line(&mut buf).await?;
+        if bytes == 0 {
+            return Ok(None);
+        }
+        let trimmed = buf.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<RpcRequest>(trimmed) {
+            Ok(request) => return Ok(Some(request)),
+            Err(_) => continue,
+        }
+    }
+}
+
+/// Serialize and write a JSON-RPC response frame to the shared stdout handle.
+pub(crate) async fn write_response(stdout: &Arc<Mutex<Stdout>>, response: &RpcResponse) {
+    write_frame(stdout, response).await;
+}
+
+/// Serialize and write a JSON-RPC notification frame to the shared stdout
+/// handle.
+pub(crate) async fn write_notification(stdout: &Arc<Mutex<Stdout>>, notification: &RpcNotification) {
+    write_frame(stdout, notification).await;
+}
+
+async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<Stdout>>, frame: &T) {
     if let Ok(mut payload) = serde_json::to_string(frame) {
         payload.push('\n');
         let mut guard = stdout.lock().await;
@@ -305,218 +473,211 @@ async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<tokio::io::Stdout>>
     }
 }
 
-async fn send_notification(stdout: &Arc<Mutex<tokio::io::Stdout>>, method: impl Into<String>, params: Value) {
-    let notification = RpcNotification::new(method, Some(params));
-    write_frame(stdout, &notification).await;
+/// Check if `--manifest` (or `-m`) was passed on the command line.
+pub(crate) fn parse_manifest_flag() -> bool {
+    std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--manifest" || arg == "-m")
 }
 
-async fn handle_agent_run<P: ProviderBackend>(
-    id: Option<Value>,
-    params: Option<Value>,
-    info: &ProviderInfo,
-    backend: Arc<P>,
-    stdout: Arc<Mutex<tokio::io::Stdout>>,
-    resume_session: Option<String>,
-) -> RpcResponse {
-    let params: AgentRunParams = match params.ok_or_else(|| invalid_params("missing params for agent/run")) {
-        Ok(p) => match serde_json::from_value::<AgentRunParams>(p) {
-            Ok(parsed) => parsed,
-            Err(error) => return invalid_rpc(id, format!("invalid agent/run params: {error}")),
-        },
-        Err(error) => return error_rpc(id, error),
+/// Print a [`PluginManifest`] derived from `info` + `capabilities` to stdout
+/// and exit with code `0`.
+pub(crate) fn print_manifest_and_exit(info: &PluginInfo, capabilities: &PluginCapabilities) -> ! {
+    let manifest = PluginManifest {
+        name: info.name.clone(),
+        version: info.version.clone(),
+        plugin_kind: info.plugin_kind.clone(),
+        description: info.description.clone().unwrap_or_default(),
+        protocol_version: PROTOCOL_VERSION.to_string(),
+        capabilities: capabilities.methods.clone(),
     };
+    let mut stdout = io::stdout().lock();
+    let _ = writeln!(
+        stdout,
+        "{}",
+        serde_json::to_string(&manifest).expect("serialize manifest")
+    );
+    let _ = stdout.flush();
+    std::process::exit(0);
+}
 
-    let session_request = build_session_request(info, params);
-    let started_at = Instant::now();
-
-    let run_result = backend.start(session_request, resume_session.as_deref()).await;
-    let mut run = match run_result {
-        Ok(run) => run,
-        Err(error) => {
-            return error_rpc(
-                id,
-                RpcError {
-                    code: -1002,
-                    message: format!("{} session start failed: {error}", info.plugin_name),
-                    data: None,
-                },
-            )
-        }
-    };
-
-    let session_id = run.session_id.clone();
-    let backend_label = run.selected_backend.clone();
-    let mut output = String::new();
-    let mut metadata = Vec::<Value>::new();
-    let mut tool_calls = Vec::<Value>::new();
-    let mut tool_results = Vec::<Value>::new();
-    let mut thinking = Vec::<String>::new();
-    let mut errors = Vec::<String>::new();
-    let mut exit_code: Option<i32> = None;
-
-    while let Some(event) = run.events.recv().await {
-        match event {
-            SessionEvent::Started { .. } => {}
-            SessionEvent::TextDelta { text } => {
-                send_notification(&stdout, "agent/output", json!({ "text": text, "session_id": session_id })).await;
-                output.push_str(&text);
-            }
-            SessionEvent::FinalText { text } => {
-                send_notification(
-                    &stdout,
-                    "agent/output",
-                    json!({ "text": text, "session_id": session_id, "final": true }),
-                )
-                .await;
-                if !output.is_empty() && !output.ends_with('\n') {
-                    output.push('\n');
-                }
-                output.push_str(&text);
-            }
-            SessionEvent::Thinking { text } => {
-                send_notification(&stdout, "agent/thinking", json!({ "text": text, "session_id": session_id })).await;
-                thinking.push(text);
-            }
-            SessionEvent::ToolCall { tool_name, arguments, server } => {
-                send_notification(
-                    &stdout,
-                    "agent/toolCall",
-                    json!({
-                        "name": tool_name,
-                        "arguments": arguments,
-                        "server": server,
-                        "session_id": session_id,
-                    }),
-                )
-                .await;
-                tool_calls.push(json!({ "tool": tool_name, "arguments": arguments, "server": server }));
-            }
-            SessionEvent::ToolResult { tool_name, output: tool_output, success } => {
-                send_notification(
-                    &stdout,
-                    "agent/toolResult",
-                    json!({
-                        "name": tool_name,
-                        "output": tool_output,
-                        "success": success,
-                        "session_id": session_id,
-                    }),
-                )
-                .await;
-                tool_results.push(json!({ "tool": tool_name, "output": tool_output, "success": success }));
-            }
-            SessionEvent::Artifact { artifact_id, metadata: m } => {
-                metadata.push(json!({ "artifact_id": artifact_id, "metadata": m }));
-            }
-            SessionEvent::Metadata { metadata: m } => metadata.push(m),
-            SessionEvent::Error { message, recoverable } => {
-                send_notification(
-                    &stdout,
-                    "agent/error",
-                    json!({ "message": message, "recoverable": recoverable, "session_id": session_id }),
-                )
-                .await;
-                errors.push(message.clone());
-                if !recoverable {
-                    break;
-                }
-            }
-            SessionEvent::Finished { exit_code: code } => {
-                exit_code = code;
-                break;
-            }
-        }
+fn refuse_terminal_stdin(plugin_name: &str) {
+    if io::stdin().is_terminal() {
+        eprintln!(
+            "{plugin_name} is a STDIO plugin; pipe JSON-RPC on stdin or pass --manifest"
+        );
+        std::process::exit(2);
     }
-
-    let duration_ms = started_at.elapsed().as_millis() as u64;
-    let result = json!({
-        "session_id": session_id,
-        "exit_code": exit_code.unwrap_or(0),
-        "output": output,
-        "metadata": metadata,
-        "tool_calls": tool_calls,
-        "tool_results": tool_results,
-        "thinking": thinking,
-        "errors": errors,
-        "duration_ms": duration_ms,
-        "backend": backend_label,
-    });
-    RpcResponse::ok(id, result)
 }
 
-async fn handle_agent_cancel<P: ProviderBackend>(
+fn initialize_response(
     id: Option<Value>,
-    params: Option<Value>,
-    backend: Arc<P>,
-    info: &ProviderInfo,
+    info: &PluginInfo,
+    capabilities: &PluginCapabilities,
 ) -> RpcResponse {
-    let params: AgentCancelParams = match params.ok_or_else(|| invalid_params("missing params for agent/cancel")) {
-        Ok(p) => match serde_json::from_value::<AgentCancelParams>(p) {
-            Ok(parsed) => parsed,
-            Err(error) => return invalid_rpc(id, format!("invalid agent/cancel params: {error}")),
-        },
-        Err(error) => return error_rpc(id, error),
+    let result = InitializeResult {
+        protocol_version: PROTOCOL_VERSION.to_string(),
+        plugin_info: info.clone(),
+        capabilities: capabilities.clone(),
     };
+    match serde_json::to_value(result) {
+        Ok(value) => RpcResponse::ok(id, value),
+        Err(error) => RpcResponse::err(id, encoding_error("initialize", error)),
+    }
+}
 
-    match backend.cancel(&params.session_id).await {
-        Ok(()) => RpcResponse::ok(id, json!({ "session_id": params.session_id, "cancelled": true })),
-        Err(error) => error_rpc(
+fn health_response(
+    id: Option<Value>,
+    result: Result<HealthCheckResult, SubjectBackendError>,
+) -> RpcResponse {
+    match result {
+        Ok(health) => match serde_json::to_value(health) {
+            Ok(value) => RpcResponse::ok(id, value),
+            Err(error) => RpcResponse::err(id, encoding_error("health/check", error)),
+        },
+        Err(error) => RpcResponse::err(
             id,
             RpcError {
                 code: error_codes::INTERNAL_ERROR,
-                message: format!("{} agent/cancel failed: {error}", info.plugin_name),
-                data: None,
+                message: format!("health/check failed: {error}"),
+                data: Some(json!({"status": HealthStatus::Unhealthy})),
             },
         ),
     }
 }
 
-fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> SessionRequest {
-    let mut extras = serde_json::Map::new();
-    if let Some(system_prompt) = params.system_prompt {
-        extras.insert("system_prompt".to_string(), Value::String(system_prompt));
-    }
-    if let Some(profile) = params.claude_profile {
-        extras.insert("claude_profile".to_string(), Value::String(profile));
-    }
-    if let Some(mcp) = params.mcp_servers {
-        extras.insert("mcp_servers".to_string(), mcp);
-    }
-    if let Some(tools) = params.tools {
-        extras.insert("tools".to_string(), tools);
-    }
-    if let Some(schema) = params.response_schema {
-        extras.insert("response_schema".to_string(), schema);
-    }
-    if let Some(contract) = params.runtime_contract {
-        extras.insert("runtime_contract".to_string(), contract);
-    }
-    if let Some(sid) = params.session_id {
-        extras.insert("session_id".to_string(), Value::String(sid));
-    }
-
-    SessionRequest {
-        tool: info.default_tool.to_string(),
-        model: params.model.unwrap_or_else(|| info.default_model.to_string()),
-        prompt: params.prompt,
-        cwd: params.cwd,
-        project_root: params.project_root,
-        mcp_endpoint: None,
-        permission_mode: params.permission_mode,
-        timeout_secs: params.timeout_secs,
-        env_vars: params.env.into_iter().collect(),
-        extras: Value::Object(extras),
+fn provider_health_response(
+    id: Option<Value>,
+    result: Result<HealthCheckResult, animus_provider_protocol::BackendError>,
+) -> RpcResponse {
+    match result {
+        Ok(health) => match serde_json::to_value(health) {
+            Ok(value) => RpcResponse::ok(id, value),
+            Err(error) => RpcResponse::err(id, encoding_error("health/check", error)),
+        },
+        Err(error) => RpcResponse::err(id, error.into()),
     }
 }
 
-fn invalid_params(message: impl Into<String>) -> RpcError {
-    RpcError { code: error_codes::INVALID_PARAMS, message: message.into(), data: None }
+fn deserialize_params<T: for<'de> Deserialize<'de>>(
+    params: Option<Value>,
+    allow_missing: bool,
+) -> std::result::Result<T, RpcError> {
+    match params {
+        Some(value) => serde_json::from_value::<T>(value).map_err(|error| RpcError {
+            code: error_codes::INVALID_PARAMS,
+            message: format!("invalid params: {error}"),
+            data: None,
+        }),
+        None => {
+            if allow_missing {
+                // Default-able request types deserialize fine from an empty
+                // object even when the wire frame omitted `params` entirely.
+                serde_json::from_value::<T>(Value::Object(serde_json::Map::new())).map_err(
+                    |error| RpcError {
+                        code: error_codes::INVALID_PARAMS,
+                        message: format!("invalid params: {error}"),
+                        data: None,
+                    },
+                )
+            } else {
+                Err(RpcError {
+                    code: error_codes::INVALID_PARAMS,
+                    message: "missing params".to_string(),
+                    data: None,
+                })
+            }
+        }
+    }
 }
 
-fn invalid_rpc(id: Option<Value>, message: impl Into<String>) -> RpcResponse {
-    RpcResponse::err(id, RpcError { code: error_codes::INVALID_PARAMS, message: message.into(), data: None })
+fn method_not_found(id: Option<Value>, plugin_name: &str, method: &str) -> RpcResponse {
+    RpcResponse::err(
+        id,
+        RpcError {
+            code: error_codes::METHOD_NOT_FOUND,
+            message: format!("method '{method}' not implemented by {plugin_name}"),
+            data: None,
+        },
+    )
 }
 
-fn error_rpc(id: Option<Value>, error: RpcError) -> RpcResponse {
-    RpcResponse::err(id, error)
+fn encoding_error(method: &str, error: serde_json::Error) -> RpcError {
+    RpcError {
+        code: error_codes::INTERNAL_ERROR,
+        message: format!("failed to encode {method} result: {error}"),
+        data: None,
+    }
+}
+
+// =====================================================================
+// Capability derivation
+// =====================================================================
+
+fn subject_capabilities<B: SubjectBackend>(backend: &B) -> PluginCapabilities {
+    let schema = backend.schema();
+    let mut methods = vec![
+        METHOD_SUBJECT_LIST.to_string(),
+        METHOD_SUBJECT_GET.to_string(),
+        METHOD_SUBJECT_UPDATE.to_string(),
+        METHOD_SUBJECT_SCHEMA.to_string(),
+        "health/check".to_string(),
+    ];
+    if schema.supports_watch {
+        methods.push(METHOD_SUBJECT_WATCH.to_string());
+    }
+    PluginCapabilities {
+        methods,
+        streaming: schema.supports_watch,
+        progress: false,
+        cancellation: false,
+        subject_kinds: schema.kinds.clone(),
+        mcp_tools: Vec::new(),
+    }
+}
+
+fn provider_capabilities<P: ProviderBackend>(backend: &P) -> PluginCapabilities {
+    let manifest = backend.manifest();
+    let mut methods = vec![METHOD_AGENT_RUN.to_string(), "health/check".to_string()];
+    if manifest.capabilities.resume {
+        methods.push(METHOD_AGENT_RESUME.to_string());
+    }
+    if manifest.capabilities.cancellation {
+        methods.push(METHOD_AGENT_CANCEL.to_string());
+    }
+    PluginCapabilities {
+        methods,
+        streaming: manifest.capabilities.streaming,
+        progress: false,
+        cancellation: manifest.capabilities.cancellation,
+        subject_kinds: Vec::new(),
+        mcp_tools: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_params_rejects_missing_when_required() {
+        let result: std::result::Result<SubjectGetParams, RpcError> =
+            deserialize_params(None, false);
+        let error = result.expect_err("missing params should error");
+        assert_eq!(error.code, error_codes::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn deserialize_params_allows_missing_for_defaultable_types() {
+        let filter: SubjectFilter =
+            deserialize_params(None, true).expect("default-able type should accept null");
+        assert!(filter.status.is_empty());
+    }
+
+    #[test]
+    fn method_not_found_uses_protocol_constant() {
+        let response = method_not_found(Some(json!(1)), "plugin", "subject/bogus");
+        let error = response.error.expect("error payload");
+        assert_eq!(error.code, error_codes::METHOD_NOT_FOUND);
+    }
 }
