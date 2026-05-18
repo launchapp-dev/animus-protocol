@@ -12,7 +12,8 @@
 | `animus-subject-protocol` | yes | Pure trait + schema definitions. |
 | `animus-provider-protocol` | yes | Pure trait + schema definitions. |
 | `animus-trigger-protocol` | yes | Pure trait + schema definitions for push-driven event sources (Slack, webhooks, file watchers, cron). |
-| `animus-plugin-runtime` | yes | Slim stdio JSON-RPC loop; exposes `subject_backend_main`, `provider_main`, and `trigger_backend_main`. Provider session helpers (event channels, child-process plumbing) will land in a separate `animus-session-backend` crate. |
+| `animus-log-storage-protocol` | yes | Pure trait + schema definitions for log storage backends (local `events.jsonl` file, Loki, Splunk, ClickHouse). |
+| `animus-plugin-runtime` | yes | Slim stdio JSON-RPC loop; exposes `subject_backend_main`, `provider_main`, `trigger_backend_main`, and `log_storage_backend_main`. Provider session helpers (event channels, child-process plumbing) will land in a separate `animus-session-backend` crate. |
 
 The protocol [`spec.md`](./spec.md) is the source of truth for cross-language plugin authors — it can be implemented in Python, TypeScript, Go, or any language that speaks newline-delimited JSON-RPC 2.0 over stdio.
 
@@ -26,7 +27,8 @@ The protocol + subject + provider + runtime crates are usable today via git path
 | [`animus-subject-protocol`](./animus-subject-protocol) | `SubjectBackend` trait + normalized `Subject` schema for backends like Linear, Jira, GitHub Issues, Notion, Asana — anything with a system-of-record API. |
 | [`animus-provider-protocol`](./animus-provider-protocol) | `ProviderBackend` trait + `AgentRunRequest`/`AgentRunResponse` shapes for LLM provider plugins (Claude, Codex, Gemini, OpenAI-compatible, on-prem). |
 | [`animus-trigger-protocol`](./animus-trigger-protocol) | `TriggerBackend` trait + `TriggerEvent`/`TriggerSchema` shapes for push-driven event sources (Slack mentions, generic webhooks, file watchers, cron). |
-| [`animus-plugin-runtime`](./animus-plugin-runtime) | Shared stdio JSON-RPC loop, handshake, `--manifest` mode, notification helpers. Plugin authors call `subject_backend_main(...)` / `provider_main(...)` / `trigger_backend_main(...)` from `main` and avoid hand-rolling the wire layer. |
+| [`animus-log-storage-protocol`](./animus-log-storage-protocol) | `LogStorageBackend` trait + `LogEntry`/`LogQuery`/`LogQueryResult`/`LogStorageSchema` shapes for log storage backends (local `events.jsonl` file, Loki, Splunk, ClickHouse). |
+| [`animus-plugin-runtime`](./animus-plugin-runtime) | Shared stdio JSON-RPC loop, handshake, `--manifest` mode, notification helpers. Plugin authors call `subject_backend_main(...)` / `provider_main(...)` / `trigger_backend_main(...)` / `log_storage_backend_main(...)` from `main` and avoid hand-rolling the wire layer. |
 
 `animus-plugin-protocol` is the only required dependency for non-Rust plugin authors — and even then only as a reference. Any process that emits the documented JSON over stdio is a compatible Animus plugin.
 
@@ -291,6 +293,94 @@ impl TriggerBackend for SlackBackend {
 ```
 
 The runtime calls `watch` once after `initialize`/`initialized`, forwards every event the stream yields as a `trigger/event` notification, and dispatches `trigger/ack` calls back into the trait. Backends that don't track delivery state can rely on the default no-op `ack` implementation.
+
+## Log storage backend quickstart (Rust)
+
+```rust
+use animus_log_storage_protocol::PLUGIN_KIND_LOG_STORAGE_BACKEND;
+use animus_plugin_protocol::PluginInfo;
+use animus_plugin_runtime::log_storage_backend_main;
+
+mod backend;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let info = PluginInfo {
+        name: "animus-log-storage-file".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        plugin_kind: PLUGIN_KIND_LOG_STORAGE_BACKEND.into(),
+        description: Some("Local events.jsonl log storage".into()),
+    };
+    log_storage_backend_main(info, backend::FileBackend::new()).await
+}
+```
+
+src/backend.rs (sketch):
+
+```rust
+use animus_log_storage_protocol::{
+    BackendError, LogEntry, LogQuery, LogQueryResult, LogStorageBackend, LogStorageSchema,
+    LogStream, SupportsFiltering,
+};
+use animus_plugin_protocol::{HealthCheckResult, HealthStatus};
+use async_trait::async_trait;
+use futures_core::stream;
+
+pub struct FileBackend { /* file handle, mutex, ... */ }
+
+impl FileBackend {
+    pub fn new() -> Self { Self { /* ... */ } }
+}
+
+#[async_trait]
+impl LogStorageBackend for FileBackend {
+    async fn store(&self, _entries: Vec<LogEntry>) -> Result<(), BackendError> {
+        // Append each entry as one JSON line to events.jsonl. Dedup by entry.id
+        // if the file already contains it (or skip dedup and rely on the
+        // host).
+        Ok(())
+    }
+
+    async fn query(&self, _filter: LogQuery) -> Result<LogQueryResult, BackendError> {
+        // Scan events.jsonl, filter in-process, return.
+        Ok(LogQueryResult { entries: vec![], next_cursor: None })
+    }
+
+    async fn tail(&self, _filter: LogQuery) -> Result<LogStream, BackendError> {
+        // Open a follower over the JSONL file (inotify, kqueue, polling, ...)
+        // and yield each new entry as it lands.
+        Ok(Box::pin(stream::iter(Vec::<Result<LogEntry, BackendError>>::new())))
+    }
+
+    fn schema(&self) -> LogStorageSchema {
+        LogStorageSchema {
+            supports_query: true,
+            supports_tail: true,
+            supports_dedup: false,
+            supports_filtering: SupportsFiltering {
+                by_level: true,
+                by_source: true,
+                by_target: true,
+                by_time_range: true,
+                by_glob: true,
+            },
+            max_query_window: None,
+            retention_hint: None,
+        }
+    }
+
+    async fn health(&self) -> Result<HealthCheckResult, BackendError> {
+        Ok(HealthCheckResult {
+            status: HealthStatus::Healthy,
+            uptime_ms: None,
+            memory_usage_bytes: None,
+            last_error: None,
+        })
+    }
+}
+```
+
+The runtime handles `initialize`, `$/ping`, `health/check`, `log_storage/store`, `log_storage/query`, `log_storage/tail` (with `log_storage/event` notification streaming), `log_storage/schema`, and `shutdown`, and dispatches each call into the trait implementation. Write-only sinks set `supports_query = false` / `supports_tail = false` in the schema and return `BackendError::NotSupported` from the corresponding methods — the runtime translates that to `-32001` (`method_not_supported`) on the wire and hosts fall back gracefully.
 
 ## Source of truth
 

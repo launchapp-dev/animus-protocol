@@ -8,10 +8,11 @@
 //!
 //! Plugin authors implement either
 //! [`SubjectBackend`](animus_subject_protocol::SubjectBackend),
-//! [`ProviderBackend`](animus_provider_protocol::ProviderBackend), or
-//! [`TriggerBackend`](animus_trigger_protocol::TriggerBackend), build a
-//! [`PluginInfo`](animus_plugin_protocol::PluginInfo), and call the matching
-//! entrypoint:
+//! [`ProviderBackend`](animus_provider_protocol::ProviderBackend),
+//! [`TriggerBackend`](animus_trigger_protocol::TriggerBackend), or
+//! [`LogStorageBackend`](animus_log_storage_protocol::LogStorageBackend),
+//! build a [`PluginInfo`](animus_plugin_protocol::PluginInfo), and call the
+//! matching entrypoint:
 //!
 //! - [`subject_backend_main`] for subject backends (Linear, Jira, GitHub
 //!   Issues, native task store, ...).
@@ -19,6 +20,8 @@
 //!   OpenAI-compat, on-prem, ...).
 //! - [`trigger_backend_main`] for trigger backends (Slack, generic webhooks,
 //!   file watchers, cron, ...).
+//! - [`log_storage_backend_main`] for log storage backends (local file, Loki,
+//!   Splunk, ClickHouse, ...).
 //!
 //! Each entrypoint runs the stdio loop indefinitely: it reads
 //! newline-delimited JSON-RPC frames from stdin, dispatches to the trait, and
@@ -44,12 +47,18 @@
 //! - [`animus_subject_protocol`] for the subject-backend trait.
 //! - [`animus_provider_protocol`] for the provider-backend trait.
 //! - [`animus_trigger_protocol`] for the trigger-backend trait.
+//! - [`animus_log_storage_protocol`] for the log-storage-backend trait.
 
 #![warn(missing_docs)]
 
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 
+use animus_log_storage_protocol::{
+    BackendError as LogStorageBackendError, LogEntry, LogQuery, LogStorageBackend,
+    METHOD_LOG_STORAGE_QUERY, METHOD_LOG_STORAGE_SCHEMA, METHOD_LOG_STORAGE_STORE,
+    METHOD_LOG_STORAGE_TAIL, NOTIFICATION_LOG_STORAGE_EVENT,
+};
 use animus_plugin_protocol::{
     error_codes, HealthCheckResult, HealthStatus, InitializeResult, PluginCapabilities, PluginInfo,
     PluginManifest, RpcError, RpcNotification, RpcRequest, RpcResponse, PROTOCOL_VERSION,
@@ -262,6 +271,77 @@ pub async fn trigger_backend_main<B: TriggerBackend + 'static>(
         let stdout = stdout.clone();
         tokio::spawn(async move {
             handle_trigger_request(request, info, capabilities, backend, stdout).await;
+        });
+    }
+    Ok(())
+}
+
+/// Run a log-storage-backend plugin's stdio JSON-RPC loop.
+///
+/// Call this from `#[tokio::main]` in a plugin binary. `info` is the static
+/// identity returned in the `initialize` response and `--manifest` output;
+/// `backend` is the
+/// [`LogStorageBackend`](animus_log_storage_protocol::LogStorageBackend)
+/// implementation that handles the `log_storage/*` domain methods.
+///
+/// The function returns when stdin closes (clean shutdown) or on a fatal I/O
+/// error.
+///
+/// # CLI behavior
+///
+/// If `--manifest` (or `-m`) appears in `std::env::args()`, the function
+/// prints a [`PluginManifest`] derived from `info` and the backend's
+/// declared capabilities to stdout, then exits with code `0`.
+///
+/// # Streaming
+///
+/// On `log_storage/tail` the runtime calls
+/// [`LogStorageBackend::tail`](animus_log_storage_protocol::LogStorageBackend::tail),
+/// replies immediately with `{ "tailing": true }`, and spawns a task that
+/// drains the returned stream — emitting each [`LogEntry`] as a
+/// [`NOTIFICATION_LOG_STORAGE_EVENT`] notification carrying the original
+/// tail-request id in `params.id`. Stream-level errors are forwarded as
+/// notifications with an `error` field and terminate the tail.
+///
+/// # Example
+///
+/// ```ignore
+/// use animus_plugin_protocol::PluginInfo;
+/// use animus_plugin_runtime::log_storage_backend_main;
+/// use animus_log_storage_protocol::PLUGIN_KIND_LOG_STORAGE_BACKEND;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let info = PluginInfo {
+///         name: "animus-log-storage-file".into(),
+///         version: env!("CARGO_PKG_VERSION").into(),
+///         plugin_kind: PLUGIN_KIND_LOG_STORAGE_BACKEND.into(),
+///         description: Some("Local events.jsonl log storage".into()),
+///     };
+///     log_storage_backend_main(info, my_backend::FileBackend::new()).await
+/// }
+/// ```
+pub async fn log_storage_backend_main<B: LogStorageBackend + 'static>(
+    info: PluginInfo,
+    backend: B,
+) -> Result<()> {
+    let capabilities = log_storage_capabilities(&backend);
+    if parse_manifest_flag() {
+        print_manifest_and_exit(&info, &capabilities);
+    }
+    refuse_terminal_stdin(&info.name);
+
+    let backend = Arc::new(backend);
+    let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    let mut reader = BufReader::new(tokio::io::stdin());
+
+    while let Some(request) = read_frame(&mut reader).await? {
+        let info = info.clone();
+        let capabilities = capabilities.clone();
+        let backend = backend.clone();
+        let stdout = stdout.clone();
+        tokio::spawn(async move {
+            handle_log_storage_request(request, info, capabilities, backend, stdout).await;
         });
     }
     Ok(())
@@ -613,6 +693,153 @@ async fn drive_trigger_stream(
 }
 
 // =====================================================================
+// Log storage dispatch
+// =====================================================================
+
+#[derive(Debug, Deserialize)]
+struct LogStorageStoreParams {
+    entries: Vec<LogEntry>,
+}
+
+async fn handle_log_storage_request<B: LogStorageBackend + 'static>(
+    request: RpcRequest,
+    info: PluginInfo,
+    capabilities: PluginCapabilities,
+    backend: Arc<B>,
+    stdout: Arc<Mutex<Stdout>>,
+) {
+    let id = request.id.clone();
+    let response = match request.method.as_str() {
+        "initialize" => Some(initialize_response(id, &info, &capabilities)),
+        "initialized" => None,
+        "$/ping" => Some(RpcResponse::ok(id, json!({}))),
+        "health/check" => Some(log_storage_health_response(id, backend.health().await)),
+        "shutdown" => Some(RpcResponse::ok(id, json!({}))),
+        METHOD_LOG_STORAGE_SCHEMA => Some(match serde_json::to_value(backend.schema()) {
+            Ok(value) => RpcResponse::ok(id, value),
+            Err(error) => RpcResponse::err(id, encoding_error("log_storage/schema", error)),
+        }),
+        METHOD_LOG_STORAGE_STORE => {
+            let params = match deserialize_params::<LogStorageStoreParams>(request.params, false) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            let count = params.entries.len();
+            Some(match backend.store(params.entries).await {
+                Ok(()) => RpcResponse::ok(id, json!({ "stored": count })),
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        METHOD_LOG_STORAGE_QUERY => {
+            let filter = match deserialize_params::<LogQuery>(request.params, true) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            Some(match backend.query(filter).await {
+                Ok(result) => match serde_json::to_value(result) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(id, encoding_error("log_storage/query", error)),
+                },
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        METHOD_LOG_STORAGE_TAIL => {
+            let filter = match deserialize_params::<LogQuery>(request.params, true) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            match backend.tail(filter).await {
+                Ok(stream) => {
+                    let request_id = id.clone();
+                    let stdout = stdout.clone();
+                    tokio::spawn(async move {
+                        drive_log_storage_stream(request_id, stream, stdout).await;
+                    });
+                    Some(RpcResponse::ok(id, json!({ "tailing": true })))
+                }
+                Err(error) => Some(RpcResponse::err(id, error.into())),
+            }
+        }
+        other if other.starts_with("$/") => None,
+        other => Some(method_not_found(id, &info.name, other)),
+    };
+
+    if let Some(response) = response {
+        write_response(&stdout, &response).await;
+    }
+}
+
+async fn drive_log_storage_stream(
+    request_id: Option<Value>,
+    mut stream: animus_log_storage_protocol::LogStream,
+    stdout: Arc<Mutex<Stdout>>,
+) {
+    use futures_core::Stream;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    // The outer `Pin<Box<dyn Stream>>` is `Unpin`, so `Pin::new(&mut stream)`
+    // suffices to project a `Pin<&mut dyn Stream>` for `poll_next`. We avoid
+    // pulling in `futures-util` and use `std::future::poll_fn` instead.
+    std::future::poll_fn(|cx: &mut Context<'_>| loop {
+        match Pin::new(&mut stream).poll_next(cx) {
+            Poll::Ready(Some(Ok(entry))) => {
+                let entry_value = match serde_json::to_value(&entry) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let mut payload = serde_json::Map::new();
+                if let Some(id) = request_id.clone() {
+                    payload.insert("id".to_string(), id);
+                }
+                payload.insert("entry".to_string(), entry_value);
+                let notification = RpcNotification::new(
+                    NOTIFICATION_LOG_STORAGE_EVENT,
+                    Some(Value::Object(payload)),
+                );
+                let stdout = stdout.clone();
+                tokio::spawn(async move {
+                    write_notification(&stdout, &notification).await;
+                });
+            }
+            Poll::Ready(Some(Err(error))) => {
+                let rpc_error: RpcError = error.into();
+                let error_value = match serde_json::to_value(&rpc_error) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let mut payload = serde_json::Map::new();
+                if let Some(id) = request_id.clone() {
+                    payload.insert("id".to_string(), id);
+                }
+                payload.insert("error".to_string(), error_value);
+                let notification = RpcNotification::new(
+                    NOTIFICATION_LOG_STORAGE_EVENT,
+                    Some(Value::Object(payload)),
+                );
+                let stdout = stdout.clone();
+                tokio::spawn(async move {
+                    write_notification(&stdout, &notification).await;
+                });
+                return Poll::Ready(());
+            }
+            Poll::Ready(None) => return Poll::Ready(()),
+            Poll::Pending => return Poll::Pending,
+        }
+    })
+    .await;
+}
+
+// =====================================================================
 // Shared helpers
 // =====================================================================
 
@@ -765,6 +992,19 @@ fn trigger_health_response(
     }
 }
 
+fn log_storage_health_response(
+    id: Option<Value>,
+    result: Result<HealthCheckResult, LogStorageBackendError>,
+) -> RpcResponse {
+    match result {
+        Ok(health) => match serde_json::to_value(health) {
+            Ok(value) => RpcResponse::ok(id, value),
+            Err(error) => RpcResponse::err(id, encoding_error("health/check", error)),
+        },
+        Err(error) => RpcResponse::err(id, error.into()),
+    }
+}
+
 fn deserialize_params<T: for<'de> Deserialize<'de>>(
     params: Option<Value>,
     allow_missing: bool,
@@ -876,6 +1116,32 @@ fn trigger_capabilities<B: TriggerBackend>(backend: &B) -> PluginCapabilities {
         // Trigger backends are always streaming — `trigger/watch` is the
         // primary surface and emits `trigger/event` notifications.
         streaming: true,
+        progress: false,
+        cancellation: false,
+        subject_kinds: Vec::new(),
+        mcp_tools: Vec::new(),
+    }
+}
+
+fn log_storage_capabilities<B: LogStorageBackend>(backend: &B) -> PluginCapabilities {
+    let schema = backend.schema();
+    let mut methods = vec![
+        METHOD_LOG_STORAGE_STORE.to_string(),
+        METHOD_LOG_STORAGE_SCHEMA.to_string(),
+        "health/check".to_string(),
+    ];
+    if schema.supports_query {
+        methods.push(METHOD_LOG_STORAGE_QUERY.to_string());
+    }
+    if schema.supports_tail {
+        methods.push(METHOD_LOG_STORAGE_TAIL.to_string());
+    }
+    PluginCapabilities {
+        methods,
+        // `streaming` is true only when the backend implements
+        // `log_storage/tail` — that's the surface that emits
+        // `log_storage/event` notifications.
+        streaming: schema.supports_tail,
         progress: false,
         cancellation: false,
         subject_kinds: Vec::new(),

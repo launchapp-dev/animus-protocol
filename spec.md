@@ -185,6 +185,7 @@ A plugin declares its kind in [`PluginInfo::plugin_kind`](#87-plugininfo) during
 | `provider` | `agent/run`, `agent/resume`, `agent/cancel` |
 | `subject_backend` | `subject/list`, `subject/get`, `subject/update`, `subject/watch` (optional), `subject/schema` |
 | `trigger_backend` | `trigger/watch`, `trigger/event` (notification), `trigger/ack` (optional), `trigger/schema` |
+| `log_storage_backend` | `log_storage/store`, `log_storage/query` (optional), `log_storage/tail` (optional), `log_storage/event` (notification), `log_storage/schema` |
 | `custom` | none predefined; host treats domain methods opaquely and surfaces them via `animus.plugin.call` MCP |
 
 Hosts MUST NOT call domain methods for a kind other than the one declared.
@@ -321,6 +322,87 @@ Params: `{ "event_id": "..." }`. Result: `{ "event_id": "...", "acked": true }`.
 #### `trigger/schema`
 
 Returns a [`TriggerSchema`](#112-triggerschema) capability declaration. SHOULD be cheap (constant or one-shot at startup).
+
+### 7.4 Log storage backend methods
+
+Log storage backends persist structured [`LogEntry`](#121-logentry) records emitted by the daemon, plugins, the CLI, and individual workflow runs. The daemon calls `log_storage/store` as it produces events; operators (or other plugins) call `log_storage/query` and `log_storage/tail` to read them back.
+
+Backends declare which read surface they support in [`LogStorageSchema`](#124-logstorageschema). A write-only sink advertises `supports_query = false` / `supports_tail = false` and returns `-32001` (`method_not_supported`) for the corresponding calls.
+
+#### `log_storage/store`
+
+Persists a batch of [`LogEntry`](#121-logentry) records. Backends MAY deduplicate by `LogEntry.id` to keep at-least-once delivery idempotent.
+
+Params:
+
+```json
+{
+  "entries": [
+    {
+      "id": "evt-001",
+      "ts": "2026-05-17T18:20:34Z",
+      "level": "info",
+      "source": "plugin",
+      "source_name": "animus-subject-linear",
+      "target": "plugin.animus-subject-linear.client",
+      "message": "fetched 14 issues",
+      "fields": { "count": 14 }
+    }
+  ]
+}
+```
+
+Result:
+
+```json
+{ "stored": 1 }
+```
+
+Implementations SHOULD be transactional within a single call — either all entries land or none do — so callers can retry on partial failure without producing duplicates.
+
+#### `log_storage/query`
+
+Non-streaming query for historical log entries. Params: [`LogQuery`](#122-logquery). Result: [`LogQueryResult`](#123-logqueryresult).
+
+Backends honor the filters they advertise in [`LogStorageSchema.supports_filtering`](#124-logstorageschema). Filters the backend cannot evaluate SHOULD be ignored — the daemon applies the remainder in-process.
+
+Backends that cannot read return `-32001` (`method_not_supported`).
+
+#### `log_storage/tail`
+
+Opens a streaming query. The response is sent immediately to acknowledge; subsequent entries arrive as `log_storage/event` notifications carrying the original request id in `params.id`. If [`LogQuery::follow`](#122-logquery) is `true`, the stream stays open and emits new entries as they arrive; otherwise it closes after replaying the matching backlog.
+
+Params: [`LogQuery`](#122-logquery). Result: `{ "tailing": true }`.
+
+If the backend cannot open the tail (e.g. upstream auth failure), it MUST return a JSON-RPC error response rather than emit a stream that fails on the first poll.
+
+#### `log_storage/event` (notification)
+
+```json
+{ "jsonrpc": "2.0", "method": "log_storage/event",
+  "params": {
+    "id": 17,
+    "entry": {
+      "id": "evt-001",
+      "ts": "2026-05-17T18:20:34Z",
+      "level": "info",
+      "source": "plugin",
+      "source_name": "animus-subject-linear",
+      "target": "plugin.animus-subject-linear.client",
+      "message": "fetched 14 issues",
+      "fields": { "count": 14 }
+    }
+  }
+}
+```
+
+`params.id` echoes the originating `log_storage/tail` request id so hosts can correlate streams. `params.entry` is a [`LogEntry`](#121-logentry).
+
+Stream-level errors are emitted as `log_storage/event` notifications with an `error` field in place of `entry`; an error notification terminates the tail.
+
+#### `log_storage/schema`
+
+Returns a [`LogStorageSchema`](#124-logstorageschema) capability declaration. SHOULD be cheap (constant or one-shot at startup).
 
 ## 8. Plugin protocol types
 
@@ -629,7 +711,92 @@ After streaming, the plugin emits the final `AgentRunResponse` as the response t
 - `supports_dedup`: backend re-emits the same [`TriggerEvent::id`] for a re-seen event. Hosts may use this to skip their own dedup table.
 - `supports_ack`: backend implements `trigger/ack`. Hosts skip the call when `false`.
 
-## 12. Versioning
+## 12. Log storage types
+
+### 12.1 `LogEntry`
+
+```json
+{
+  "id": "evt-001",
+  "ts": "2026-05-17T18:20:34Z",
+  "level": "info",
+  "source": "plugin",
+  "source_name": "animus-subject-linear",
+  "target": "plugin.animus-subject-linear.client",
+  "message": "fetched 14 issues",
+  "fields": { "count": 14, "tenant": "acme" }
+}
+```
+
+- `id` MUST be stable for a given log record so backends can deduplicate on retry. Backends that cannot produce a natural id SHOULD synthesize one (e.g. `(source, ts, hash(message))`).
+- `ts` MUST be the original emission timestamp (RFC 3339, UTC). Backends MUST preserve it rather than overwriting with arrival time.
+- `level` is one of `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"` (lowercase). Follows the [`tracing`](https://docs.rs/tracing) convention.
+- `source` is one of `"daemon"`, `"plugin"`, `"cli"`, `"workflow"` (snake_case). The closed set keeps queries cheap.
+- `source_name` disambiguates emitters within a `source` (e.g. plugin name, workflow id, CLI command). Omitted when null.
+- `target` is a hierarchical `tracing`-style module path, e.g. `"daemon.scheduler.dispatch"`. Backends MAY index this for faster glob matches.
+- `message` is the human-readable log line. Multi-line content is allowed.
+- `fields` is opaque structured context (request_id, subject_id, workflow_id, ...). Omitted when null.
+
+### 12.2 `LogQuery`
+
+```json
+{
+  "min_level": "warn",
+  "source": "daemon",
+  "source_name": "scheduler",
+  "target_glob": "daemon.scheduler.*",
+  "since": "2026-05-17T00:00:00Z",
+  "until": "2026-05-18T00:00:00Z",
+  "limit": 100,
+  "cursor": "opaque-page-2",
+  "follow": false
+}
+```
+
+All fields except `follow` are optional and combined with AND semantics. `follow` defaults to `false` and is only meaningful for `log_storage/tail`. `cursor` is opaque to the host; pass back a [`LogQueryResult::next_cursor`](#123-logqueryresult) verbatim to fetch the next page.
+
+Backends honor the subset of filters they advertise via [`LogStorageSchema.supports_filtering`](#124-logstorageschema). Unsupported filters are silently ignored on the wire — the daemon evaluates them in-process before surfacing results.
+
+### 12.3 `LogQueryResult`
+
+```json
+{
+  "entries": [LogEntry, ...],
+  "next_cursor": "opaque-string-or-null"
+}
+```
+
+`entries` is in chronological order (oldest first) unless documented otherwise by the backend. `next_cursor` is `null` (or absent) when the query is exhausted.
+
+### 12.4 `LogStorageSchema`
+
+```json
+{
+  "supports_query": true,
+  "supports_tail": true,
+  "supports_dedup": false,
+  "supports_filtering": {
+    "by_level": true,
+    "by_source": true,
+    "by_target": true,
+    "by_time_range": true,
+    "by_glob": false
+  },
+  "max_query_window": 2592000000,
+  "retention_hint": 604800000
+}
+```
+
+- `supports_query`: backend implements `log_storage/query`. Hosts MUST NOT call it when `false`.
+- `supports_tail`: backend implements `log_storage/tail`. Hosts MUST NOT call it when `false`.
+- `supports_dedup`: backend deduplicates by [`LogEntry::id`]. Hosts MAY skip their own dedup table when `true`.
+- `supports_filtering`: which [`LogQuery`](#122-logquery) filters the backend evaluates server-side. Fields default to `false`; the host applies any unsupported filter in-process.
+- `max_query_window`: maximum span (in **milliseconds**) the backend will honor for a single query (e.g. Loki caps at 30 days ≈ `2592000000`). Omitted when the backend declines to advertise a limit.
+- `retention_hint`: typical retention period (in **milliseconds**) after which entries are evicted. Surfaced to operators so they understand how far back queries can reach.
+
+Durations are encoded as signed millisecond integers because JSON has no native duration type and `chrono::Duration` does not serialize directly.
+
+## 13. Versioning
 
 The protocol uses semantic versioning. The current version is `1.0.0`.
 
@@ -646,7 +813,7 @@ host_major != plugin_major  →  incompatible (host refuses)
 
 Plugins SHOULD tolerate hosts on the same major version even when the host's minor is older — i.e. don't require methods you've added in a newer minor.
 
-## 13. Conformance
+## 14. Conformance
 
 A plugin is conformant if:
 
@@ -656,6 +823,6 @@ A plugin is conformant if:
 4. It implements every method it advertises in `capabilities.methods`.
 5. It returns `-32001` (`method_not_supported`) for optional methods it has chosen not to implement.
 6. Its frames are valid JSON-RPC 2.0 per §2.
-7. Its `Subject`/`SubjectPatch`/`AgentRunRequest`/`TriggerEvent`/`TriggerSchema` payloads use the field names defined in §9, §10, and §11 exactly (case-sensitive, snake_case unless otherwise specified).
+7. Its `Subject`/`SubjectPatch`/`AgentRunRequest`/`TriggerEvent`/`TriggerSchema`/`LogEntry`/`LogQuery`/`LogStorageSchema` payloads use the field names defined in §9, §10, §11, and §12 exactly (case-sensitive, snake_case unless otherwise specified).
 
 A host is conformant if it speaks the same lifecycle, honors the capabilities a plugin advertises, and never calls a method a plugin did not advertise.
