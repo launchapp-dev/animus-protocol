@@ -73,8 +73,8 @@ src/backend.rs (sketch):
 ```rust
 use animus_plugin_protocol::{HealthCheckResult, HealthStatus};
 use animus_subject_protocol::{
-    BackendError, EventStream, Subject, SubjectBackend, SubjectFilter, SubjectId,
-    SubjectList, SubjectPatch, SubjectSchema, SubjectStatus,
+    BackendError, EventStream, StatusDispatchHint, Subject, SubjectAttachment, SubjectBackend,
+    SubjectFilter, SubjectId, SubjectList, SubjectPatch, SubjectSchema, SubjectStatus,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -89,7 +89,36 @@ impl LinearBackend {
 impl SubjectBackend for LinearBackend {
     async fn list(&self, _filter: SubjectFilter) -> Result<SubjectList, BackendError> {
         // Call Linear's API, map to Subject, return.
-        Ok(SubjectList { subjects: vec![], next_cursor: None, fetched_at: Utc::now() })
+        // A richer Subject surfaces the native state vocabulary verbatim and
+        // attaches any documents the issue carries so workflows can dispatch
+        // on `native_status`, `dispatch_label`, or attachment presence.
+        let subject = Subject {
+            id: SubjectId::new("linear:ENG-123"),
+            kind: "issue".into(),
+            title: "Implement subject backend protocol".into(),
+            description: None,
+            status: SubjectStatus::InProgress,
+            priority: Some(3),
+            assignee: Some("agent:default".into()),
+            labels: vec!["backend".into()],
+            parent: None,
+            children: vec![],
+            url: Some("https://linear.app/...".into()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            custom: Default::default(),
+            native_status: Some("In Review".into()),
+            status_metadata: serde_json::json!({ "state_id": "abc", "color": "#FFAA00" }),
+            attachments: vec![SubjectAttachment {
+                id: "doc-1".into(),
+                kind: "document".into(),
+                uri: "linear://issue/ENG-123/doc/spec".into(),
+                title: Some("Spec".into()),
+                mime_type: Some("text/markdown".into()),
+                metadata: serde_json::Value::Null,
+            }],
+        };
+        Ok(SubjectList { subjects: vec![subject], next_cursor: None, fetched_at: Utc::now() })
     }
 
     async fn get(&self, id: &SubjectId) -> Result<Subject, BackendError> {
@@ -114,7 +143,26 @@ impl SubjectBackend for LinearBackend {
             supports_watch: false,
             supports_create: false,
             supports_pagination: true,
-            native_status_values: vec!["Backlog".into(), "Todo".into(), "In Progress".into(), "Done".into()],
+            native_status_values: vec![
+                "Backlog".into(),
+                "Todo".into(),
+                "In Review".into(),
+                "Shipped".into(),
+            ],
+            status_dispatch_hints: vec![
+                StatusDispatchHint {
+                    native_status: "In Review".into(),
+                    maps_to: SubjectStatus::InProgress,
+                    dispatch_label: Some("code-review".into()),
+                    description: Some("Awaiting peer review".into()),
+                },
+                StatusDispatchHint {
+                    native_status: "Shipped".into(),
+                    maps_to: SubjectStatus::Done,
+                    dispatch_label: Some("post-ship-qa".into()),
+                    description: None,
+                },
+            ],
             custom_fields: vec![],
         }
     }
@@ -129,6 +177,8 @@ impl SubjectBackend for LinearBackend {
     }
 }
 ```
+
+The `native_status`, `status_metadata`, `attachments`, and `status_dispatch_hints` fields are v0.1.1 additions. Backends that don't yet surface them can omit them entirely — the wire output stays byte-identical to v0.1.0. Workflow YAML in newer hosts can then gate phases on `dispatch_label` to fire phases like `code-review` regardless of which backend's vocabulary the subject came from. See [`spec.md` §9.7](./spec.md).
 
 Run:
 

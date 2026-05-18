@@ -10,7 +10,7 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-animus-plugin-protocol = { path = "../animus-plugin-protocol", version = "0.1.0" }
+animus-plugin-protocol = { path = "../animus-plugin-protocol", version = "0.1.1" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "io-util", "process", "time"] }
 serde.workspace = true
 serde_json.workspace = true

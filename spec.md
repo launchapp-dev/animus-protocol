@@ -399,11 +399,16 @@ See §6.1.
   "labels_all": ["P1"],
   "updated_since": "2026-05-10T00:00:00Z",
   "cursor": null,
-  "limit": 50
+  "limit": 50,
+  "native_status": "In Review",
+  "dispatch_label": "code-review",
+  "has_attachment_kind": "document"
 }
 ```
 
 All fields optional. Combined with AND semantics. `cursor` is opaque to the host.
+
+The trailing three fields were added in v0.1.1 (see §9.7). v0.1.0 hosts/backends omit them; they MUST be tolerated when absent on both sides.
 
 ### 9.2 `SubjectList`
 
@@ -432,13 +437,27 @@ All fields optional. Combined with AND semantics. `cursor` is opaque to the host
   "url": "https://linear.app/...",
   "created_at": "2026-05-01T12:00:00Z",
   "updated_at": "2026-05-13T13:55:00Z",
-  "custom": { "story_points": 5 }
+  "custom": { "story_points": 5 },
+  "native_status": "In Review",
+  "status_metadata": { "state_id": "abc-123", "color": "#FFAA00", "type": "started" },
+  "attachments": [
+    {
+      "id": "doc-7",
+      "kind": "document",
+      "uri": "linear://issue/ENG-123/doc/spec",
+      "title": "Spec",
+      "mime_type": "text/markdown",
+      "metadata": { "revision": 3 }
+    }
+  ]
 }
 ```
 
 `status` is one of: `"ready"`, `"in-progress"`, `"blocked"`, `"done"`, `"cancelled"`. Native (per-backend) state names map into these via workflow YAML's `status_map`; the mapping lives in configuration, not in the protocol.
 
 `id` MUST be prefixed with the backend name. The host treats the value as opaque.
+
+The `native_status`, `status_metadata`, and `attachments` fields are v0.1.1 additions (see §9.7). v0.1.0 emitters omit them and v0.1.0 consumers ignore them. v0.1.1 emitters MUST omit them when at their default value (`null` / empty) so the wire output of a default-shape `Subject` stays byte-identical to v0.1.0.
 
 ### 9.4 `SubjectPatch`
 
@@ -464,12 +483,18 @@ Omitted fields are not modified. `"assignee": null` explicitly clears; omitting 
   "supports_watch": false,
   "supports_create": false,
   "supports_pagination": true,
-  "native_status_values": ["Backlog", "Todo", "In Progress", "Done", "Cancelled"],
+  "native_status_values": ["Backlog", "Todo", "In Review", "Shipped", "Cancelled"],
+  "status_dispatch_hints": [
+    { "native_status": "In Review",  "maps_to": "in-progress", "dispatch_label": "code-review",   "description": "Awaiting peer review" },
+    { "native_status": "Shipped",    "maps_to": "done",        "dispatch_label": "post-ship-qa",  "description": "Deployed to production" }
+  ],
   "custom_fields": [
     { "key": "story_points", "type": "number" }
   ]
 }
 ```
+
+`status_dispatch_hints` is a v0.1.1 addition; v0.1.0 hosts ignore the field. Each entry declares how a backend-native status maps into the normalized [`SubjectStatus`] bucket plus an optional `dispatch_label` that workflow YAML can gate phases on. See §9.7.
 
 ### 9.6 `SubjectChangedEvent` (notification payload)
 
@@ -477,11 +502,41 @@ Omitted fields are not modified. `"assignee": null` explicitly clears; omitting 
 {
   "id": "linear:ENG-123",
   "change_kind": "status-changed",
-  "subject": { ... }
+  "subject": { ... },
+  "previous_native_status": "Todo",
+  "previous_dispatch_label": "triage"
 }
 ```
 
-`change_kind` is one of: `"created"`, `"updated"`, `"status-changed"`, `"deleted"`.
+`change_kind` is one of: `"created"`, `"updated"`, `"status-changed"`, `"deleted"`, `"dispatch-label-changed"`, `"attachment-added"`, `"attachment-removed"`.
+
+The trailing three `change_kind` values and the `previous_native_status` / `previous_dispatch_label` fields are v0.1.1 additions. v0.1.0 consumers will see them as unknown enum variants and SHOULD treat them as `"updated"`. v0.1.1 emitters MUST omit `previous_*` fields when they are `null`.
+
+### 9.7 Flexible status, dispatch labels, and attachments (v0.1.1)
+
+Three orthogonal mechanisms expand the Subject schema beyond the fixed five-variant [`SubjectStatus`] without breaking v0.1.0 consumers:
+
+**1. `Subject.native_status` + `Subject.status_metadata`** — the backend's raw status string and arbitrary backend status payload. `native_status` preserves Linear's `"In Review"` / `"Spec"` / `"Shipped"`, Jira's `"Done — won't ship"`, GitHub Project's `"Cycle 12 / blocked on infra"`, and any other vocabulary a backend exposes. `status_metadata` carries free-form JSON (state id, color, type, position) — workflows may read it via templating (`{{subject.status_metadata.color}}`).
+
+**2. `SubjectSchema.status_dispatch_hints` + `dispatch_label`** — each native status declares the normalized bucket it maps into and an optional workflow `dispatch_label`. Workflow YAML can then say:
+
+```yaml
+phases:
+  - id: code-review
+    triggered_by_dispatch_label: code-review
+```
+
+…and any backend (Linear, Jira, GitHub) that advertises `dispatch_label = "code-review"` fires the phase. The label is the contract; the backend's native status is an implementation detail.
+
+**3. `Subject.attachments` + `SubjectAttachment`** — first-class document/url/file/comment-thread attachments. `kind` is opaque to the host; conventional values are `"document"`, `"url"`, `"file"`, `"comment-thread"`. Workflow YAML can gate on attachment presence (`requires_document_attachment: true`) to drive document-aware phases. `SubjectChangedEvent` emits new change kinds (`"attachment-added"`, `"attachment-removed"`) so the daemon can react without polling.
+
+`SubjectFilter` accepts three matching v0.1.1 fields:
+
+- `native_status` — exact-match against `Subject.native_status`.
+- `dispatch_label` — exact-match against the backend's resolved dispatch label.
+- `has_attachment_kind` — at least one attachment with this `kind` must be present.
+
+All v0.1.1 fields are Optional or default-empty. Emitters MUST omit them at their defaults so wire output remains bit-identical to v0.1.0 for subjects that do not use the new mechanisms.
 
 ## 10. Provider types
 
