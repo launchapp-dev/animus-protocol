@@ -371,20 +371,39 @@ async fn handle_subject_request<B: SubjectBackend + 'static>(
     stdout: Arc<Mutex<Stdout>>,
 ) {
     let id = request.id.clone();
-    let response = match request.method.as_str() {
-        "initialize" => Some(initialize_response(id, &info, &capabilities)),
-        "initialized" => None,
-        "$/ping" => Some(RpcResponse::ok(id, json!({}))),
-        "health/check" => Some(health_response(id, backend.health().await)),
-        "shutdown" => Some(RpcResponse::ok(id, json!({}))),
-        METHOD_SUBJECT_LIST => {
-            let filter = match deserialize_params::<SubjectFilter>(request.params, true) {
+    let method = request.method.as_str();
+
+    // Literal protocol-level methods bypass kind/verb routing.
+    let literal_response = match method {
+        "initialize" => Some(Some(initialize_response(id.clone(), &info, &capabilities))),
+        "initialized" => Some(None),
+        "$/ping" => Some(Some(RpcResponse::ok(id.clone(), json!({})))),
+        "health/check" => Some(Some(health_response(id.clone(), backend.health().await))),
+        "shutdown" => Some(Some(RpcResponse::ok(id.clone(), json!({})))),
+        other if other.starts_with("$/") => Some(None),
+        _ => None,
+    };
+    if let Some(maybe_response) = literal_response {
+        if let Some(response) = maybe_response {
+            write_response(&stdout, &response).await;
+        }
+        return;
+    }
+
+    // Domain methods on the subject wire are `<kind>/<verb>` (e.g.
+    // `task/list`, `issue/get`). Legacy `subject/<verb>` callers are
+    // accepted as a pass-through where `kind` is left untouched.
+    let (kind, verb) = subject_method_parts(method);
+    let response = match verb {
+        "list" => {
+            let mut filter = match deserialize_params::<SubjectFilter>(request.params, true) {
                 Ok(value) => value,
                 Err(error) => {
                     write_response(&stdout, &RpcResponse::err(id, error)).await;
                     return;
                 }
             };
+            inject_kind_into_filter(&mut filter, kind);
             Some(match backend.list(filter).await {
                 Ok(list) => match serde_json::to_value(list) {
                     Ok(value) => RpcResponse::ok(id, value),
@@ -393,7 +412,7 @@ async fn handle_subject_request<B: SubjectBackend + 'static>(
                 Err(error) => RpcResponse::err(id, error.into()),
             })
         }
-        METHOD_SUBJECT_GET => {
+        "get" => {
             let params = match deserialize_params::<SubjectGetParams>(request.params, false) {
                 Ok(value) => value,
                 Err(error) => {
@@ -409,7 +428,7 @@ async fn handle_subject_request<B: SubjectBackend + 'static>(
                 Err(error) => RpcResponse::err(id, error.into()),
             })
         }
-        METHOD_SUBJECT_UPDATE => {
+        "update" => {
             let params = match deserialize_params::<SubjectUpdateParams>(request.params, false) {
                 Ok(value) => value,
                 Err(error) => {
@@ -425,7 +444,7 @@ async fn handle_subject_request<B: SubjectBackend + 'static>(
                 Err(error) => RpcResponse::err(id, error.into()),
             })
         }
-        METHOD_SUBJECT_WATCH => match backend.watch().await {
+        "watch" => match backend.watch().await {
             Some(stream) => {
                 let request_id = id.clone();
                 let stdout = stdout.clone();
@@ -443,16 +462,46 @@ async fn handle_subject_request<B: SubjectBackend + 'static>(
                 },
             )),
         },
-        METHOD_SUBJECT_SCHEMA => Some(match serde_json::to_value(backend.schema()) {
+        "schema" => Some(match serde_json::to_value(backend.schema()) {
             Ok(value) => RpcResponse::ok(id, value),
             Err(error) => RpcResponse::err(id, encoding_error("subject/schema", error)),
         }),
-        other if other.starts_with("$/") => None,
-        other => Some(method_not_found(id, &info.name, other)),
+        _ => Some(method_not_found(id, &info.name, method)),
     };
 
     if let Some(response) = response {
         write_response(&stdout, &response).await;
+    }
+}
+
+/// Split a subject wire method into its `(kind, verb)` parts.
+///
+/// The daemon's `SubjectRouter` dispatches calls as `<kind>/<verb>` (e.g.
+/// `task/list`, `issue/get`) where the prefix is the subject `kind` claimed
+/// by a backend. Legacy `subject/<verb>` callers are accepted for backwards
+/// compatibility; in that case the literal `subject` prefix is treated as
+/// "no specific kind" and returned as `kind = ""` so callers know not to
+/// inject it into a [`SubjectFilter`].
+///
+/// Bare verbs (no `/`) are reported as `kind = ""`, `verb = method`.
+fn subject_method_parts(method: &str) -> (&str, &str) {
+    match method.split_once('/') {
+        Some(("subject", verb)) => ("", verb),
+        Some((prefix, verb)) => (prefix, verb),
+        None => ("", method),
+    }
+}
+
+/// Inject the wire-level `kind` into a [`SubjectFilter`] when the filter
+/// does not already constrain on kind. This lets multi-kind backends (e.g.
+/// `animus-subject-sqlite` advertising both `task` and `issue`) know which
+/// kind the caller addressed in the wire method (e.g. `task/list`).
+fn inject_kind_into_filter(filter: &mut SubjectFilter, kind: &str) {
+    if kind.is_empty() {
+        return;
+    }
+    if filter.kind.is_empty() {
+        filter.kind.push(kind.to_string());
     }
 }
 
@@ -1152,6 +1201,11 @@ fn log_storage_capabilities<B: LogStorageBackend>(backend: &B) -> PluginCapabili
 #[cfg(test)]
 mod tests {
     use super::*;
+    use animus_subject_protocol::{
+        Subject, SubjectList, SubjectSchema, SubjectStatus, NOTIFICATION_SUBJECT_CHANGED,
+    };
+    use async_trait::async_trait;
+    use std::sync::Mutex as StdMutex;
 
     #[test]
     fn deserialize_params_rejects_missing_when_required() {
@@ -1173,5 +1227,205 @@ mod tests {
         let response = method_not_found(Some(json!(1)), "plugin", "subject/bogus");
         let error = response.error.expect("error payload");
         assert_eq!(error.code, error_codes::METHOD_NOT_FOUND);
+    }
+
+    // -----------------------------------------------------------------
+    // Subject wire dispatch: <kind>/<verb> routing.
+    //
+    // The in-tree daemon's SubjectRouter dispatches by the kind prefix
+    // (e.g. `task/list`, `issue/get`) per
+    // `crates/orchestrator-plugin-host/src/subject_router.rs:38-42`.
+    // The runtime must accept those and route to the right verb on the
+    // backend, injecting the kind into SubjectFilter so multi-kind
+    // backends can disambiguate.
+    // -----------------------------------------------------------------
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        last_list_filter: StdMutex<Option<SubjectFilter>>,
+        kinds: Vec<String>,
+    }
+
+    impl RecordingBackend {
+        fn new(kinds: Vec<&str>) -> Self {
+            Self {
+                last_list_filter: StdMutex::new(None),
+                kinds: kinds.into_iter().map(ToOwned::to_owned).collect(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SubjectBackend for RecordingBackend {
+        async fn list(
+            &self,
+            filter: SubjectFilter,
+        ) -> std::result::Result<SubjectList, SubjectBackendError> {
+            *self.last_list_filter.lock().unwrap() = Some(filter);
+            let fetched_at = serde_json::from_value(json!("2026-01-01T00:00:00Z"))
+                .expect("static timestamp parses");
+            Ok(SubjectList {
+                subjects: Vec::new(),
+                next_cursor: None,
+                fetched_at,
+            })
+        }
+
+        async fn get(&self, id: &SubjectId) -> std::result::Result<Subject, SubjectBackendError> {
+            Err(SubjectBackendError::NotFound(id.0.clone()))
+        }
+
+        async fn update(
+            &self,
+            id: &SubjectId,
+            _patch: SubjectPatch,
+        ) -> std::result::Result<Subject, SubjectBackendError> {
+            Err(SubjectBackendError::NotFound(id.0.clone()))
+        }
+
+        async fn watch(&self) -> Option<animus_subject_protocol::EventStream> {
+            None
+        }
+
+        fn schema(&self) -> SubjectSchema {
+            SubjectSchema {
+                kinds: self.kinds.clone(),
+                status_values: vec![SubjectStatus::Ready],
+                supports_watch: false,
+                supports_create: false,
+                supports_pagination: false,
+                native_status_values: Vec::new(),
+                status_dispatch_hints: Vec::new(),
+                custom_fields: Vec::new(),
+            }
+        }
+
+        async fn health(&self) -> std::result::Result<HealthCheckResult, SubjectBackendError> {
+            Ok(HealthCheckResult {
+                status: HealthStatus::Healthy,
+                uptime_ms: None,
+                memory_usage_bytes: None,
+                last_error: None,
+            })
+        }
+    }
+
+    fn test_info(name: &str) -> PluginInfo {
+        PluginInfo {
+            name: name.to_string(),
+            version: "0.0.0-test".to_string(),
+            plugin_kind: "subject_backend".to_string(),
+            description: None,
+        }
+    }
+
+    fn test_stdout() -> Arc<Mutex<Stdout>> {
+        Arc::new(Mutex::new(tokio::io::stdout()))
+    }
+
+    #[test]
+    fn subject_method_parts_splits_kind_and_verb() {
+        assert_eq!(subject_method_parts("task/list"), ("task", "list"));
+        assert_eq!(subject_method_parts("issue/get"), ("issue", "get"));
+        // Legacy `subject/<verb>` keeps the wire compatible: kind blank.
+        assert_eq!(subject_method_parts("subject/list"), ("", "list"));
+        // Bare verbs (defensive) report no kind.
+        assert_eq!(subject_method_parts("schema"), ("", "schema"));
+    }
+
+    #[test]
+    fn inject_kind_into_filter_skips_legacy_subject_prefix() {
+        let mut filter = SubjectFilter::default();
+        inject_kind_into_filter(&mut filter, "");
+        assert!(filter.kind.is_empty());
+
+        let mut filter = SubjectFilter::default();
+        inject_kind_into_filter(&mut filter, "task");
+        assert_eq!(filter.kind, vec!["task".to_string()]);
+
+        // Caller-supplied kind wins over the wire-derived kind.
+        let mut filter = SubjectFilter {
+            kind: vec!["issue".to_string()],
+            ..SubjectFilter::default()
+        };
+        inject_kind_into_filter(&mut filter, "task");
+        assert_eq!(filter.kind, vec!["issue".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn subject_dispatch_recognizes_kind_slash_verb() {
+        let backend = Arc::new(RecordingBackend::new(vec!["task"]));
+        let info = test_info("animus-subject-recording");
+        let capabilities = subject_capabilities(&*backend);
+        let request = RpcRequest::new(json!(1), "task/list", Some(json!({})));
+
+        handle_subject_request(request, info, capabilities, backend.clone(), test_stdout()).await;
+
+        let recorded = backend
+            .last_list_filter
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("backend.list should have been invoked");
+        // Any non-error landing on `list` is the success signal here.
+        assert!(recorded.status.is_empty());
+    }
+
+    #[tokio::test]
+    async fn subject_dispatch_injects_kind_into_filter() {
+        let backend = Arc::new(RecordingBackend::new(vec!["task", "issue"]));
+        let info = test_info("animus-subject-multi");
+        let capabilities = subject_capabilities(&*backend);
+        let request = RpcRequest::new(json!(2), "task/list", Some(json!({})));
+
+        handle_subject_request(request, info, capabilities, backend.clone(), test_stdout()).await;
+
+        let recorded = backend
+            .last_list_filter
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("backend.list should have been invoked");
+        assert_eq!(recorded.kind, vec!["task".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn subject_dispatch_rejects_unknown_verb() {
+        let backend = Arc::new(RecordingBackend::new(vec!["task"]));
+        let info = test_info("animus-subject-recording");
+        let capabilities = subject_capabilities(&*backend);
+        let request = RpcRequest::new(json!(3), "task/madeup", Some(json!({})));
+
+        // No panic / no backend invocation. We verify the dispatcher does
+        // not reach the recording `list` path for an unknown verb.
+        handle_subject_request(request, info, capabilities, backend.clone(), test_stdout()).await;
+
+        assert!(backend.last_list_filter.lock().unwrap().is_none());
+    }
+
+    // Smoke: legacy `subject/list` still dispatches, with no kind injected.
+    #[tokio::test]
+    async fn subject_dispatch_accepts_legacy_subject_prefix() {
+        let backend = Arc::new(RecordingBackend::new(vec!["task"]));
+        let info = test_info("animus-subject-recording");
+        let capabilities = subject_capabilities(&*backend);
+        let request = RpcRequest::new(json!(4), "subject/list", Some(json!({})));
+
+        handle_subject_request(request, info, capabilities, backend.clone(), test_stdout()).await;
+
+        let recorded = backend
+            .last_list_filter
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("backend.list should have been invoked for legacy prefix");
+        assert!(recorded.kind.is_empty());
+    }
+
+    // Notification import keeps the public re-export wired so other
+    // crates can rely on it; this is a compile-time check only.
+    #[test]
+    fn notification_constants_in_scope() {
+        let _ = NOTIFICATION_SUBJECT_CHANGED;
     }
 }
