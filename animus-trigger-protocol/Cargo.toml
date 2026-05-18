@@ -1,0 +1,20 @@
+[package]
+name = "animus-trigger-protocol"
+description = "TriggerBackend trait + event schema for Animus trigger plugins (Slack, generic webhooks, file watchers, cron, ...)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+animus-plugin-protocol = { path = "../animus-plugin-protocol", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+futures-core.workspace = true

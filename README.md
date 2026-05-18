@@ -11,7 +11,8 @@
 | `animus-plugin-protocol` | yes | Wire types only; no external Animus deps. |
 | `animus-subject-protocol` | yes | Pure trait + schema definitions. |
 | `animus-provider-protocol` | yes | Pure trait + schema definitions. |
-| `animus-plugin-runtime` | yes | Slim stdio JSON-RPC loop; exposes `subject_backend_main` and `provider_main`. Provider session helpers (event channels, child-process plumbing) will land in a separate `animus-session-backend` crate. |
+| `animus-trigger-protocol` | yes | Pure trait + schema definitions for push-driven event sources (Slack, webhooks, file watchers, cron). |
+| `animus-plugin-runtime` | yes | Slim stdio JSON-RPC loop; exposes `subject_backend_main`, `provider_main`, and `trigger_backend_main`. Provider session helpers (event channels, child-process plumbing) will land in a separate `animus-session-backend` crate. |
 
 The protocol [`spec.md`](./spec.md) is the source of truth for cross-language plugin authors — it can be implemented in Python, TypeScript, Go, or any language that speaks newline-delimited JSON-RPC 2.0 over stdio.
 
@@ -24,7 +25,8 @@ The protocol + subject + provider + runtime crates are usable today via git path
 | [`animus-plugin-protocol`](./animus-plugin-protocol) | Wire types every plugin uses: `RpcRequest`, `RpcResponse`, `RpcNotification`, `RpcError`, error codes, `InitializeParams` / `InitializeResult`, `PluginManifest`, `HealthCheckResult`. |
 | [`animus-subject-protocol`](./animus-subject-protocol) | `SubjectBackend` trait + normalized `Subject` schema for backends like Linear, Jira, GitHub Issues, Notion, Asana — anything with a system-of-record API. |
 | [`animus-provider-protocol`](./animus-provider-protocol) | `ProviderBackend` trait + `AgentRunRequest`/`AgentRunResponse` shapes for LLM provider plugins (Claude, Codex, Gemini, OpenAI-compatible, on-prem). |
-| [`animus-plugin-runtime`](./animus-plugin-runtime) | Shared stdio JSON-RPC loop, handshake, `--manifest` mode, notification helpers. Plugin authors call `subject_backend_main(...)` / `provider_main(...)` from `main` and avoid hand-rolling the wire layer. |
+| [`animus-trigger-protocol`](./animus-trigger-protocol) | `TriggerBackend` trait + `TriggerEvent`/`TriggerSchema` shapes for push-driven event sources (Slack mentions, generic webhooks, file watchers, cron). |
+| [`animus-plugin-runtime`](./animus-plugin-runtime) | Shared stdio JSON-RPC loop, handshake, `--manifest` mode, notification helpers. Plugin authors call `subject_backend_main(...)` / `provider_main(...)` / `trigger_backend_main(...)` from `main` and avoid hand-rolling the wire layer. |
 
 `animus-plugin-protocol` is the only required dependency for non-Rust plugin authors — and even then only as a reference. Any process that emits the documented JSON over stdio is a compatible Animus plugin.
 
@@ -158,6 +160,87 @@ async fn main() -> anyhow::Result<()> {
 `provider::ClaudeProvider` implements [`ProviderBackend`](./animus-provider-protocol) — `manifest`, `run_agent`, `resume_agent`, `cancel_agent`, and `health`. The runtime handles `initialize`, `$/ping`, `health/check`, `agent/run`, `agent/resume`, `agent/cancel`, and `shutdown`, and dispatches each call into the trait implementation.
 
 For v0.1.0 each `run_agent` call is request/response: the provider runs the session to completion inside the trait method and returns the aggregated [`AgentRunResponse`](./animus-provider-protocol). A streaming event-emitter API (so the runtime can flush `agent/output` / `agent/thinking` / `agent/toolCall` / `agent/toolResult` / `agent/error` notifications mid-run) will land in a follow-up `animus-session-backend` crate.
+
+## Trigger backend quickstart (Rust)
+
+```rust
+use animus_plugin_protocol::{PluginInfo, PLUGIN_KIND_TRIGGER_BACKEND};
+use animus_plugin_runtime::trigger_backend_main;
+
+mod backend;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let info = PluginInfo {
+        name: "animus-trigger-slack".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        plugin_kind: PLUGIN_KIND_TRIGGER_BACKEND.into(),
+        description: Some("Slack trigger backend for Animus".into()),
+    };
+    trigger_backend_main(info, backend::SlackBackend::new()).await
+}
+```
+
+src/backend.rs (sketch):
+
+```rust
+use animus_plugin_protocol::{HealthCheckResult, HealthStatus};
+use animus_trigger_protocol::{
+    BackendError, TriggerBackend, TriggerEvent, TriggerSchema, TriggerStream,
+};
+use async_trait::async_trait;
+use chrono::Utc;
+use futures_core::stream;
+
+pub struct SlackBackend { /* socket-mode client, etc. */ }
+
+impl SlackBackend {
+    pub fn new() -> Self { Self { /* ... */ } }
+}
+
+#[async_trait]
+impl TriggerBackend for SlackBackend {
+    fn schema(&self) -> TriggerSchema {
+        TriggerSchema {
+            kinds: vec!["slack_mention".into(), "slack_channel_message".into()],
+            supports_resume: true,
+            supports_dedup: true,
+            supports_ack: true,
+        }
+    }
+
+    async fn watch(&self) -> Result<TriggerStream, BackendError> {
+        // In a real backend you'd subscribe to Slack socket-mode here and
+        // yield each event as a `TriggerEvent`. This sketch emits one
+        // synthetic event and ends.
+        let event = TriggerEvent {
+            id: "slack:T123/C456/1715701234.000100".into(),
+            occurred_at: Utc::now(),
+            kind: "slack_mention".into(),
+            payload: serde_json::json!({"user": "U1", "text": "@animus please review"}),
+            subject_id: None,
+            action_hint: Some("run-workflow:review".into()),
+        };
+        Ok(Box::pin(stream::iter(vec![Ok(event)])))
+    }
+
+    async fn ack(&self, _event_id: &str) -> Result<(), BackendError> {
+        // Persist the cursor so we don't redeliver after restart.
+        Ok(())
+    }
+
+    async fn health(&self) -> Result<HealthCheckResult, BackendError> {
+        Ok(HealthCheckResult {
+            status: HealthStatus::Healthy,
+            uptime_ms: None,
+            memory_usage_bytes: None,
+            last_error: None,
+        })
+    }
+}
+```
+
+The runtime calls `watch` once after `initialize`/`initialized`, forwards every event the stream yields as a `trigger/event` notification, and dispatches `trigger/ack` calls back into the trait. Backends that don't track delivery state can rely on the default no-op `ack` implementation.
 
 ## Source of truth
 

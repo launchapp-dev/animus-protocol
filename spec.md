@@ -184,7 +184,7 @@ A plugin declares its kind in [`PluginInfo::plugin_kind`](#87-plugininfo) during
 |---|---|
 | `provider` | `agent/run`, `agent/resume`, `agent/cancel` |
 | `subject_backend` | `subject/list`, `subject/get`, `subject/update`, `subject/watch` (optional), `subject/schema` |
-| `trigger_backend` | reserved for v0.4.x; not stabilized |
+| `trigger_backend` | `trigger/watch`, `trigger/event` (notification), `trigger/ack` (optional), `trigger/schema` |
 | `custom` | none predefined; host treats domain methods opaquely and surfaces them via `animus.plugin.call` MCP |
 
 Hosts MUST NOT call domain methods for a kind other than the one declared.
@@ -277,6 +277,50 @@ Resumes a prior session. Same param shape as `agent/run`, with `session_id` set.
 #### `agent/cancel`
 
 Params: `{ "session_id": "..." }`. Best-effort termination of the session. Result: `{ "session_id": "...", "cancelled": true }`.
+
+### 7.3 Trigger backend methods
+
+Trigger backends are push-driven event sources. The host calls `trigger/watch` once after `initialized` to open the event stream; the plugin acknowledges immediately and then emits `trigger/event` notifications for the life of the connection.
+
+#### `trigger/watch`
+
+Opens the event stream. The response is sent immediately to acknowledge; subsequent events arrive as `trigger/event` notifications carrying the original request id in `params.id`. Hosts SHOULD only issue one in-flight `trigger/watch` per plugin connection.
+
+Params: none. Result: `{ "watching": true }`.
+
+If the backend cannot open its upstream (e.g. missing credentials), it MUST return a JSON-RPC error response rather than emit a stream that fails on the first poll.
+
+#### `trigger/event` (notification)
+
+```json
+{ "jsonrpc": "2.0", "method": "trigger/event",
+  "params": {
+    "id": 17,
+    "event": {
+      "id": "slack:T123/C456/1715701234.000100",
+      "occurred_at": "2026-05-14T18:20:34Z",
+      "kind": "slack_mention",
+      "payload": { "user": "U1", "text": "@animus please review" },
+      "subject_id": "linear:ENG-123",
+      "action_hint": "run-workflow:review"
+    }
+  }
+}
+```
+
+`params.id` echoes the originating `trigger/watch` request id so hosts can correlate streams. `params.event` is a [`TriggerEvent`](#111-triggerevent).
+
+Stream-level errors are emitted as `trigger/event` notifications with an `error` field in place of `event`; an error notification terminates the stream.
+
+#### `trigger/ack`
+
+Acknowledges an event id so the backend does not redeliver it on resume. Backends that don't track delivery state MAY accept any id (no-op) or MAY respond with `-32001` (`method_not_supported`); hosts must tolerate either.
+
+Params: `{ "event_id": "..." }`. Result: `{ "event_id": "...", "acked": true }`.
+
+#### `trigger/schema`
+
+Returns a [`TriggerSchema`](#112-triggerschema) capability declaration. SHOULD be cheap (constant or one-shot at startup).
 
 ## 8. Plugin protocol types
 
@@ -494,7 +538,43 @@ During an `agent/run` or `agent/resume`, the plugin emits any of:
 
 After streaming, the plugin emits the final `AgentRunResponse` as the response to the original request id.
 
-## 11. Versioning
+## 11. Trigger types
+
+### 11.1 `TriggerEvent`
+
+```json
+{
+  "id": "slack:T123/C456/1715701234.000100",
+  "occurred_at": "2026-05-14T18:20:34Z",
+  "kind": "slack_mention",
+  "payload": { "user": "U1", "text": "@animus please review" },
+  "subject_id": "linear:ENG-123",
+  "action_hint": "run-workflow:review"
+}
+```
+
+- `id` MUST be stable for a given upstream event so hosts can deduplicate on restart. Backends that cannot produce a natural id SHOULD synthesize one (e.g. `kind + occurred_at + payload-hash`).
+- `kind` is opaque to the host; workflow YAML matches on it. Convention is `"<backend>_<event>"`.
+- `payload` is trigger-specific; the host treats it as opaque and exposes it to workflows via templating (e.g. `{{trigger.payload.user}}`).
+- `subject_id` and `action_hint` are optional. `subject_id` MUST be backend-prefixed when present (see §9.3).
+
+### 11.2 `TriggerSchema`
+
+```json
+{
+  "kinds": ["slack_mention", "slack_channel_message"],
+  "supports_resume": true,
+  "supports_dedup": true,
+  "supports_ack": true
+}
+```
+
+- `kinds`: every `kind` value the backend may emit. Hosts MAY surface this to workflow authors for autocompletion.
+- `supports_resume`: backend honors a delivery cursor across `trigger/watch` reconnects. Backends without resume re-emit only events occurring after `trigger/watch`.
+- `supports_dedup`: backend re-emits the same [`TriggerEvent::id`] for a re-seen event. Hosts may use this to skip their own dedup table.
+- `supports_ack`: backend implements `trigger/ack`. Hosts skip the call when `false`.
+
+## 12. Versioning
 
 The protocol uses semantic versioning. The current version is `1.0.0`.
 
@@ -511,7 +591,7 @@ host_major != plugin_major  →  incompatible (host refuses)
 
 Plugins SHOULD tolerate hosts on the same major version even when the host's minor is older — i.e. don't require methods you've added in a newer minor.
 
-## 12. Conformance
+## 13. Conformance
 
 A plugin is conformant if:
 
@@ -521,6 +601,6 @@ A plugin is conformant if:
 4. It implements every method it advertises in `capabilities.methods`.
 5. It returns `-32001` (`method_not_supported`) for optional methods it has chosen not to implement.
 6. Its frames are valid JSON-RPC 2.0 per §2.
-7. Its `Subject`/`SubjectPatch`/`AgentRunRequest` payloads use the field names defined in §9 and §10 exactly (case-sensitive, snake_case unless otherwise specified).
+7. Its `Subject`/`SubjectPatch`/`AgentRunRequest`/`TriggerEvent`/`TriggerSchema` payloads use the field names defined in §9, §10, and §11 exactly (case-sensitive, snake_case unless otherwise specified).
 
 A host is conformant if it speaks the same lifecycle, honors the capabilities a plugin advertises, and never calls a method a plugin did not advertise.

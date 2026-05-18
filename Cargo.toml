@@ -3,6 +3,7 @@ members = [
     "animus-plugin-protocol",
     "animus-subject-protocol",
     "animus-provider-protocol",
+    "animus-trigger-protocol",
     "animus-plugin-runtime",
     "animus-session-backend",
 ]
