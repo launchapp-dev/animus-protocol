@@ -5,13 +5,14 @@ members = [
     "animus-provider-protocol",
     "animus-trigger-protocol",
     "animus-log-storage-protocol",
+    "animus-control-protocol",
     "animus-plugin-runtime",
     "animus-session-backend",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 license = "MIT"
 authors = ["Launchapp.dev"]

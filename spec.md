@@ -796,7 +796,74 @@ Backends honor the subset of filters they advertise via [`LogStorageSchema.suppo
 
 Durations are encoded as signed millisecond integers because JSON has no native duration type and `chrono::Duration` does not serialize directly.
 
-## 13. Versioning
+## 13. Control protocol
+
+The protocol so far in this document covers the *outbound* surface — the way the Animus daemon talks to plugin processes (subject backends, providers, triggers, log storage). The **control protocol** is the *inbound* counterpart — the way a human (CLI), an agent (MCP), or another process (WebAPI, future REST / gRPC clients) asks the daemon to do something.
+
+The wire format for control protocol traffic is defined by the [`animus-control-protocol`](animus-control-protocol/) crate alongside the rest of this workspace.
+
+### 13.1 Wire transport
+
+Control traffic uses the same newline-delimited JSON-RPC 2.0 envelopes defined in §2. The daemon exposes its control surface on:
+
+- A local Unix domain socket at `~/.animus/<repo-scope>/control.sock` (POSIX hosts). Permissions on the socket file (`0600`, owned by the running user) are the v0.1.3 authorization model — anyone with read/write access to the socket can issue any control command. Personal access tokens are reserved for v0.5.x.
+- A named pipe at `\\.\pipe\animus-<repo-scope>` on Windows (reserved; not implemented in v0.1.3).
+
+Clients that already share the daemon's address space (e.g. the in-process CLI today) MAY skip the socket and call the [`animus_control_protocol::ControlSurface`](animus-control-protocol/) trait directly. The wire shape is unchanged either way.
+
+### 13.2 Method-name conventions
+
+Method names follow `<group>/<verb>` with a forward slash separator. Groups are: `subject`, `plugin`, `daemon`, `workflow`, `agent`, `queue`, `project`. The full list is defined as `pub const` strings in [`animus_control_protocol::method`](animus-control-protocol/src/method.rs). Examples:
+
+- `subject/list`, `subject/get`, `subject/create`, `subject/update`, `subject/next`, `subject/status`
+- `plugin/list`, `plugin/install`, `plugin/uninstall`, `plugin/ping`, `plugin/call`, `plugin/search`, `plugin/browse`, `plugin/update`
+- `daemon/status`, `daemon/health`, `daemon/start`, `daemon/stop`, `daemon/restart`, `daemon/agents`
+- `workflow/list`, `workflow/get`, `workflow/run`, `workflow/execute`, `workflow/pause`, `workflow/resume`, `workflow/cancel`
+- `agent/run`, `agent/status`, `agent/cancel`
+- `queue/list`, `queue/enqueue`, `queue/drop`, `queue/hold`, `queue/release`, `queue/reorder`, `queue/stats`
+- `project/init`, `project/setup`, `project/status`
+
+Domain payloads (subject, log entry, ...) are imported from the existing plugin-protocol crates — `Subject`, `SubjectId`, `SubjectFilter`, `SubjectPatch`, `LogEntry`, `LogLevel` — so the control protocol and the plugin protocols share one schema per concept.
+
+### 13.3 Streaming methods
+
+Three control methods open a server-streaming subscription:
+
+- `subject/watch` — emits `subject/changed` notifications (one per subject change), with payload [`SubjectChangedEvent`].
+- `daemon/events` — emits `daemon/event` notifications (one per daemon run event), with payload `DaemonRunEvent`.
+- `daemon/logs` — emits `daemon/log` notifications (one per log entry), with payload `LogEntry` from `animus-log-storage-protocol`.
+
+The convention is: a method ending in `/watch` is bound to a specific resource family (subjects in a backend, ...), a method ending in `/events` is the broader daemon-wide stream, and `/logs` carries log entries specifically. Each streaming method MUST be paired with a singular notification (`<group>/changed`, `<group>/event`, `<group>/log`). The request id of the originating streaming request is echoed in `params.id` of every notification on that stream so the client can multiplex multiple subscriptions over one connection.
+
+A client cancels a stream by closing the connection or by issuing a JSON-RPC notification with method `$/cancelRequest` and `params: { id: <request_id> }` (mirrors §6's lifecycle cancellation).
+
+### 13.4 Error codes
+
+Control surface errors map to JSON-RPC error responses using the same `error_codes` namespace defined in §4. The categorical kind is carried in `error.data.category`:
+
+| Category            | JSON-RPC code | Meaning                                                                  |
+|---------------------|---------------|--------------------------------------------------------------------------|
+| `not_found`         | -32602        | Resource referenced by the request does not exist                        |
+| `invalid_request`   | -32602        | Request was malformed at the domain level                                |
+| `permission_denied` | -32600        | Caller lacks permission                                                  |
+| `unavailable`       | -32603        | Daemon or a dependency is temporarily unavailable                        |
+| `not_supported`     | -32001        | Method exists in the protocol but is not implemented by this daemon yet  |
+| `conflict`          | -32600        | Operation would conflict with the current state (e.g. cancelling a done) |
+| `internal`          | -32603        | Catch-all internal failure                                               |
+
+The error body matches `animus_control_protocol::ControlError`'s serde representation: `{ "category": "<kind>", "message": "<text>" }`. Clients SHOULD branch on `category`, not on `message`.
+
+### 13.5 Capabilities
+
+The daemon advertises its supported control methods via a `daemon/status` response field `capabilities.methods: [String]`. Clients SHOULD probe capabilities before issuing methods they need; if a method is missing, the daemon either returns `not_supported` (mirrors §6's `method_not_supported` semantics) or rejects the call with `method_not_found` (-32601). Either is acceptable during an incremental v0.4.x rollout.
+
+### 13.6 Auth
+
+v0.1.3 relies on filesystem permissions on the control socket. The socket is created with `0600` and owned by the user running the daemon. Any client that can `connect(2)` to the socket may issue any control method.
+
+Future protocol versions (reserved for v0.5.x) will introduce a personal-access-token bearer scheme negotiated during a `daemon/authenticate` handshake. The token shape, scoping, and revocation are TBD. The capability field above gives the daemon a forward-compatible way to gate `daemon/authenticate` behind a feature flag without breaking v0.1.3 clients.
+
+## 14. Versioning
 
 The protocol uses semantic versioning. The current version is `1.0.0`.
 
@@ -813,7 +880,7 @@ host_major != plugin_major  →  incompatible (host refuses)
 
 Plugins SHOULD tolerate hosts on the same major version even when the host's minor is older — i.e. don't require methods you've added in a newer minor.
 
-## 14. Conformance
+## 15. Conformance
 
 A plugin is conformant if:
 
