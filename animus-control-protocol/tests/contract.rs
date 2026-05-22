@@ -183,15 +183,27 @@ fn request_round_trip_through_json() {
     let back: QueueEnqueueRequest = serde_json::from_value(v).unwrap();
     assert_eq!(back, enqueue);
 
-    // Queue reorder
+    // Queue reorder (single-entry form)
     let reorder = QueueReorderRequest {
-        id: "q-1".into(),
+        id: Some("q-1".into()),
+        subject_ids: Vec::new(),
         anchor_id: Some("q-9".into()),
         position: QueueReorderPosition::Before,
     };
     let v = serde_json::to_value(&reorder).unwrap();
     let back: QueueReorderRequest = serde_json::from_value(v).unwrap();
     assert_eq!(back, reorder);
+
+    // Queue reorder (multi-entry form)
+    let multi = QueueReorderRequest {
+        id: None,
+        subject_ids: vec!["q-1".into(), "q-2".into(), "q-3".into()],
+        anchor_id: Some("q-9".into()),
+        position: QueueReorderPosition::After,
+    };
+    let v = serde_json::to_value(&multi).unwrap();
+    let back: QueueReorderRequest = serde_json::from_value(v).unwrap();
+    assert_eq!(back, multi);
 }
 
 #[test]

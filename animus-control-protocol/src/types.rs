@@ -652,6 +652,11 @@ pub struct WorkflowPauseRequest {
 pub struct WorkflowResumeRequest {
     /// Workflow run id.
     pub id: String,
+    /// Optional human feedback to inject when resuming an approval-gated
+    /// workflow. Surfaced to the next phase so the agent can react to the
+    /// reviewer's comments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<String>,
 }
 
 /// Request for `workflow/cancel`.
@@ -860,15 +865,23 @@ pub struct QueueReleaseRequest {
 }
 
 /// Request for `queue/reorder`.
+///
+/// Supports both single-entry and multi-entry reordering. Exactly one of
+/// `id` or `subject_ids` must be provided. When `subject_ids` is used the
+/// entries are placed contiguously relative to the anchor in the order given.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueueReorderRequest {
-    /// Queue entry id to move.
-    pub id: String,
-    /// Optional anchor entry id. If set, `id` is placed adjacent to the
-    /// anchor on the `position` side.
+    /// Queue entry id to move (single-entry form).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Queue entry ids to move as a contiguous group (multi-entry form).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subject_ids: Vec<String>,
+    /// Optional anchor entry id. If set, the moved entries are placed
+    /// adjacent to the anchor on the `position` side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_id: Option<String>,
-    /// Where to place the entry relative to the anchor (or the queue ends if
+    /// Where to place the entries relative to the anchor (or the queue ends if
     /// `anchor_id` is `None`).
     pub position: QueueReorderPosition,
 }

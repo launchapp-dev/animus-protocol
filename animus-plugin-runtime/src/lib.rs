@@ -51,6 +51,8 @@
 
 #![warn(missing_docs)]
 
+pub mod log;
+
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 
@@ -132,6 +134,7 @@ pub async fn subject_backend_main<B: SubjectBackend + 'static>(
 
     let backend = Arc::new(backend);
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    install_log_forwarder(stdout.clone());
     let mut reader = BufReader::new(tokio::io::stdin());
 
     while let Some(request) = read_frame(&mut reader).await? {
@@ -192,6 +195,7 @@ pub async fn provider_main<P: ProviderBackend + 'static>(
 
     let backend = Arc::new(backend);
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    install_log_forwarder(stdout.clone());
     let mut reader = BufReader::new(tokio::io::stdin());
 
     while let Some(request) = read_frame(&mut reader).await? {
@@ -262,6 +266,7 @@ pub async fn trigger_backend_main<B: TriggerBackend + 'static>(
 
     let backend = Arc::new(backend);
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    install_log_forwarder(stdout.clone());
     let mut reader = BufReader::new(tokio::io::stdin());
 
     while let Some(request) = read_frame(&mut reader).await? {
@@ -333,6 +338,7 @@ pub async fn log_storage_backend_main<B: LogStorageBackend + 'static>(
 
     let backend = Arc::new(backend);
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    install_log_forwarder(stdout.clone());
     let mut reader = BufReader::new(tokio::io::stdin());
 
     while let Some(request) = read_frame(&mut reader).await? {
@@ -933,6 +939,20 @@ pub(crate) async fn write_notification(
     notification: &RpcNotification,
 ) {
     write_frame(stdout, notification).await;
+}
+
+/// Install the global plugin-log emitter for this process and spawn the
+/// forwarder task that drains queued notifications onto the shared stdout.
+/// Called by each `*_main` entrypoint before entering the read loop so the
+/// [`log::info!`], [`log::warn!`], [`log::error!`], etc. macros become live.
+fn install_log_forwarder(stdout: Arc<Mutex<Stdout>>) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<RpcNotification>();
+    log::install_emitter(tx);
+    tokio::spawn(async move {
+        while let Some(notification) = rx.recv().await {
+            write_notification(&stdout, &notification).await;
+        }
+    });
 }
 
 async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<Stdout>>, frame: &T) {
