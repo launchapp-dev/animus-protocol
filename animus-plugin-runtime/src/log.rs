@@ -241,12 +241,7 @@ mod tests {
     async fn emit_routes_to_installed_sender() {
         let (tx, mut rx) = unbounded_channel();
         install_emitter(tx);
-        emit(
-            LogLevel::Warn,
-            "unit",
-            "hello",
-            json!({"k": "v"}),
-        );
+        emit(LogLevel::Warn, "unit", "hello", json!({"k": "v"}));
         let notification = rx.recv().await.expect("notification");
         assert_eq!(notification.method, NOTIFICATION_LOG_ENTRY);
         let params = notification.params.expect("params");

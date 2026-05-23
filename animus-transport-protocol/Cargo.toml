@@ -1,6 +1,6 @@
 [package]
-name = "animus-trigger-protocol"
-description = "TriggerBackend trait + event schema for Animus trigger plugins (Slack, generic webhooks, file watchers, cron, ...)"
+name = "animus-transport-protocol"
+description = "TransportBackend trait + wire types for Animus transport plugins (HTTP, GraphQL, gRPC, WebSocket, MQTT) that expose external surfaces and translate inbound requests into control RPCs against the daemon."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,4 +17,3 @@ async-trait.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
-futures-core.workspace = true

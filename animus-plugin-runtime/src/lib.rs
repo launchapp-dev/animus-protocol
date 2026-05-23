@@ -22,6 +22,9 @@
 //!   file watchers, cron, ...).
 //! - [`log_storage_backend_main`] for log storage backends (local file, Loki,
 //!   Splunk, ClickHouse, ...).
+//! - [`transport_backend_main`] for transport backends (HTTP, GraphQL, gRPC,
+//!   WebSocket, MQTT, ...) that expose external surfaces and translate
+//!   inbound requests into control RPCs against the daemon.
 //!
 //! Each entrypoint runs the stdio loop indefinitely: it reads
 //! newline-delimited JSON-RPC frames from stdin, dispatches to the trait, and
@@ -48,6 +51,7 @@
 //! - [`animus_provider_protocol`] for the provider-backend trait.
 //! - [`animus_trigger_protocol`] for the trigger-backend trait.
 //! - [`animus_log_storage_protocol`] for the log-storage-backend trait.
+//! - [`animus_transport_protocol`] for the transport-backend trait.
 
 #![warn(missing_docs)]
 
@@ -73,6 +77,10 @@ use animus_subject_protocol::{
     BackendError as SubjectBackendError, SubjectBackend, SubjectFilter, SubjectId, SubjectPatch,
     METHOD_SUBJECT_GET, METHOD_SUBJECT_LIST, METHOD_SUBJECT_SCHEMA, METHOD_SUBJECT_UPDATE,
     METHOD_SUBJECT_WATCH, NOTIFICATION_SUBJECT_CHANGED,
+};
+use animus_transport_protocol::{
+    BackendError as TransportBackendError, TransportBackend, TransportConfig,
+    TRANSPORT_METHOD_SCHEMA, TRANSPORT_METHOD_SHUTDOWN, TRANSPORT_METHOD_START,
 };
 use animus_trigger_protocol::{
     BackendError as TriggerBackendError, TriggerBackend, METHOD_TRIGGER_ACK, METHOD_TRIGGER_SCHEMA,
@@ -348,6 +356,79 @@ pub async fn log_storage_backend_main<B: LogStorageBackend + 'static>(
         let stdout = stdout.clone();
         tokio::spawn(async move {
             handle_log_storage_request(request, info, capabilities, backend, stdout).await;
+        });
+    }
+    Ok(())
+}
+
+/// Run a transport-backend plugin's stdio JSON-RPC loop.
+///
+/// Call this from `#[tokio::main]` in a plugin binary. `info` is the static
+/// identity returned in the `initialize` response and `--manifest` output;
+/// `backend` is the
+/// [`TransportBackend`](animus_transport_protocol::TransportBackend)
+/// implementation that handles the `transport/*` domain methods.
+///
+/// The function returns when stdin closes (clean shutdown) or on a fatal I/O
+/// error.
+///
+/// # CLI behavior
+///
+/// If `--manifest` (or `-m`) appears in `std::env::args()`, the function
+/// prints a [`PluginManifest`] derived from `info` and the backend's
+/// declared capabilities to stdout, then exits with code `0`.
+///
+/// # Lifecycle
+///
+/// Unlike subject/trigger/log-storage backends, transports own an external
+/// listener with explicit start and shutdown phases. The runtime dispatches
+/// [`TRANSPORT_METHOD_START`](animus_transport_protocol::TRANSPORT_METHOD_START)
+/// and
+/// [`TRANSPORT_METHOD_SHUTDOWN`](animus_transport_protocol::TRANSPORT_METHOD_SHUTDOWN)
+/// directly into the trait; the backend MUST return once the listener is
+/// bound from `start` and MUST drain in-flight requests before returning
+/// from `shutdown`.
+///
+/// # Example
+///
+/// ```ignore
+/// use animus_plugin_protocol::PluginInfo;
+/// use animus_plugin_runtime::transport_backend_main;
+/// use animus_transport_protocol::PLUGIN_KIND_TRANSPORT_BACKEND;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let info = PluginInfo {
+///         name: "animus-transport-http".into(),
+///         version: env!("CARGO_PKG_VERSION").into(),
+///         plugin_kind: PLUGIN_KIND_TRANSPORT_BACKEND.into(),
+///         description: Some("HTTP transport backend".into()),
+///     };
+///     transport_backend_main(info, my_backend::HttpTransport::new()).await
+/// }
+/// ```
+pub async fn transport_backend_main<B: TransportBackend + 'static>(
+    info: PluginInfo,
+    backend: B,
+) -> Result<()> {
+    let capabilities = transport_capabilities(&backend);
+    if parse_manifest_flag() {
+        print_manifest_and_exit(&info, &capabilities);
+    }
+    refuse_terminal_stdin(&info.name);
+
+    let backend = Arc::new(backend);
+    let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    install_log_forwarder(stdout.clone());
+    let mut reader = BufReader::new(tokio::io::stdin());
+
+    while let Some(request) = read_frame(&mut reader).await? {
+        let info = info.clone();
+        let capabilities = capabilities.clone();
+        let backend = backend.clone();
+        let stdout = stdout.clone();
+        tokio::spawn(async move {
+            handle_transport_request(request, info, capabilities, backend, stdout).await;
         });
     }
     Ok(())
@@ -895,6 +976,57 @@ async fn drive_log_storage_stream(
 }
 
 // =====================================================================
+// Transport dispatch
+// =====================================================================
+
+async fn handle_transport_request<B: TransportBackend + 'static>(
+    request: RpcRequest,
+    info: PluginInfo,
+    capabilities: PluginCapabilities,
+    backend: Arc<B>,
+    stdout: Arc<Mutex<Stdout>>,
+) {
+    let id = request.id.clone();
+    let response = match request.method.as_str() {
+        "initialize" => Some(initialize_response(id, &info, &capabilities)),
+        "initialized" => None,
+        "$/ping" => Some(RpcResponse::ok(id, json!({}))),
+        "health/check" => Some(transport_health_response(id, backend.health().await)),
+        "shutdown" => Some(RpcResponse::ok(id, json!({}))),
+        TRANSPORT_METHOD_SCHEMA => Some(match serde_json::to_value(backend.schema()) {
+            Ok(value) => RpcResponse::ok(id, value),
+            Err(error) => RpcResponse::err(id, encoding_error("transport/schema", error)),
+        }),
+        TRANSPORT_METHOD_START => {
+            let config = match deserialize_params::<TransportConfig>(request.params, false) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            Some(match backend.start(config).await {
+                Ok(reply) => match serde_json::to_value(reply) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(id, encoding_error("transport/start", error)),
+                },
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        TRANSPORT_METHOD_SHUTDOWN => Some(match backend.shutdown().await {
+            Ok(()) => RpcResponse::ok(id, json!({ "shutdown": true })),
+            Err(error) => RpcResponse::err(id, error.into()),
+        }),
+        other if other.starts_with("$/") => None,
+        other => Some(method_not_found(id, &info.name, other)),
+    };
+
+    if let Some(response) = response {
+        write_response(&stdout, &response).await;
+    }
+}
+
+// =====================================================================
 // Shared helpers
 // =====================================================================
 
@@ -1074,6 +1206,19 @@ fn log_storage_health_response(
     }
 }
 
+fn transport_health_response(
+    id: Option<Value>,
+    result: Result<HealthCheckResult, TransportBackendError>,
+) -> RpcResponse {
+    match result {
+        Ok(health) => match serde_json::to_value(health) {
+            Ok(value) => RpcResponse::ok(id, value),
+            Err(error) => RpcResponse::err(id, encoding_error("health/check", error)),
+        },
+        Err(error) => RpcResponse::err(id, error.into()),
+    }
+}
+
 fn deserialize_params<T: for<'de> Deserialize<'de>>(
     params: Option<Value>,
     allow_missing: bool,
@@ -1211,6 +1356,28 @@ fn log_storage_capabilities<B: LogStorageBackend>(backend: &B) -> PluginCapabili
         // `log_storage/tail` — that's the surface that emits
         // `log_storage/event` notifications.
         streaming: schema.supports_tail,
+        progress: false,
+        cancellation: false,
+        subject_kinds: Vec::new(),
+        mcp_tools: Vec::new(),
+    }
+}
+
+fn transport_capabilities<B: TransportBackend>(backend: &B) -> PluginCapabilities {
+    let schema = backend.schema();
+    let methods = vec![
+        TRANSPORT_METHOD_START.to_string(),
+        TRANSPORT_METHOD_SHUTDOWN.to_string(),
+        TRANSPORT_METHOD_SCHEMA.to_string(),
+        "health/check".to_string(),
+    ];
+    PluginCapabilities {
+        methods,
+        // Transport backends advertise streaming when their external
+        // surface supports it; the runtime forwards that through verbatim
+        // so the daemon can decide whether to route streaming control
+        // methods (`daemon/events`, `daemon/logs`) through this transport.
+        streaming: schema.supports_streaming,
         progress: false,
         cancellation: false,
         subject_kinds: Vec::new(),

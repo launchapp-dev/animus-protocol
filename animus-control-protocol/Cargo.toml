@@ -10,10 +10,10 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-animus-plugin-protocol      = { path = "../animus-plugin-protocol",      version = "0.1.4" }
-animus-subject-protocol     = { path = "../animus-subject-protocol",     version = "0.1.4" }
-animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.4" }
-animus-trigger-protocol     = { path = "../animus-trigger-protocol",     version = "0.1.4" }
+animus-plugin-protocol      = { path = "../animus-plugin-protocol",      version = "0.1.6" }
+animus-subject-protocol     = { path = "../animus-subject-protocol",     version = "0.1.6" }
+animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.6" }
+animus-trigger-protocol     = { path = "../animus-trigger-protocol",     version = "0.1.6" }
 
 async-trait.workspace = true
 serde.workspace = true

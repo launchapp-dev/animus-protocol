@@ -186,6 +186,7 @@ A plugin declares its kind in [`PluginInfo::plugin_kind`](#87-plugininfo) during
 | `subject_backend` | `subject/list`, `subject/get`, `subject/update`, `subject/watch` (optional), `subject/schema` |
 | `trigger_backend` | `trigger/watch`, `trigger/event` (notification), `trigger/ack` (optional), `trigger/schema` |
 | `log_storage_backend` | `log_storage/store`, `log_storage/query` (optional), `log_storage/tail` (optional), `log_storage/event` (notification), `log_storage/schema` |
+| `transport_backend` | `transport/start`, `transport/shutdown`, `transport/schema` |
 | `custom` | none predefined; host treats domain methods opaquely and surfaces them via `animus.plugin.call` MCP |
 
 Hosts MUST NOT call domain methods for a kind other than the one declared.
@@ -796,13 +797,82 @@ Backends honor the subset of filters they advertise via [`LogStorageSchema.suppo
 
 Durations are encoded as signed millisecond integers because JSON has no native duration type and `chrono::Duration` does not serialize directly.
 
-## 13. Control protocol
+## 13. Transport types
 
-The protocol so far in this document covers the *outbound* surface — the way the Animus daemon talks to plugin processes (subject backends, providers, triggers, log storage). The **control protocol** is the *inbound* counterpart — the way a human (CLI), an agent (MCP), or another process (WebAPI, future REST / gRPC clients) asks the daemon to do something.
+A **transport backend** is the sixth plugin kind alongside subject, provider, trigger, log storage, and the in-process control surface. A transport plugin owns an *external* protocol surface — HTTP, GraphQL, gRPC, WebSocket, MQTT — and translates inbound requests on that surface into [control protocol](#14-control-protocol) RPCs against the daemon's Unix socket. They are the controller-as-plugin endgame: the daemon stays a small JSON-RPC core, and every external surface ships as a separate, independently versioned process.
+
+Transport backends have a different lifecycle from the other plugin kinds. The daemon issues `transport/start` with a [`TransportConfig`](#131-transportconfig) once after `initialize`, the plugin returns a [`TransportInfo`](#132-transportinfo) when the listener is bound, and the daemon issues `transport/shutdown` before the plugin process terminates. The wire format is defined by the [`animus-transport-protocol`](animus-transport-protocol/) crate alongside the rest of this workspace.
+
+### 13.1 `TransportConfig`
+
+Sent on `transport/start` to configure the listener.
+
+```json
+{
+  "control_socket_path": "/Users/op/.animus/scope/control.sock",
+  "project_root": "/Users/op/code/animus",
+  "bind_addr": "127.0.0.1:8080",
+  "config": {
+    "cors": {"allowed_origins": ["*"]},
+    "auth_token": "redacted"
+  }
+}
+```
+
+- `control_socket_path` is the absolute path to the daemon's [control socket](#142-method-name-conventions). The transport connects to this socket to issue control RPCs on behalf of inbound requests. POSIX hosts only; Windows named-pipe naming is reserved.
+- `project_root` is the absolute path to the project the daemon is serving. Transports surface this in metadata responses (e.g. HTTP `/healthz`) and use it to scope filesystem access if they expose static-file routes.
+- `bind_addr` is the listener address. Format is transport-specific; HTTP/GraphQL/gRPC use `host:port`. Omit to let the plugin pick its [`TransportSchema::default_port`](#133-transportschema) on `localhost`.
+- `config` is a free-form transport-specific JSON blob the daemon does not parse. Omitted on the wire when null.
+
+### 13.2 `TransportInfo`
+
+Returned by `transport/start` once the listener is bound and ready.
+
+```json
+{
+  "bound_addr": "127.0.0.1:8080",
+  "started_at": "2026-05-23T12:00:00Z"
+}
+```
+
+- `bound_addr` is the *actual* address the listener accepted on (after any `0` port resolution). Daemons MAY surface this verbatim in `daemon/status` output.
+- `started_at` is the RFC 3339 (UTC) timestamp at which the listener became ready. Lets dashboards display uptime without the daemon tracking it separately.
+
+### 13.3 `TransportSchema`
+
+Returned by `transport/schema`.
+
+```json
+{
+  "kinds": ["http", "rest"],
+  "supports_streaming": true,
+  "supports_websocket": false,
+  "default_port": 8080
+}
+```
+
+- `kinds`: every protocol kind the transport exposes. Convention is a single lowercase token per kind, e.g. `["http", "rest"]`, `["graphql"]`, `["grpc"]`, `["mqtt"]`, `["websocket"]`. Multi-protocol transports list every kind they expose.
+- `supports_streaming`: server-streaming responses are supported (HTTP/2 push, gRPC server streaming, GraphQL subscriptions over SSE, ...). Hosts use this to decide whether to route streaming control methods (`daemon/events`, `daemon/logs`, `subject/watch`) through this transport.
+- `supports_websocket`: the transport accepts WebSocket upgrades. Distinct from `supports_streaming` because HTTP transports may stream without supporting WebSocket and vice versa.
+- `default_port`: the port the transport binds to when [`TransportConfig.bind_addr`](#131-transportconfig) is omitted. Hosts surface this to operators so they know where to point clients. Omitted when the transport refuses to start without an explicit `bind_addr`.
+
+### 13.4 Methods
+
+| Method | Direction | Description |
+|---|---|---|
+| `transport/start` | host → plugin | Bind the listener with [`TransportConfig`](#131-transportconfig). Returns [`TransportInfo`](#132-transportinfo). |
+| `transport/shutdown` | host → plugin | Graceful shutdown. Drain in-flight requests, release the bound address. Safe to call more than once. |
+| `transport/schema` | host → plugin | Capability declaration; returns [`TransportSchema`](#133-transportschema). |
+
+Errors map to the JSON-RPC error namespace in §4 with the following `error.data.category` values: `not_supported`, `invalid_request`, `address_in_use`, `permission_denied`, `unavailable`, `other`. Hosts SHOULD branch on `category`, not on `message`.
+
+## 14. Control protocol
+
+The protocol so far in this document covers the *outbound* surface — the way the Animus daemon talks to plugin processes (subject backends, providers, triggers, log storage, transports). The **control protocol** is the *inbound* counterpart — the way a human (CLI), an agent (MCP), or another process (WebAPI, future REST / gRPC clients) asks the daemon to do something.
 
 The wire format for control protocol traffic is defined by the [`animus-control-protocol`](animus-control-protocol/) crate alongside the rest of this workspace.
 
-### 13.1 Wire transport
+### 14.1 Wire transport
 
 Control traffic uses the same newline-delimited JSON-RPC 2.0 envelopes defined in §2. The daemon exposes its control surface on:
 
@@ -811,7 +881,7 @@ Control traffic uses the same newline-delimited JSON-RPC 2.0 envelopes defined i
 
 Clients that already share the daemon's address space (e.g. the in-process CLI today) MAY skip the socket and call the [`animus_control_protocol::ControlSurface`](animus-control-protocol/) trait directly. The wire shape is unchanged either way.
 
-### 13.2 Method-name conventions
+### 14.2 Method-name conventions
 
 Method names follow `<group>/<verb>` with a forward slash separator. Groups are: `subject`, `plugin`, `daemon`, `workflow`, `agent`, `queue`, `project`. The full list is defined as `pub const` strings in [`animus_control_protocol::method`](animus-control-protocol/src/method.rs). Examples:
 
@@ -825,7 +895,7 @@ Method names follow `<group>/<verb>` with a forward slash separator. Groups are:
 
 Domain payloads (subject, log entry, ...) are imported from the existing plugin-protocol crates — `Subject`, `SubjectId`, `SubjectFilter`, `SubjectPatch`, `LogEntry`, `LogLevel` — so the control protocol and the plugin protocols share one schema per concept.
 
-### 13.3 Streaming methods
+### 14.3 Streaming methods
 
 Three control methods open a server-streaming subscription:
 
@@ -837,7 +907,7 @@ The convention is: a method ending in `/watch` is bound to a specific resource f
 
 A client cancels a stream by closing the connection or by issuing a JSON-RPC notification with method `$/cancelRequest` and `params: { id: <request_id> }` (mirrors §6's lifecycle cancellation).
 
-### 13.4 Error codes
+### 14.4 Error codes
 
 Control surface errors map to JSON-RPC error responses using the same `error_codes` namespace defined in §4. The categorical kind is carried in `error.data.category`:
 
@@ -853,17 +923,17 @@ Control surface errors map to JSON-RPC error responses using the same `error_cod
 
 The error body matches `animus_control_protocol::ControlError`'s serde representation: `{ "category": "<kind>", "message": "<text>" }`. Clients SHOULD branch on `category`, not on `message`.
 
-### 13.5 Capabilities
+### 14.5 Capabilities
 
 The daemon advertises its supported control methods via a `daemon/status` response field `capabilities.methods: [String]`. Clients SHOULD probe capabilities before issuing methods they need; if a method is missing, the daemon either returns `not_supported` (mirrors §6's `method_not_supported` semantics) or rejects the call with `method_not_found` (-32601). Either is acceptable during an incremental v0.4.x rollout.
 
-### 13.6 Auth
+### 14.6 Auth
 
 v0.1.3 relies on filesystem permissions on the control socket. The socket is created with `0600` and owned by the user running the daemon. Any client that can `connect(2)` to the socket may issue any control method.
 
 Future protocol versions (reserved for v0.5.x) will introduce a personal-access-token bearer scheme negotiated during a `daemon/authenticate` handshake. The token shape, scoping, and revocation are TBD. The capability field above gives the daemon a forward-compatible way to gate `daemon/authenticate` behind a feature flag without breaking v0.1.3 clients.
 
-## 14. Versioning
+## 15. Versioning
 
 The protocol uses semantic versioning. The current version is `1.0.0`.
 
@@ -880,7 +950,7 @@ host_major != plugin_major  →  incompatible (host refuses)
 
 Plugins SHOULD tolerate hosts on the same major version even when the host's minor is older — i.e. don't require methods you've added in a newer minor.
 
-## 15. Conformance
+## 16. Conformance
 
 A plugin is conformant if:
 
