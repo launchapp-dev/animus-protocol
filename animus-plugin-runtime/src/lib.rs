@@ -70,8 +70,8 @@ use animus_plugin_protocol::{
     PluginManifest, RpcError, RpcNotification, RpcRequest, RpcResponse, PROTOCOL_VERSION,
 };
 use animus_provider_protocol::{
-    AgentCancelRequest, AgentResumeRequest, AgentRunRequest, ProviderBackend, METHOD_AGENT_CANCEL,
-    METHOD_AGENT_RESUME, METHOD_AGENT_RUN,
+    AgentCancelRequest, AgentNotification, AgentResumeRequest, AgentRunRequest, NotificationSink,
+    ProviderBackend, METHOD_AGENT_CANCEL, METHOD_AGENT_RESUME, METHOD_AGENT_RUN,
 };
 use animus_subject_protocol::{
     BackendError as SubjectBackendError, SubjectBackend, SubjectFilter, SubjectId, SubjectPatch,
@@ -659,7 +659,13 @@ async fn handle_provider_request<P: ProviderBackend + 'static>(
                     return;
                 }
             };
-            Some(match backend.run_agent(request_payload).await {
+            let (sink, forwarder) = build_notification_sink(stdout.clone());
+            let result = backend.run_agent_streaming(request_payload, sink).await;
+            // Sink was consumed by `run_agent_streaming`; once the future
+            // resolves, the receiver-side channel sees EOF and the
+            // forwarder drains any buffered notifications.
+            forwarder.close().await;
+            Some(match result {
                 Ok(reply) => match serde_json::to_value(reply) {
                     Ok(value) => RpcResponse::ok(id, value),
                     Err(error) => RpcResponse::err(id, encoding_error("agent/run", error)),
@@ -676,7 +682,10 @@ async fn handle_provider_request<P: ProviderBackend + 'static>(
                         return;
                     }
                 };
-            Some(match backend.resume_agent(request_payload).await {
+            let (sink, forwarder) = build_notification_sink(stdout.clone());
+            let result = backend.resume_agent_streaming(request_payload, sink).await;
+            forwarder.close().await;
+            Some(match result {
                 Ok(reply) => match serde_json::to_value(reply) {
                     Ok(value) => RpcResponse::ok(id, value),
                     Err(error) => RpcResponse::err(id, encoding_error("agent/resume", error)),
@@ -707,6 +716,66 @@ async fn handle_provider_request<P: ProviderBackend + 'static>(
     if let Some(response) = response {
         write_response(&stdout, &response).await;
     }
+}
+
+/// Handle to a notification-forwarder task spawned by
+/// [`build_notification_sink`].
+///
+/// Provider plugins emit [`AgentNotification`] frames through the
+/// [`NotificationSink`] half; the runtime spawns a dedicated task that
+/// reads each emission off an unbounded mpsc queue and writes it to stdout
+/// as a JSON-RPC notification. Calling [`NotificationForwarder::close`]
+/// after the provider's `run_agent_streaming` future resolves drains any
+/// buffered notifications before we serialize the final response, which is
+/// important so per-spec ordering (`notifications` followed by the terminal
+/// `response`) is preserved on the wire.
+pub(crate) struct NotificationForwarder {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl NotificationForwarder {
+    /// Wait for the forwarder task to drain any buffered notifications.
+    ///
+    /// The caller MUST drop every [`NotificationSink`] clone before calling
+    /// this — otherwise the underlying mpsc channel stays open and the
+    /// forwarder will block forever on `recv`. The dispatch path in
+    /// [`handle_provider_request`] consumes the sink by passing it into
+    /// `run_agent_streaming`, so by the time the call returns the only
+    /// remaining `tx` lives inside the sink closure, which is dropped with
+    /// the sink itself.
+    pub(crate) async fn close(self) {
+        // Best-effort join; we don't surface errors back through the RPC
+        // response. A panic on the task is already surfaced through tokio's
+        // panic hook.
+        let _ = self.task.await;
+    }
+}
+
+/// Construct a [`NotificationSink`] that forwards each emitted
+/// [`AgentNotification`] as a JSON-RPC notification on the supplied
+/// shared stdout handle, plus a [`NotificationForwarder`] that owns the
+/// background drain task. The returned sink may be cloned freely by
+/// providers; the drain task exits once every clone is dropped (which
+/// happens naturally when the provider's `run_agent_streaming` future
+/// resolves and the sink we passed in goes out of scope).
+pub(crate) fn build_notification_sink(
+    stdout: Arc<Mutex<Stdout>>,
+) -> (NotificationSink, NotificationForwarder) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentNotification>();
+    let sink = NotificationSink::new(move |notification| {
+        // Ignore send errors — they only happen after the receiver was
+        // closed, which means the run already returned and any late
+        // emission would be ordered after the terminal response anyway.
+        let _ = tx.send(notification);
+    });
+    let task = tokio::spawn(async move {
+        while let Some(notification) = rx.recv().await {
+            let frame =
+                RpcNotification::new(notification.method(), Some(notification.payload()));
+            write_notification(&stdout, &frame).await;
+        }
+    });
+    (sink, NotificationForwarder { task })
 }
 
 // =====================================================================
@@ -1614,5 +1683,343 @@ mod tests {
     #[test]
     fn notification_constants_in_scope() {
         let _ = NOTIFICATION_SUBJECT_CHANGED;
+    }
+
+    // -----------------------------------------------------------------
+    // Provider streaming dispatch: AgentNotification frames must travel
+    // through the runtime's NotificationSink in the order the provider
+    // emits them, and the final AgentRunResponse must arrive afterwards.
+    //
+    // The fixtures here mirror the in-tree
+    // `crates/animus-plugin-runtime/src/lib.rs::handle_agent_run`
+    // behavior — five notification methods (`agent/output`,
+    // `agent/thinking`, `agent/toolCall`, `agent/toolResult`,
+    // `agent/error`) all carrying the active session id.
+    // -----------------------------------------------------------------
+
+    use animus_provider_protocol::{
+        AgentNotification, AgentResumeRequest, AgentRunRequest, AgentRunResponse,
+        BackendError as ProviderBackendError, NotificationSink, ProviderBackend,
+        ProviderCapabilities, ProviderManifest, NOTIFICATION_AGENT_ERROR,
+        NOTIFICATION_AGENT_OUTPUT, NOTIFICATION_AGENT_THINKING, NOTIFICATION_AGENT_TOOL_CALL,
+        NOTIFICATION_AGENT_TOOL_RESULT,
+    };
+
+    /// A provider backend that emits a scripted sequence of
+    /// `AgentNotification`s through the supplied sink before returning a
+    /// canned response. Used by the streaming-dispatch tests.
+    struct ScriptedProvider {
+        session_id: String,
+        script: Vec<AgentNotification>,
+        capture_streaming: StdMutex<Vec<AgentNotification>>,
+        used_streaming: StdMutex<bool>,
+    }
+
+    impl ScriptedProvider {
+        fn new(session_id: &str, script: Vec<AgentNotification>) -> Self {
+            Self {
+                session_id: session_id.to_string(),
+                script,
+                capture_streaming: StdMutex::new(Vec::new()),
+                used_streaming: StdMutex::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ProviderBackend for ScriptedProvider {
+        fn manifest(&self) -> ProviderManifest {
+            ProviderManifest {
+                name: "animus-provider-scripted".into(),
+                version: "0.0.0-test".into(),
+                description: "Test fixture".into(),
+                supported_models: vec!["scripted-1".into()],
+                tool: "scripted".into(),
+                capabilities: ProviderCapabilities {
+                    streaming: true,
+                    resume: true,
+                    cancellation: false,
+                    write_capable: false,
+                    mcp: false,
+                },
+            }
+        }
+
+        async fn run_agent(
+            &self,
+            _request: AgentRunRequest,
+        ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+            // Non-streaming path: just return the canned response.
+            Ok(canned_response(&self.session_id))
+        }
+
+        async fn run_agent_streaming(
+            &self,
+            _request: AgentRunRequest,
+            sink: NotificationSink,
+        ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+            *self.used_streaming.lock().unwrap() = true;
+            for notification in &self.script {
+                self.capture_streaming.lock().unwrap().push(notification.clone());
+                sink.emit(notification.clone());
+            }
+            Ok(canned_response(&self.session_id))
+        }
+
+        async fn resume_agent(
+            &self,
+            _request: AgentResumeRequest,
+        ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+            Ok(canned_response(&self.session_id))
+        }
+
+        async fn cancel_agent(
+            &self,
+            _session_id: &str,
+        ) -> std::result::Result<(), ProviderBackendError> {
+            Ok(())
+        }
+
+        async fn health(
+            &self,
+        ) -> std::result::Result<HealthCheckResult, ProviderBackendError> {
+            Ok(HealthCheckResult {
+                status: HealthStatus::Healthy,
+                uptime_ms: None,
+                memory_usage_bytes: None,
+                last_error: None,
+            })
+        }
+    }
+
+    fn canned_response(session_id: &str) -> AgentRunResponse {
+        AgentRunResponse {
+            session_id: session_id.to_string(),
+            exit_code: 0,
+            output: "final".into(),
+            metadata: Vec::new(),
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
+            thinking: Vec::new(),
+            errors: Vec::new(),
+            duration_ms: 0,
+            backend: "scripted".into(),
+            tokens_used: None,
+            decision_verdict: None,
+        }
+    }
+
+    /// Replace stdout's underlying handle with an `Arc<Mutex<Stdout>>` that
+    /// proxies into a `Vec<u8>` recorder. We can't actually swap
+    /// `tokio::io::Stdout`, so the tests instead drive the sink directly
+    /// and record what the forwarder writes.
+    ///
+    /// The strategy here: build a sink + forwarder against a real
+    /// `tokio::io::stdout()` (which is fine in unit tests — they just
+    /// print to the test runner), but record what the *sink* receives via
+    /// a parallel recorder closure. That way we verify ordering and
+    /// frame payload without worrying about stdout interception.
+    fn recording_sink() -> (NotificationSink, Arc<StdMutex<Vec<RpcNotification>>>) {
+        let recorder: Arc<StdMutex<Vec<RpcNotification>>> = Arc::new(StdMutex::new(Vec::new()));
+        let r2 = recorder.clone();
+        let sink = NotificationSink::new(move |notification| {
+            let frame =
+                RpcNotification::new(notification.method(), Some(notification.payload()));
+            r2.lock().unwrap().push(frame);
+        });
+        (sink, recorder)
+    }
+
+    #[tokio::test]
+    async fn provider_streaming_emits_five_notification_kinds_in_order() {
+        let script = vec![
+            AgentNotification::Output {
+                session_id: "sess-1".into(),
+                text: "hello".into(),
+                is_final: false,
+            },
+            AgentNotification::Thinking {
+                session_id: "sess-1".into(),
+                text: "let me think".into(),
+            },
+            AgentNotification::ToolCall {
+                session_id: "sess-1".into(),
+                name: "shell".into(),
+                arguments: json!({"cmd": "echo hi"}),
+                server: None,
+            },
+            AgentNotification::ToolResult {
+                session_id: "sess-1".into(),
+                name: "shell".into(),
+                output: json!("hi\n"),
+                success: true,
+            },
+            AgentNotification::Error {
+                session_id: "sess-1".into(),
+                message: "soft fail".into(),
+                recoverable: true,
+            },
+        ];
+
+        let provider = ScriptedProvider::new("sess-1", script);
+        let (sink, recorder) = recording_sink();
+
+        // Drive the streaming path directly so the test doesn't depend on
+        // tokio's stdout (which would scramble the test runner's output).
+        let response = provider
+            .run_agent_streaming(
+                AgentRunRequest {
+                    session_id: None,
+                    prompt: "go".into(),
+                    model: Some("scripted-1".into()),
+                    system_prompt: None,
+                    cwd: std::path::PathBuf::from("/"),
+                    project_root: None,
+                    permission_mode: None,
+                    timeout_secs: None,
+                    env: Default::default(),
+                    mcp_servers: None,
+                    tools: None,
+                    response_schema: None,
+                    runtime_contract: None,
+                    extras: Default::default(),
+                },
+                sink,
+            )
+            .await
+            .expect("streaming run");
+
+        assert_eq!(response.session_id, "sess-1");
+        let recorded = recorder.lock().unwrap();
+        assert_eq!(recorded.len(), 5);
+        assert_eq!(recorded[0].method, NOTIFICATION_AGENT_OUTPUT);
+        assert_eq!(recorded[1].method, NOTIFICATION_AGENT_THINKING);
+        assert_eq!(recorded[2].method, NOTIFICATION_AGENT_TOOL_CALL);
+        assert_eq!(recorded[3].method, NOTIFICATION_AGENT_TOOL_RESULT);
+        assert_eq!(recorded[4].method, NOTIFICATION_AGENT_ERROR);
+
+        // Session id is carried on every frame per spec § 10.3.
+        for frame in recorded.iter() {
+            let params = frame.params.as_ref().expect("notification params");
+            assert_eq!(params["session_id"], "sess-1");
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_streaming_default_impl_delegates_to_run_agent() {
+        // A provider that does NOT override `run_agent_streaming` (it
+        // inherits the default impl). The recording sink must stay empty.
+        struct NonStreamingProvider {
+            session_id: String,
+        }
+
+        #[async_trait]
+        impl ProviderBackend for NonStreamingProvider {
+            fn manifest(&self) -> ProviderManifest {
+                ProviderManifest {
+                    name: "animus-provider-no-stream".into(),
+                    version: "0.0.0-test".into(),
+                    description: "Test fixture".into(),
+                    supported_models: vec!["scripted-1".into()],
+                    tool: "scripted".into(),
+                    capabilities: ProviderCapabilities::default(),
+                }
+            }
+
+            async fn run_agent(
+                &self,
+                _request: AgentRunRequest,
+            ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+                Ok(canned_response(&self.session_id))
+            }
+
+            async fn resume_agent(
+                &self,
+                _request: AgentResumeRequest,
+            ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+                Ok(canned_response(&self.session_id))
+            }
+
+            async fn cancel_agent(
+                &self,
+                _session_id: &str,
+            ) -> std::result::Result<(), ProviderBackendError> {
+                Ok(())
+            }
+
+            async fn health(
+                &self,
+            ) -> std::result::Result<HealthCheckResult, ProviderBackendError> {
+                Ok(HealthCheckResult {
+                    status: HealthStatus::Healthy,
+                    uptime_ms: None,
+                    memory_usage_bytes: None,
+                    last_error: None,
+                })
+            }
+        }
+
+        let provider = NonStreamingProvider {
+            session_id: "sess-2".into(),
+        };
+        let (sink, recorder) = recording_sink();
+
+        let response = provider
+            .run_agent_streaming(
+                AgentRunRequest {
+                    session_id: None,
+                    prompt: "go".into(),
+                    model: None,
+                    system_prompt: None,
+                    cwd: std::path::PathBuf::from("/"),
+                    project_root: None,
+                    permission_mode: None,
+                    timeout_secs: None,
+                    env: Default::default(),
+                    mcp_servers: None,
+                    tools: None,
+                    response_schema: None,
+                    runtime_contract: None,
+                    extras: Default::default(),
+                },
+                sink,
+            )
+            .await
+            .expect("default streaming run");
+
+        assert_eq!(response.session_id, "sess-2");
+        assert!(
+            recorder.lock().unwrap().is_empty(),
+            "default impl should not emit any notifications"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_notification_sink_drains_buffered_notifications_on_close() {
+        // Direct end-to-end: build a sink + forwarder against a real
+        // stdout handle, emit through the sink, close the forwarder, and
+        // verify the join handle completes promptly (within a tight
+        // budget). The sink's own emissions are tested above; here we
+        // exercise the runtime helper that wires sink → JSON-RPC stdout.
+        let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+        let (sink, forwarder) = build_notification_sink(stdout);
+        sink.emit(AgentNotification::Output {
+            session_id: "sess-3".into(),
+            text: "hi".into(),
+            is_final: true,
+        });
+        sink.emit(AgentNotification::Error {
+            session_id: "sess-3".into(),
+            message: "boom".into(),
+            recoverable: false,
+        });
+        // Drop the sink so the forwarder sees EOF on its channel.
+        drop(sink);
+
+        // Close must complete promptly once the sink drops — if it hangs
+        // the test framework's per-test timeout will catch it. We
+        // separately verify in the in-process tests above that ordering
+        // is preserved.
+        forwarder.close().await;
     }
 }

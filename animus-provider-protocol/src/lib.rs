@@ -22,7 +22,9 @@
 #![warn(missing_docs)]
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use animus_plugin_protocol::{error_codes, HealthCheckResult, RpcError};
 use async_trait::async_trait;
@@ -337,6 +339,195 @@ impl From<BackendError> for RpcError {
 }
 
 // =====================================================================
+// Streaming notification surface
+// =====================================================================
+
+/// A streaming notification a provider may emit mid-run.
+///
+/// The runtime in [`animus-plugin-runtime`] wraps these into JSON-RPC
+/// notifications using the wire-method constants ([`NOTIFICATION_AGENT_OUTPUT`],
+/// [`NOTIFICATION_AGENT_THINKING`], [`NOTIFICATION_AGENT_TOOL_CALL`],
+/// [`NOTIFICATION_AGENT_TOOL_RESULT`], [`NOTIFICATION_AGENT_ERROR`]) and
+/// forwards them to the host on the same channel as the eventual
+/// [`AgentRunResponse`] reply. Providers only construct the variants — they
+/// don't need to touch JSON-RPC themselves.
+///
+/// `session_id` is filled in by the provider once known. All variants are
+/// safe to emit before [`AgentRunResponse`] is returned; emissions after the
+/// response are ignored by the runtime.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AgentNotification {
+    /// Incremental text the model has produced. Maps to
+    /// [`NOTIFICATION_AGENT_OUTPUT`].
+    Output {
+        /// Stable session id this delta belongs to.
+        session_id: String,
+        /// Text delta.
+        text: String,
+        /// `true` when this is the final aggregated text for the turn.
+        #[serde(default)]
+        is_final: bool,
+    },
+    /// Visible reasoning from the model. Maps to
+    /// [`NOTIFICATION_AGENT_THINKING`].
+    Thinking {
+        /// Stable session id.
+        session_id: String,
+        /// Reasoning text.
+        text: String,
+    },
+    /// Agent invoked a tool. Maps to [`NOTIFICATION_AGENT_TOOL_CALL`].
+    ToolCall {
+        /// Stable session id.
+        session_id: String,
+        /// Tool name.
+        name: String,
+        /// Tool arguments.
+        arguments: Value,
+        /// MCP server that hosts the tool, if known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<String>,
+    },
+    /// Tool returned a result. Maps to [`NOTIFICATION_AGENT_TOOL_RESULT`].
+    ToolResult {
+        /// Stable session id.
+        session_id: String,
+        /// Tool name.
+        name: String,
+        /// Tool output.
+        output: Value,
+        /// True if the tool reported success.
+        success: bool,
+    },
+    /// Error encountered mid-run. Maps to [`NOTIFICATION_AGENT_ERROR`].
+    Error {
+        /// Stable session id.
+        session_id: String,
+        /// Error message.
+        message: String,
+        /// True if the run continues after this error.
+        recoverable: bool,
+    },
+}
+
+impl AgentNotification {
+    /// Wire-method constant for the JSON-RPC notification this variant maps to.
+    pub fn method(&self) -> &'static str {
+        match self {
+            AgentNotification::Output { .. } => NOTIFICATION_AGENT_OUTPUT,
+            AgentNotification::Thinking { .. } => NOTIFICATION_AGENT_THINKING,
+            AgentNotification::ToolCall { .. } => NOTIFICATION_AGENT_TOOL_CALL,
+            AgentNotification::ToolResult { .. } => NOTIFICATION_AGENT_TOOL_RESULT,
+            AgentNotification::Error { .. } => NOTIFICATION_AGENT_ERROR,
+        }
+    }
+
+    /// The wire payload for the notification (i.e. its `params`).
+    ///
+    /// The shapes here match `spec.md` § 10.3 — `{ session_id, text, final }`
+    /// for output, `{ session_id, text }` for thinking, `{ session_id, name,
+    /// arguments, server }` for tool calls, `{ session_id, name, output,
+    /// success }` for tool results, and `{ session_id, message, recoverable }`
+    /// for errors.
+    pub fn payload(&self) -> Value {
+        match self {
+            AgentNotification::Output {
+                session_id,
+                text,
+                is_final,
+            } => serde_json::json!({
+                "session_id": session_id,
+                "text": text,
+                "final": is_final,
+            }),
+            AgentNotification::Thinking { session_id, text } => serde_json::json!({
+                "session_id": session_id,
+                "text": text,
+            }),
+            AgentNotification::ToolCall {
+                session_id,
+                name,
+                arguments,
+                server,
+            } => serde_json::json!({
+                "session_id": session_id,
+                "name": name,
+                "arguments": arguments,
+                "server": server,
+            }),
+            AgentNotification::ToolResult {
+                session_id,
+                name,
+                output,
+                success,
+            } => serde_json::json!({
+                "session_id": session_id,
+                "name": name,
+                "output": output,
+                "success": success,
+            }),
+            AgentNotification::Error {
+                session_id,
+                message,
+                recoverable,
+            } => serde_json::json!({
+                "session_id": session_id,
+                "message": message,
+                "recoverable": recoverable,
+            }),
+        }
+    }
+}
+
+/// Sink a provider emits [`AgentNotification`]s through during an
+/// `agent/run` or `agent/resume` call.
+///
+/// The runtime in [`animus-plugin-runtime`] constructs a sink that forwards
+/// each emission as a JSON-RPC notification on stdout. Tests can construct a
+/// recording sink by passing a closure that pushes into a `Vec` behind a
+/// `Mutex`.
+///
+/// `emit` is synchronous and fire-and-forget — the underlying channel never
+/// applies back-pressure. Providers that need to drop events under load
+/// should batch or coalesce on their side before calling `emit`.
+///
+/// Sinks are cheap to clone (`Arc` under the hood) — providers may stash a
+/// clone in a per-session task or pass the sink down into a parser loop.
+#[derive(Clone)]
+pub struct NotificationSink {
+    inner: Arc<dyn Fn(AgentNotification) + Send + Sync>,
+}
+
+impl NotificationSink {
+    /// Construct a sink from any send+sync callable.
+    pub fn new<F>(f: F) -> Self
+    where
+        F: Fn(AgentNotification) + Send + Sync + 'static,
+    {
+        Self { inner: Arc::new(f) }
+    }
+
+    /// Construct a no-op sink. Useful for in-process unit tests that don't
+    /// care about streaming and for the back-compat path on
+    /// [`ProviderBackend::run_agent`].
+    pub fn noop() -> Self {
+        Self::new(|_| {})
+    }
+
+    /// Emit a notification through the sink.
+    pub fn emit(&self, notification: AgentNotification) {
+        (self.inner)(notification);
+    }
+}
+
+impl fmt::Debug for NotificationSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NotificationSink").finish_non_exhaustive()
+    }
+}
+
+// =====================================================================
 // The trait
 // =====================================================================
 
@@ -361,7 +552,34 @@ pub trait ProviderBackend: Send + Sync + 'static {
     fn manifest(&self) -> ProviderManifest;
 
     /// Start a fresh agent session.
+    ///
+    /// This is the non-streaming entrypoint and remains the canonical surface
+    /// for providers that don't have incremental output to share. Providers
+    /// that *do* want to stream should also override
+    /// [`run_agent_streaming`](Self::run_agent_streaming) and emit
+    /// [`AgentNotification`]s through the supplied [`NotificationSink`] as
+    /// events arrive.
     async fn run_agent(&self, request: AgentRunRequest) -> Result<AgentRunResponse, BackendError>;
+
+    /// Streaming variant of [`run_agent`](Self::run_agent).
+    ///
+    /// The default implementation forwards to `run_agent` and ignores the
+    /// sink — existing providers continue to compile and behave exactly as
+    /// before. Providers that wrap a session backend with an event stream
+    /// (e.g. the CLI providers wrapping `animus-session-backend`) should
+    /// override this method to call `sink.emit(...)` for each
+    /// [`AgentNotification`] before returning the aggregated response.
+    ///
+    /// The runtime forwards every emission as a JSON-RPC notification on
+    /// stdout using [`AgentNotification::method`] and
+    /// [`AgentNotification::payload`].
+    async fn run_agent_streaming(
+        &self,
+        request: AgentRunRequest,
+        _sink: NotificationSink,
+    ) -> Result<AgentRunResponse, BackendError> {
+        self.run_agent(request).await
+    }
 
     /// Resume a prior session by id. Providers without resume support
     /// should advertise `capabilities.resume = false` in the manifest and
@@ -370,6 +588,18 @@ pub trait ProviderBackend: Send + Sync + 'static {
         &self,
         request: AgentResumeRequest,
     ) -> Result<AgentRunResponse, BackendError>;
+
+    /// Streaming variant of [`resume_agent`](Self::resume_agent).
+    ///
+    /// See [`run_agent_streaming`](Self::run_agent_streaming) for the
+    /// semantics; the default impl is the same back-compat shim.
+    async fn resume_agent_streaming(
+        &self,
+        request: AgentResumeRequest,
+        _sink: NotificationSink,
+    ) -> Result<AgentRunResponse, BackendError> {
+        self.resume_agent(request).await
+    }
 
     /// Cancel an in-flight session.
     async fn cancel_agent(&self, session_id: &str) -> Result<(), BackendError>;
@@ -407,5 +637,61 @@ mod tests {
     fn cancel_maps_to_request_cancelled() {
         let rpc: RpcError = BackendError::Cancelled.into();
         assert_eq!(rpc.code, error_codes::REQUEST_CANCELLED);
+    }
+
+    #[test]
+    fn agent_notification_method_and_payload_match_spec() {
+        let output = AgentNotification::Output {
+            session_id: "s1".into(),
+            text: "hi".into(),
+            is_final: true,
+        };
+        assert_eq!(output.method(), NOTIFICATION_AGENT_OUTPUT);
+        let payload = output.payload();
+        assert_eq!(payload["session_id"], "s1");
+        assert_eq!(payload["text"], "hi");
+        assert_eq!(payload["final"], true);
+
+        let tool_call = AgentNotification::ToolCall {
+            session_id: "s2".into(),
+            name: "shell".into(),
+            arguments: serde_json::json!({"cmd": "ls"}),
+            server: Some("local".into()),
+        };
+        assert_eq!(tool_call.method(), NOTIFICATION_AGENT_TOOL_CALL);
+        let payload = tool_call.payload();
+        assert_eq!(payload["name"], "shell");
+        assert_eq!(payload["server"], "local");
+        assert_eq!(payload["arguments"]["cmd"], "ls");
+    }
+
+    #[test]
+    fn notification_sink_records_emissions_in_order() {
+        use std::sync::Mutex;
+
+        let recorder: Arc<Mutex<Vec<AgentNotification>>> = Arc::new(Mutex::new(Vec::new()));
+        let r2 = recorder.clone();
+        let sink = NotificationSink::new(move |n| r2.lock().unwrap().push(n));
+
+        sink.emit(AgentNotification::Output {
+            session_id: "s".into(),
+            text: "first".into(),
+            is_final: false,
+        });
+        sink.emit(AgentNotification::Thinking {
+            session_id: "s".into(),
+            text: "reason".into(),
+        });
+        sink.emit(AgentNotification::Error {
+            session_id: "s".into(),
+            message: "boom".into(),
+            recoverable: true,
+        });
+
+        let recorded = recorder.lock().unwrap();
+        assert_eq!(recorded.len(), 3);
+        assert_eq!(recorded[0].method(), NOTIFICATION_AGENT_OUTPUT);
+        assert_eq!(recorded[1].method(), NOTIFICATION_AGENT_THINKING);
+        assert_eq!(recorded[2].method(), NOTIFICATION_AGENT_ERROR);
     }
 }
