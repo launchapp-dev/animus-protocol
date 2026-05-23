@@ -58,6 +58,11 @@ pub const METHOD_SUBJECT_GET: &str = "subject/get";
 /// `subject/update` — apply a [`SubjectPatch`] to a subject.
 pub const METHOD_SUBJECT_UPDATE: &str = "subject/update";
 
+/// `subject/delete` — permanently remove a subject by id. Optional; backends
+/// that do not support deletion MUST respond with
+/// [`error_codes::METHOD_NOT_SUPPORTED`]. Added in v0.1.8.
+pub const METHOD_SUBJECT_DELETE: &str = "subject/delete";
+
 /// `subject/watch` — start a server-streaming subscription. Optional;
 /// polling-only backends respond with [`error_codes::METHOD_NOT_SUPPORTED`].
 pub const METHOD_SUBJECT_WATCH: &str = "subject/watch";
@@ -392,6 +397,33 @@ pub struct SubjectPatch {
 }
 
 // =====================================================================
+// Delete
+// =====================================================================
+
+/// Request payload for `subject/delete`. Added in v0.1.8.
+///
+/// Backends that do not support deletion MUST reject with the
+/// [`error_codes::METHOD_NOT_SUPPORTED`] JSON-RPC error code so the daemon
+/// can fall back to status-only soft-cancel semantics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteSubjectRequest {
+    /// Id of the subject to delete.
+    pub id: SubjectId,
+}
+
+/// Response payload for `subject/delete`. Added in v0.1.8.
+///
+/// Carries a single `ok` flag so the wire shape remains an object (matching
+/// every other subject verb) and so future fields — e.g. a tombstone id or a
+/// `permanent: bool` discriminator — can be added without breaking v0.1.8
+/// clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteSubjectResponse {
+    /// True when the backend successfully deleted the subject.
+    pub ok: bool,
+}
+
+// =====================================================================
 // Schema / capability declaration
 // =====================================================================
 
@@ -582,6 +614,14 @@ pub enum BackendError {
     #[error("backend unavailable: {0}")]
     Unavailable(String),
 
+    /// Backend recognized the method but does not implement it (e.g. a
+    /// read-only backend rejecting `subject/delete`). Added in v0.1.8 so the
+    /// runtime can map it to JSON-RPC `method_not_supported` (-32001) and the
+    /// daemon can fall back to alternate semantics. v0.1.7 callers that match
+    /// against [`BackendError`] exhaustively will need a wildcard arm.
+    #[error("method not supported: {0}")]
+    Unsupported(String),
+
     /// Anything else.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -609,6 +649,11 @@ impl From<BackendError> for RpcError {
                 code: error_codes::INTERNAL_ERROR,
                 message: format!("backend unavailable: {message}"),
                 data: Some(serde_json::json!({"category": "unavailable"})),
+            },
+            BackendError::Unsupported(message) => RpcError {
+                code: error_codes::METHOD_NOT_SUPPORTED,
+                message,
+                data: Some(serde_json::json!({"category": "unsupported"})),
             },
             BackendError::Other(error) => RpcError {
                 code: error_codes::INTERNAL_ERROR,
@@ -681,6 +726,20 @@ pub trait SubjectBackend: Send + Sync + 'static {
 
     /// Apply a patch and return the updated subject.
     async fn update(&self, id: &SubjectId, patch: SubjectPatch) -> Result<Subject, BackendError>;
+
+    /// Permanently delete a subject by id. Added in v0.1.8.
+    ///
+    /// The default implementation returns
+    /// [`BackendError::Unsupported`] so v0.1.7 backends compile against
+    /// v0.1.8 unchanged. The wire dispatch maps `Unsupported` to
+    /// JSON-RPC `method_not_supported` (-32001) so callers can fall back to
+    /// status-only soft-cancel semantics without probing capabilities up
+    /// front. Backends that opt in should override this method.
+    async fn delete(&self, _id: &SubjectId) -> Result<DeleteSubjectResponse, BackendError> {
+        Err(BackendError::Unsupported(
+            "subject/delete not implemented by this backend".into(),
+        ))
+    }
 
     /// Open a stream of subject change events, or `None` if this backend is
     /// polling-only. Polling-only backends should also set
@@ -954,6 +1013,44 @@ mod tests {
         assert!(default_v.get("native_status").is_none());
         assert!(default_v.get("dispatch_label").is_none());
         assert!(default_v.get("has_attachment_kind").is_none());
+    }
+
+    #[test]
+    fn delete_subject_request_round_trips_json() {
+        let req = DeleteSubjectRequest {
+            id: SubjectId::new("linear:ENG-123"),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v, serde_json::json!({ "id": "linear:ENG-123" }));
+        let back: DeleteSubjectRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn delete_subject_response_round_trips_json() {
+        let resp = DeleteSubjectResponse { ok: true };
+        let v = serde_json::to_value(&resp).unwrap();
+        assert_eq!(v, serde_json::json!({ "ok": true }));
+        let back: DeleteSubjectResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn backend_error_unsupported_maps_to_method_not_supported() {
+        let rpc: RpcError = BackendError::Unsupported("delete not supported".into()).into();
+        assert_eq!(rpc.code, error_codes::METHOD_NOT_SUPPORTED);
+        assert_eq!(
+            rpc.data
+                .as_ref()
+                .and_then(|d| d.get("category"))
+                .and_then(|c| c.as_str()),
+            Some("unsupported")
+        );
+    }
+
+    #[test]
+    fn method_subject_delete_constant_matches_wire_verb() {
+        assert_eq!(METHOD_SUBJECT_DELETE, "subject/delete");
     }
 
     #[test]

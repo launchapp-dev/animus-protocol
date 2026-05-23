@@ -40,6 +40,12 @@ pub mod error;
 pub mod method;
 pub mod types;
 
+#[cfg(feature = "client")]
+pub mod client;
+
+#[cfg(feature = "client")]
+pub use client::ControlClient;
+
 // Re-export the core types at the crate root so downstream code can write
 // `animus_control_protocol::ControlSurface` instead of reaching into the
 // modules directly.

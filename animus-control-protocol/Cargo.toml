@@ -9,11 +9,19 @@ homepage.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[features]
+# `client` adds the cross-process `ControlClient` that talks to the daemon's
+# control socket over NDJSON JSON-RPC. Off by default so plugin authors who
+# only consume the wire constants don't pull in tokio. Unix-only — the
+# implementation `cfg(unix)`-gates the Unix-socket transport and the module
+# is a stub on other targets.
+client = ["dep:tokio", "dep:anyhow"]
+
 [dependencies]
-animus-plugin-protocol      = { path = "../animus-plugin-protocol",      version = "0.1.7" }
-animus-subject-protocol     = { path = "../animus-subject-protocol",     version = "0.1.7" }
-animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.7" }
-animus-trigger-protocol     = { path = "../animus-trigger-protocol",     version = "0.1.7" }
+animus-plugin-protocol      = { path = "../animus-plugin-protocol",      version = "0.1.8" }
+animus-subject-protocol     = { path = "../animus-subject-protocol",     version = "0.1.8" }
+animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.8" }
+animus-trigger-protocol     = { path = "../animus-trigger-protocol",     version = "0.1.8" }
 
 async-trait.workspace = true
 serde.workspace = true
@@ -21,3 +29,9 @@ serde_json.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 futures-core.workspace = true
+tokio  = { workspace = true, optional = true, features = ["net"] }
+anyhow = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio    = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
+tempfile = "3"

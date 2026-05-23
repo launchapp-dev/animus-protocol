@@ -531,6 +531,22 @@ async fn handle_subject_request<B: SubjectBackend + 'static>(
                 Err(error) => RpcResponse::err(id, error.into()),
             })
         }
+        "delete" => {
+            let params = match deserialize_params::<SubjectGetParams>(request.params, false) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            Some(match backend.delete(&params.id).await {
+                Ok(response) => match serde_json::to_value(response) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(id, encoding_error("subject/delete", error)),
+                },
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
         "watch" => match backend.watch().await {
             Some(stream) => {
                 let request_id = id.clone();
@@ -770,8 +786,7 @@ pub(crate) fn build_notification_sink(
     });
     let task = tokio::spawn(async move {
         while let Some(notification) = rx.recv().await {
-            let frame =
-                RpcNotification::new(notification.method(), Some(notification.payload()));
+            let frame = RpcNotification::new(notification.method(), Some(notification.payload()));
             write_notification(&stdout, &frame).await;
         }
     });
@@ -1760,7 +1775,10 @@ mod tests {
         ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
             *self.used_streaming.lock().unwrap() = true;
             for notification in &self.script {
-                self.capture_streaming.lock().unwrap().push(notification.clone());
+                self.capture_streaming
+                    .lock()
+                    .unwrap()
+                    .push(notification.clone());
                 sink.emit(notification.clone());
             }
             Ok(canned_response(&self.session_id))
@@ -1780,9 +1798,7 @@ mod tests {
             Ok(())
         }
 
-        async fn health(
-            &self,
-        ) -> std::result::Result<HealthCheckResult, ProviderBackendError> {
+        async fn health(&self) -> std::result::Result<HealthCheckResult, ProviderBackendError> {
             Ok(HealthCheckResult {
                 status: HealthStatus::Healthy,
                 uptime_ms: None,
@@ -1823,8 +1839,7 @@ mod tests {
         let recorder: Arc<StdMutex<Vec<RpcNotification>>> = Arc::new(StdMutex::new(Vec::new()));
         let r2 = recorder.clone();
         let sink = NotificationSink::new(move |notification| {
-            let frame =
-                RpcNotification::new(notification.method(), Some(notification.payload()));
+            let frame = RpcNotification::new(notification.method(), Some(notification.payload()));
             r2.lock().unwrap().push(frame);
         });
         (sink, recorder)
@@ -1947,9 +1962,7 @@ mod tests {
                 Ok(())
             }
 
-            async fn health(
-                &self,
-            ) -> std::result::Result<HealthCheckResult, ProviderBackendError> {
+            async fn health(&self) -> std::result::Result<HealthCheckResult, ProviderBackendError> {
                 Ok(HealthCheckResult {
                     status: HealthStatus::Healthy,
                     uptime_ms: None,

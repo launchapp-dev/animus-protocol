@@ -183,7 +183,7 @@ A plugin declares its kind in [`PluginInfo::plugin_kind`](#87-plugininfo) during
 | Kind | Methods (in addition to lifecycle) |
 |---|---|
 | `provider` | `agent/run`, `agent/resume`, `agent/cancel` |
-| `subject_backend` | `subject/list`, `subject/get`, `subject/update`, `subject/watch` (optional), `subject/schema` |
+| `subject_backend` | `subject/list`, `subject/get`, `subject/update`, `subject/delete` (optional, v0.1.8+), `subject/watch` (optional), `subject/schema` |
 | `trigger_backend` | `trigger/watch`, `trigger/event` (notification), `trigger/ack` (optional), `trigger/schema` |
 | `log_storage_backend` | `log_storage/store`, `log_storage/query` (optional), `log_storage/tail` (optional), `log_storage/event` (notification), `log_storage/schema` |
 | `transport_backend` | `transport/start`, `transport/shutdown`, `transport/schema` |
@@ -255,6 +255,14 @@ Params: `{ "id": "linear:ENG-123" }`. Result: `{ "subject": Subject }`.
 Applies a [`SubjectPatch`](#94-subjectpatch).
 
 Params: `{ "id": "linear:ENG-123", "patch": { ... } }`. Result: `{ "subject": Subject }` (the refreshed subject).
+
+#### `subject/delete`
+
+Permanently removes a subject. Added in v0.1.8.
+
+Params: `{ "id": "linear:ENG-123" }`. Result: `{ "ok": true }`.
+
+Backends that do not support deletion MUST respond with error code `-32001` (`method_not_supported`). Hosts then fall back to status-only soft-cancel semantics (e.g. transitioning to `cancelled`). The wire dispatch in `animus-plugin-runtime` always accepts `<kind>/delete` and `subject/delete`; backends opt in by overriding `SubjectBackend::delete` on the Rust trait.
 
 #### `subject/watch`
 
