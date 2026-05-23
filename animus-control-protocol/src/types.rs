@@ -659,6 +659,43 @@ pub struct WorkflowResumeRequest {
     pub feedback: Option<String>,
 }
 
+/// Request for `workflow/events`.
+///
+/// Both filters are optional and combine with AND semantics: an event is
+/// delivered when it matches the `workflow_id` filter (or it is `None`) AND
+/// its `kind` is in `kinds` (or `kinds` is `None`). Added in v0.1.10.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowEventsRequest {
+    /// Restrict the stream to events for a single workflow run. `None`
+    /// streams events for every workflow the daemon emits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
+    /// Restrict the stream to specific event kinds (e.g.
+    /// `["phase_started", "phase_completed", "workflow_completed"]`).
+    /// `None` streams every kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kinds: Option<Vec<String>>,
+}
+
+/// One event delivered by the `workflow/events` stream.
+///
+/// The `kind` discriminator is opaque to the protocol; subscribers match on
+/// it. Common values include `phase_started`, `phase_completed`,
+/// `workflow_completed`, `workflow_failed`, but daemons may emit any kind
+/// they like — clients SHOULD ignore unknown kinds. Added in v0.1.10.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowEvent {
+    /// Workflow run id this event belongs to.
+    pub workflow_id: String,
+    /// Event kind discriminator.
+    pub kind: String,
+    /// Free-form, kind-specific event payload.
+    #[serde(default)]
+    pub payload: Value,
+    /// When the event occurred.
+    pub occurred_at: DateTime<Utc>,
+}
+
 /// Request for `workflow/cancel`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowCancelRequest {

@@ -896,7 +896,7 @@ Method names follow `<group>/<verb>` with a forward slash separator. Groups are:
 - `subject/list`, `subject/get`, `subject/create`, `subject/update`, `subject/next`, `subject/status`
 - `plugin/list`, `plugin/install`, `plugin/uninstall`, `plugin/ping`, `plugin/call`, `plugin/search`, `plugin/browse`, `plugin/update`
 - `daemon/status`, `daemon/health`, `daemon/start`, `daemon/stop`, `daemon/restart`, `daemon/agents`
-- `workflow/list`, `workflow/get`, `workflow/run`, `workflow/execute`, `workflow/pause`, `workflow/resume`, `workflow/cancel`
+- `workflow/list`, `workflow/get`, `workflow/run`, `workflow/execute`, `workflow/pause`, `workflow/resume`, `workflow/cancel`, `workflow/events` (v0.1.10)
 - `agent/run`, `agent/status`, `agent/cancel`
 - `queue/list`, `queue/enqueue`, `queue/drop`, `queue/hold`, `queue/release`, `queue/reorder`, `queue/stats`
 - `project/init`, `project/setup`, `project/status`
@@ -905,11 +905,12 @@ Domain payloads (subject, log entry, ...) are imported from the existing plugin-
 
 ### 14.3 Streaming methods
 
-Three control methods open a server-streaming subscription:
+Four control methods open a server-streaming subscription:
 
 - `subject/watch` — emits `subject/changed` notifications (one per subject change), with payload [`SubjectChangedEvent`].
 - `daemon/events` — emits `daemon/event` notifications (one per daemon run event), with payload `DaemonRunEvent`.
 - `daemon/logs` — emits `daemon/log` notifications (one per log entry), with payload `LogEntry` from `animus-log-storage-protocol`. When the request sets `follow: true` the stream stays open after the historical tail; when `follow: false` the daemon delivers the historical window and then closes the stream.
+- `workflow/events` (v0.1.10) — emits `workflow/event` notifications (one per workflow-scoped event such as `phase_started`, `phase_completed`, `workflow_completed`, `workflow_failed`), with payload `WorkflowEvent`. The request optionally filters by `workflow_id` and event `kinds`; both filters combine with AND semantics.
 
 The convention is: a method ending in `/watch` is bound to a specific resource family (subjects in a backend, ...), a method ending in `/events` is the broader daemon-wide stream, and `/logs` carries log entries specifically. Each streaming method MUST be paired with a singular notification (`<group>/changed`, `<group>/event`, `<group>/log`). The request id of the originating streaming request is echoed in `params.id` of every notification on that stream so the client can multiplex multiple subscriptions over one connection.
 
@@ -948,7 +949,7 @@ v0.1.3 relies on filesystem permissions on the control socket. The socket is cre
 
 Future protocol versions (reserved for v0.5.x) will introduce a personal-access-token bearer scheme negotiated during a `daemon/authenticate` handshake. The token shape, scoping, and revocation are TBD. The capability field above gives the daemon a forward-compatible way to gate `daemon/authenticate` behind a feature flag without breaking v0.1.3 clients.
 
-### 14.7 Client subscription API (v0.1.9)
+### 14.7 Client subscription API (v0.1.9, extended in v0.1.10)
 
 `animus-control-protocol` v0.1.9 ships a `Subscription<T>` type that wraps the streaming wire shape from §14.3 for the `client` feature. Transport plugins (graphql, http, future gRPC) use it instead of re-implementing the NDJSON read demultiplexer.
 
@@ -959,6 +960,7 @@ Methods:
 - `ControlClient::subject_watch(SubjectWatchRequest) -> Result<Subscription<SubjectChangedEvent>>`
 - `ControlClient::daemon_events(DaemonEventsRequest) -> Result<Subscription<DaemonRunEvent>>`
 - `ControlClient::daemon_logs_follow(DaemonLogsRequest) -> Result<Subscription<DaemonLogEntry>>` — forces `follow = true` on the request
+- `ControlClient::workflow_events(WorkflowEventsRequest) -> Result<Subscription<WorkflowEvent>>` (v0.1.10) — workflow-scoped event stream, see §14.8
 
 `Subscription<T>` exposes:
 
@@ -967,7 +969,36 @@ Methods:
 
 Cancellation: dropping the `Subscription` closes the local receiver, aborts the per-subscription decoder, sends a best-effort `$/cancelRequest` notification on the same socket, and removes the subscription from the demultiplexer table. Clients that need stricter shutdown semantics SHOULD also drop the owning `ControlClient`, which aborts the reader task and closes the socket.
 
-`workflow/events` is not in this list — the daemon does not yet expose a workflow-scoped event stream; emit unary `workflow/get` polling or subscribe to `daemon/events` and filter on `kind` until a dedicated stream is added in a future minor.
+### 14.8 `workflow/events` (v0.1.10)
+
+`workflow/events` opens a server-streaming subscription scoped to workflow lifecycle events. Notifications use the method `workflow/event` and carry a [`WorkflowEvent`] payload. The handshake and cancellation semantics match §14.3.
+
+Request shape (`WorkflowEventsRequest`):
+
+```jsonc
+{
+  "workflow_id": "wf-42",                                  // optional — None streams every workflow
+  "kinds": ["phase_started", "phase_completed",            // optional — None streams every kind
+            "workflow_completed", "workflow_failed"]
+}
+```
+
+Both filters are optional and combine with AND semantics: an event is delivered when its workflow id matches `workflow_id` (or `workflow_id` is `None`) AND its kind is in `kinds` (or `kinds` is `None`).
+
+Event shape (`WorkflowEvent`):
+
+```jsonc
+{
+  "workflow_id": "wf-42",
+  "kind": "phase_completed",
+  "payload": { "phase_id": "implement", "status": "ok" },  // kind-specific JSON; opaque to the protocol
+  "occurred_at": "2026-05-23T10:42:00Z"
+}
+```
+
+The `kind` discriminator is opaque to the protocol; daemons MAY emit additional kinds in any minor release, and clients SHOULD ignore unknown kinds rather than error.
+
+Daemon-side status: as of v0.1.10 the protocol crate ships the client-side wire (constants, types, `ControlClient::workflow_events`). The matching daemon-side emitter lands separately in `animus-cli`; until that ships, `workflow_events` subscribers will hang on `recv` (the daemon never emits `workflow/event` notifications) or receive a `method_not_found` error on subscribe. Clients that need to ship before the daemon catches up SHOULD fall back to `daemon_events` + kind filtering.
 
 ## 15. Versioning
 

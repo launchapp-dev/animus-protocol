@@ -73,9 +73,9 @@ mod imp {
         QueueReorderRequest, QueueStats, SubjectCreateRequest, SubjectGetRequest,
         SubjectListRequest, SubjectListResponse, SubjectNextRequest, SubjectNextResponse,
         SubjectStatusRequest, SubjectUpdateRequest, SubjectWatchRequest, Unit,
-        WorkflowCancelRequest, WorkflowExecuteRequest, WorkflowGetRequest, WorkflowListRequest,
-        WorkflowListResponse, WorkflowPauseRequest, WorkflowResumeRequest, WorkflowRun,
-        WorkflowRunRequest, WorkflowRunStart,
+        WorkflowCancelRequest, WorkflowEvent, WorkflowEventsRequest, WorkflowExecuteRequest,
+        WorkflowGetRequest, WorkflowListRequest, WorkflowListResponse, WorkflowPauseRequest,
+        WorkflowResumeRequest, WorkflowRun, WorkflowRunRequest, WorkflowRunStart,
     };
     use animus_subject_protocol::{Subject, SubjectChangedEvent};
 
@@ -415,6 +415,23 @@ mod imp {
         /// Call `workflow/cancel`.
         pub async fn workflow_cancel(&self, request: WorkflowCancelRequest) -> Result<Unit> {
             self.rpc(method::METHOD_WORKFLOW_CANCEL, request).await
+        }
+
+        /// Open a `workflow/events` subscription (v0.1.10).
+        ///
+        /// Returns a [`Subscription`] yielding [`WorkflowEvent`] items as the
+        /// daemon emits workflow-scoped events. The request optionally filters
+        /// by `workflow_id` and/or event `kinds`; see [`WorkflowEventsRequest`].
+        ///
+        /// NOTE: daemons that have not yet implemented `workflow/events` will
+        /// return a `method_not_found` error on subscribe. Clients SHOULD
+        /// degrade to `daemon_events` + kind filtering in that case.
+        pub async fn workflow_events(
+            &self,
+            request: WorkflowEventsRequest,
+        ) -> Result<Subscription<WorkflowEvent>> {
+            self.subscribe(method::METHOD_WORKFLOW_EVENTS, request, 256)
+                .await
         }
 
         // ---- Queue --------------------------------------------------------
@@ -1007,6 +1024,173 @@ mod imp {
                 *received_cancel.lock().await,
                 "server did not see $/cancelRequest"
             );
+        }
+
+        #[tokio::test]
+        async fn workflow_events_streams_events_and_cancels_on_drop() {
+            let tmp = TempDir::new().unwrap();
+            let socket = tmp.path().join("control.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let socket_path = socket.clone();
+
+            let received_cancel = Arc::new(AsyncMutex::new(false));
+            let received_cancel_clone = Arc::clone(&received_cancel);
+
+            tokio::spawn(async move {
+                let (conn, _) = listener.accept().await.unwrap();
+                let (read_half, write_half) = conn.into_split();
+                let write_half = Arc::new(AsyncMutex::new(write_half));
+                let mut reader = BufReader::new(read_half);
+
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let req: RpcRequest = serde_json::from_str(line.trim()).unwrap();
+                assert_eq!(req.method, method::METHOD_WORKFLOW_EVENTS);
+                let req_id = req.id.clone();
+
+                let ack = RpcResponse {
+                    jsonrpc: "2.0".into(),
+                    id: req_id.clone(),
+                    result: Some(serde_json::json!({ "watching": true })),
+                    error: None,
+                };
+                {
+                    let mut g = write_half.lock().await;
+                    let mut frame = serde_json::to_vec(&ack).unwrap();
+                    frame.push(b'\n');
+                    g.write_all(&frame).await.unwrap();
+                    g.flush().await.unwrap();
+                }
+
+                for i in 0..3u64 {
+                    let kind = if i % 2 == 0 {
+                        "phase_started"
+                    } else {
+                        "phase_completed"
+                    };
+                    let event = serde_json::json!({
+                        "workflow_id": "wf-1",
+                        "kind": kind,
+                        "payload": { "seq": i },
+                        "occurred_at": Utc::now().to_rfc3339(),
+                    });
+                    let notification = RpcNotification::new(
+                        method::NOTIFICATION_WORKFLOW_EVENT.to_string(),
+                        Some(serde_json::json!({
+                            "id": req_id,
+                            "data": event,
+                        })),
+                    );
+                    let mut g = write_half.lock().await;
+                    let mut frame = serde_json::to_vec(&notification).unwrap();
+                    frame.push(b'\n');
+                    g.write_all(&frame).await.unwrap();
+                    g.flush().await.unwrap();
+                    drop(g);
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+
+                let mut cancel_line = String::new();
+                if timeout(Duration::from_secs(2), reader.read_line(&mut cancel_line))
+                    .await
+                    .is_ok()
+                {
+                    if let Ok(v) = serde_json::from_str::<Value>(cancel_line.trim()) {
+                        if v.get("method").and_then(|m| m.as_str()) == Some("$/cancelRequest") {
+                            *received_cancel_clone.lock().await = true;
+                        }
+                    }
+                }
+            });
+
+            let client = ControlClient::connect(&socket_path).await.unwrap();
+            let mut sub = client
+                .workflow_events(WorkflowEventsRequest::default())
+                .await
+                .unwrap();
+
+            for expected in 0..3u64 {
+                let ev = timeout(Duration::from_secs(2), sub.recv())
+                    .await
+                    .expect("recv timeout")
+                    .expect("stream closed early");
+                assert_eq!(ev.workflow_id, "wf-1");
+                assert_eq!(
+                    ev.payload.get("seq").and_then(|v| v.as_u64()),
+                    Some(expected)
+                );
+                let expected_kind = if expected % 2 == 0 {
+                    "phase_started"
+                } else {
+                    "phase_completed"
+                };
+                assert_eq!(ev.kind, expected_kind);
+            }
+
+            drop(sub);
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert!(
+                *received_cancel.lock().await,
+                "server did not see $/cancelRequest"
+            );
+        }
+
+        #[tokio::test]
+        async fn workflow_events_filters_by_workflow_id_in_request() {
+            let tmp = TempDir::new().unwrap();
+            let socket = tmp.path().join("control.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let socket_path = socket.clone();
+
+            let captured_params: Arc<AsyncMutex<Option<Value>>> = Arc::new(AsyncMutex::new(None));
+            let captured_clone = Arc::clone(&captured_params);
+
+            tokio::spawn(async move {
+                let (conn, _) = listener.accept().await.unwrap();
+                let (read_half, mut write_half) = conn.into_split();
+                let mut reader = BufReader::new(read_half);
+
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let req: RpcRequest = serde_json::from_str(line.trim()).unwrap();
+                assert_eq!(req.method, method::METHOD_WORKFLOW_EVENTS);
+                *captured_clone.lock().await = req.params.clone();
+
+                let ack = RpcResponse {
+                    jsonrpc: "2.0".into(),
+                    id: req.id.clone(),
+                    result: Some(serde_json::json!({ "watching": true })),
+                    error: None,
+                };
+                let mut frame = serde_json::to_vec(&ack).unwrap();
+                frame.push(b'\n');
+                write_half.write_all(&frame).await.unwrap();
+                write_half.flush().await.unwrap();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            });
+
+            let client = ControlClient::connect(&socket_path).await.unwrap();
+            let _sub = client
+                .workflow_events(WorkflowEventsRequest {
+                    workflow_id: Some("wf-42".into()),
+                    kinds: Some(vec!["phase_completed".into(), "workflow_failed".into()]),
+                })
+                .await
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let params = captured_params.lock().await.clone().expect("no params");
+            assert_eq!(
+                params.get("workflow_id").and_then(|v| v.as_str()),
+                Some("wf-42")
+            );
+            let kinds = params
+                .get("kinds")
+                .and_then(|v| v.as_array())
+                .expect("kinds not an array");
+            let kinds: Vec<&str> = kinds.iter().filter_map(|v| v.as_str()).collect();
+            assert_eq!(kinds, vec!["phase_completed", "workflow_failed"]);
         }
 
         #[tokio::test]

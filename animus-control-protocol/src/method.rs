@@ -128,6 +128,13 @@ pub const METHOD_WORKFLOW_RESUME: &str = "workflow/resume";
 /// `workflow/cancel` — cancel a workflow run.
 pub const METHOD_WORKFLOW_CANCEL: &str = "workflow/cancel";
 
+/// `workflow/events` — open a server-streaming subscription of workflow-scoped
+/// events (phase transitions, completions, failures). Added in v0.1.10.
+pub const METHOD_WORKFLOW_EVENTS: &str = "workflow/events";
+
+/// `workflow/event` — notification emitted by [`METHOD_WORKFLOW_EVENTS`] streams.
+pub const NOTIFICATION_WORKFLOW_EVENT: &str = "workflow/event";
+
 // =====================================================================
 // Agent operations
 // =====================================================================

@@ -10,12 +10,12 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-animus-plugin-protocol = { path = "../animus-plugin-protocol", version = "0.1.9" }
-animus-subject-protocol = { path = "../animus-subject-protocol", version = "0.1.9" }
-animus-provider-protocol = { path = "../animus-provider-protocol", version = "0.1.9" }
-animus-trigger-protocol = { path = "../animus-trigger-protocol", version = "0.1.9" }
-animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.9" }
-animus-transport-protocol = { path = "../animus-transport-protocol", version = "0.1.9" }
+animus-plugin-protocol = { path = "../animus-plugin-protocol", version = "0.1.10" }
+animus-subject-protocol = { path = "../animus-subject-protocol", version = "0.1.10" }
+animus-provider-protocol = { path = "../animus-provider-protocol", version = "0.1.10" }
+animus-trigger-protocol = { path = "../animus-trigger-protocol", version = "0.1.10" }
+animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.10" }
+animus-transport-protocol = { path = "../animus-transport-protocol", version = "0.1.10" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
