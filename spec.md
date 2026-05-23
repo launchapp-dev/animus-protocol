@@ -909,11 +909,18 @@ Three control methods open a server-streaming subscription:
 
 - `subject/watch` — emits `subject/changed` notifications (one per subject change), with payload [`SubjectChangedEvent`].
 - `daemon/events` — emits `daemon/event` notifications (one per daemon run event), with payload `DaemonRunEvent`.
-- `daemon/logs` — emits `daemon/log` notifications (one per log entry), with payload `LogEntry` from `animus-log-storage-protocol`.
+- `daemon/logs` — emits `daemon/log` notifications (one per log entry), with payload `LogEntry` from `animus-log-storage-protocol`. When the request sets `follow: true` the stream stays open after the historical tail; when `follow: false` the daemon delivers the historical window and then closes the stream.
 
 The convention is: a method ending in `/watch` is bound to a specific resource family (subjects in a backend, ...), a method ending in `/events` is the broader daemon-wide stream, and `/logs` carries log entries specifically. Each streaming method MUST be paired with a singular notification (`<group>/changed`, `<group>/event`, `<group>/log`). The request id of the originating streaming request is echoed in `params.id` of every notification on that stream so the client can multiplex multiple subscriptions over one connection.
 
-A client cancels a stream by closing the connection or by issuing a JSON-RPC notification with method `$/cancelRequest` and `params: { id: <request_id> }` (mirrors §6's lifecycle cancellation).
+The wire handshake for any streaming method is:
+
+1. Client sends a normal JSON-RPC request: `{"jsonrpc":"2.0","id":<id>,"method":"<group>/<verb>","params":{...}}`.
+2. Server replies with an ack result frame: `{"jsonrpc":"2.0","id":<id>,"result":{"watching":true}}`. The ack body is opaque; clients MUST treat the absence of an error as success.
+3. Server then emits zero or more notification frames: `{"jsonrpc":"2.0","method":"<group>/<event>","params":{"id":<id>,"data":<payload>}}`. Notification frames carry no top-level `id`; correlation is via `params.id` echoing the originating request id.
+4. The server MAY close the stream by closing the underlying connection or by ceasing to send notifications. There is no terminal-notification convention in v0.1.x; clients detect end-of-stream via socket close or by ignoring further notifications after they've cancelled.
+
+A client cancels a stream by closing the connection or by issuing a JSON-RPC notification with method `$/cancelRequest` and `params: { id: <request_id> }` (mirrors §6's lifecycle cancellation). Daemons MAY treat `$/cancelRequest` as a best-effort hint; closing the socket is the authoritative cancellation signal.
 
 ### 14.4 Error codes
 
@@ -940,6 +947,27 @@ The daemon advertises its supported control methods via a `daemon/status` respon
 v0.1.3 relies on filesystem permissions on the control socket. The socket is created with `0600` and owned by the user running the daemon. Any client that can `connect(2)` to the socket may issue any control method.
 
 Future protocol versions (reserved for v0.5.x) will introduce a personal-access-token bearer scheme negotiated during a `daemon/authenticate` handshake. The token shape, scoping, and revocation are TBD. The capability field above gives the daemon a forward-compatible way to gate `daemon/authenticate` behind a feature flag without breaking v0.1.3 clients.
+
+### 14.7 Client subscription API (v0.1.9)
+
+`animus-control-protocol` v0.1.9 ships a `Subscription<T>` type that wraps the streaming wire shape from §14.3 for the `client` feature. Transport plugins (graphql, http, future gRPC) use it instead of re-implementing the NDJSON read demultiplexer.
+
+Concurrency model: each `ControlClient` instance owns one `UnixStream`. A background reader task continuously parses inbound frames and demultiplexes them by matching `id` (responses → pending oneshot) or by reading `params.id` (notifications → subscription mpsc). Writes serialize through an `Arc<Mutex<WriteHalf>>`, so a single `ControlClient` MAY host any mix of in-flight unary RPCs and open subscriptions over one socket.
+
+Methods:
+
+- `ControlClient::subject_watch(SubjectWatchRequest) -> Result<Subscription<SubjectChangedEvent>>`
+- `ControlClient::daemon_events(DaemonEventsRequest) -> Result<Subscription<DaemonRunEvent>>`
+- `ControlClient::daemon_logs_follow(DaemonLogsRequest) -> Result<Subscription<DaemonLogEntry>>` — forces `follow = true` on the request
+
+`Subscription<T>` exposes:
+
+- `async fn recv(&mut self) -> Option<T>` — pulls the next decoded event, `None` on stream close
+- `fn request_id(&self) -> u64` and `fn method(&self) -> &str` — correlation helpers
+
+Cancellation: dropping the `Subscription` closes the local receiver, aborts the per-subscription decoder, sends a best-effort `$/cancelRequest` notification on the same socket, and removes the subscription from the demultiplexer table. Clients that need stricter shutdown semantics SHOULD also drop the owning `ControlClient`, which aborts the reader task and closes the socket.
+
+`workflow/events` is not in this list — the daemon does not yet expose a workflow-scoped event stream; emit unary `workflow/get` polling or subscribe to `daemon/events` and filter on `kind` until a dedicated stream is added in a future minor.
 
 ## 15. Versioning
 

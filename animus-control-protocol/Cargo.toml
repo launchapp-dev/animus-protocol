@@ -18,10 +18,10 @@ readme.workspace = true
 client = ["dep:tokio", "dep:anyhow"]
 
 [dependencies]
-animus-plugin-protocol      = { path = "../animus-plugin-protocol",      version = "0.1.8" }
-animus-subject-protocol     = { path = "../animus-subject-protocol",     version = "0.1.8" }
-animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.8" }
-animus-trigger-protocol     = { path = "../animus-trigger-protocol",     version = "0.1.8" }
+animus-plugin-protocol      = { path = "../animus-plugin-protocol",      version = "0.1.9" }
+animus-subject-protocol     = { path = "../animus-subject-protocol",     version = "0.1.9" }
+animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.9" }
+animus-trigger-protocol     = { path = "../animus-trigger-protocol",     version = "0.1.9" }
 
 async-trait.workspace = true
 serde.workspace = true
