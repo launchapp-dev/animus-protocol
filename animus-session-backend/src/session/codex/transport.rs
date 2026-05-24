@@ -16,7 +16,7 @@ use crate::session::{
     session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun,
 };
 
-use super::parser::parse_codex_stdout_line;
+use super::parser::CodexParser;
 
 pub(crate) async fn start_codex_session(
     request: SessionRequest,
@@ -191,10 +191,11 @@ async fn run_codex_session(
     let stdout_tx = event_tx.clone();
     let stdout_task = tokio::spawn(async move {
         let mut last_final_text: Option<String> = None;
+        let mut parser = CodexParser::new();
         let mut lines = BufReader::new(stdout).lines();
 
         while let Ok(Some(line)) = lines.next_line().await {
-            for event in parse_codex_stdout_line(&line) {
+            for event in parser.parse_line(&line) {
                 if let SessionEvent::FinalText { text } = &event {
                     if last_final_text.as_deref() == Some(text.as_str()) {
                         continue;
