@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 
 use crate::error::Result;
@@ -10,12 +12,35 @@ use crate::session::{
 use super::transport::{start_oai_runner_session, terminate_oai_runner_session};
 
 /// Native Animus OAI-compatible runner session backend.
-pub struct OaiRunnerSessionBackend;
+#[derive(Debug, Clone, Default)]
+pub struct OaiRunnerSessionBackend {
+    runner_binary_path: Option<PathBuf>,
+}
 
 impl OaiRunnerSessionBackend {
-    /// Construct a fresh backend instance.
+    /// Construct a fresh backend instance that resolves the runner via
+    /// the `ANIMUS_OAI_RUNNER_BIN` environment variable (when set) and
+    /// falls back to `animus-oai-runner` on `PATH`.
     pub fn new() -> Self {
-        Self
+        Self {
+            runner_binary_path: None,
+        }
+    }
+
+    /// Construct a backend pinned to a specific runner binary on disk.
+    ///
+    /// When set, this path takes precedence over both the
+    /// `ANIMUS_OAI_RUNNER_BIN` environment variable and the default
+    /// `animus-oai-runner` PATH lookup. Pass `None` to clear the override
+    /// and restore env/PATH resolution.
+    pub fn with_runner_binary_path(mut self, path: Option<PathBuf>) -> Self {
+        self.runner_binary_path = path;
+        self
+    }
+
+    /// Currently configured runner binary override, if any.
+    pub fn runner_binary_path(&self) -> Option<&PathBuf> {
+        self.runner_binary_path.as_ref()
     }
 }
 
@@ -44,7 +69,7 @@ impl SessionBackend for OaiRunnerSessionBackend {
     }
 
     async fn start_session(&self, request: SessionRequest) -> Result<SessionRun> {
-        start_oai_runner_session(request, None).await
+        start_oai_runner_session(request, None, self.runner_binary_path.clone()).await
     }
 
     async fn resume_session(
@@ -52,16 +77,15 @@ impl SessionBackend for OaiRunnerSessionBackend {
         request: SessionRequest,
         session_id: &str,
     ) -> Result<SessionRun> {
-        start_oai_runner_session(request, Some(session_id.to_string())).await
+        start_oai_runner_session(
+            request,
+            Some(session_id.to_string()),
+            self.runner_binary_path.clone(),
+        )
+        .await
     }
 
     async fn terminate_session(&self, session_id: &str) -> Result<()> {
         terminate_oai_runner_session(session_id).await
-    }
-}
-
-impl Default for OaiRunnerSessionBackend {
-    fn default() -> Self {
-        Self::new()
     }
 }

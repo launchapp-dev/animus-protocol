@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -16,11 +17,23 @@ use crate::session::{
 
 use super::parser::parse_oai_runner_json_line;
 
+/// Env-var fallback consulted when no explicit runner path is configured on
+/// the [`OaiRunnerSessionBackend`](super::backend::OaiRunnerSessionBackend).
+/// Set to an absolute path to the `animus-oai-runner` binary; when unset
+/// the backend falls back to a bare `Command::new("animus-oai-runner")`
+/// PATH lookup.
+pub const ANIMUS_OAI_RUNNER_BIN_ENV: &str = "ANIMUS_OAI_RUNNER_BIN";
+
 pub(crate) async fn start_oai_runner_session(
     request: SessionRequest,
     resume_session_id: Option<String>,
+    runner_binary_path: Option<PathBuf>,
 ) -> Result<SessionRun> {
-    let invocation = oai_runner_invocation_for_request(&request, resume_session_id.as_deref())?;
+    let invocation = oai_runner_invocation_for_request(
+        &request,
+        resume_session_id.as_deref(),
+        runner_binary_path.as_deref(),
+    )?;
     let control_session_id = Uuid::new_v4().to_string();
     let control_session_id_for_run = control_session_id.clone();
     let (event_tx, event_rx) = mpsc::channel(128);
@@ -80,6 +93,7 @@ pub(crate) async fn terminate_oai_runner_session(session_id: &str) -> Result<()>
 pub(crate) fn oai_runner_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
+    runner_binary_path: Option<&std::path::Path>,
 ) -> Result<LaunchInvocation> {
     if let Some(invocation) =
         parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
@@ -104,13 +118,26 @@ pub(crate) fn oai_runner_invocation_for_request(
     args.push(request.prompt.clone());
 
     let mut invocation = LaunchInvocation {
-        command: "animus-oai-runner".to_string(),
+        command: resolve_runner_command(runner_binary_path),
         args,
         env: Default::default(),
         prompt_via_stdin: false,
     };
     ensure_flag_value(&mut invocation.args, "--format", "json", 1);
     Ok(invocation)
+}
+
+fn resolve_runner_command(runner_binary_path: Option<&std::path::Path>) -> String {
+    if let Some(path) = runner_binary_path {
+        return path.to_string_lossy().into_owned();
+    }
+    if let Ok(env_path) = std::env::var(ANIMUS_OAI_RUNNER_BIN_ENV) {
+        let trimmed = env_path.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    "animus-oai-runner".to_string()
 }
 
 async fn run_oai_runner_session(
@@ -263,4 +290,73 @@ fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
         .lock()
         .ok()
         .and_then(|mut registry| registry.remove(session_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn sample_request() -> SessionRequest {
+        SessionRequest {
+            tool: "oai-runner".into(),
+            model: "gpt-4o-mini".into(),
+            prompt: "hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({}),
+        }
+    }
+
+    #[test]
+    fn config_supplied_path_wins_over_env_and_path() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(ANIMUS_OAI_RUNNER_BIN_ENV, "/env/should/lose");
+        let configured = PathBuf::from("/explicit/animus-oai-runner");
+        let invocation =
+            oai_runner_invocation_for_request(&sample_request(), None, Some(&configured))
+                .expect("invocation");
+        assert_eq!(invocation.command, "/explicit/animus-oai-runner");
+        std::env::remove_var(ANIMUS_OAI_RUNNER_BIN_ENV);
+    }
+
+    #[test]
+    fn env_var_used_when_config_path_is_none() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(ANIMUS_OAI_RUNNER_BIN_ENV, "/from/env/animus-oai-runner");
+        let invocation =
+            oai_runner_invocation_for_request(&sample_request(), None, None).expect("invocation");
+        assert_eq!(invocation.command, "/from/env/animus-oai-runner");
+        std::env::remove_var(ANIMUS_OAI_RUNNER_BIN_ENV);
+    }
+
+    #[test]
+    fn path_fallback_when_neither_set() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var(ANIMUS_OAI_RUNNER_BIN_ENV);
+        let invocation =
+            oai_runner_invocation_for_request(&sample_request(), None, None).expect("invocation");
+        assert_eq!(invocation.command, "animus-oai-runner");
+    }
+
+    #[test]
+    fn blank_env_falls_back_to_path() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(ANIMUS_OAI_RUNNER_BIN_ENV, "   ");
+        let invocation =
+            oai_runner_invocation_for_request(&sample_request(), None, None).expect("invocation");
+        assert_eq!(invocation.command, "animus-oai-runner");
+        std::env::remove_var(ANIMUS_OAI_RUNNER_BIN_ENV);
+    }
 }

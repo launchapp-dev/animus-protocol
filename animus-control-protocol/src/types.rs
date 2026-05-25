@@ -1007,6 +1007,31 @@ pub struct ProjectStatusResponse {
 }
 
 // =====================================================================
+// Streaming lifecycle
+// =====================================================================
+
+/// Payload carried by the `subscription/closed` notification (added in v0.1.12).
+///
+/// Emitted on a server-streaming subscription right before the daemon stops
+/// sending notifications for that stream. `id` echoes the originating
+/// streaming request id (matching the `params.id` convention used by every
+/// `<group>/<event>` notification, see §14.3 of `spec.md`), so a single
+/// client demultiplexing many subscriptions over one socket can route the
+/// terminal frame to the right subscription.
+///
+/// `reason` is free-form for operator log messages and SHOULD NOT be parsed
+/// by clients beyond surfacing it to the user.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubscriptionClosedPayload {
+    /// Originating streaming request id (mirrors `params.id` on every
+    /// notification belonging to this subscription).
+    pub id: Value,
+    /// Operator-facing close reason (e.g. `"daemon shutting down"`,
+    /// `"workflow completed"`, `"subscription budget exceeded"`).
+    pub reason: String,
+}
+
+// =====================================================================
 // Misc
 // =====================================================================
 

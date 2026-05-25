@@ -687,6 +687,23 @@ mod imp {
             let top_id = frame_obj.get("id");
 
             if has_method && (top_id.is_none() || top_id == Some(&Value::Null)) {
+                let method_str = frame_obj.get("method").and_then(|m| m.as_str());
+                // `subscription/closed` is terminal: drop the subscription's
+                // mpsc sender so the client's `recv()` returns `None` on the
+                // next pull. The notification itself is not delivered as a
+                // stream item — that would break the per-stream item-type
+                // contract. v0.1.12.
+                if method_str == Some(method::NOTIFICATION_SUBSCRIPTION_CLOSED) {
+                    if let Some(params) = frame_obj.get("params") {
+                        if let Some(sub_id_val) = params.get("id") {
+                            if let Some(sub_id) = value_as_u64(sub_id_val) {
+                                let mut guard = subscriptions.lock().await;
+                                guard.remove(&sub_id);
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if let Some(params) = frame_obj.get("params") {
                     if let Some(sub_id_val) = params.get("id") {
                         if let Some(sub_id) = value_as_u64(sub_id_val) {
@@ -1292,6 +1309,96 @@ mod imp {
                     .collect();
             assert!(ids.contains("native:T100"));
             assert!(ids.contains("native:T101"));
+        }
+
+        #[tokio::test]
+        async fn client_subscription_recv_returns_none_after_server_emits_subscription_closed() {
+            let tmp = TempDir::new().unwrap();
+            let socket = tmp.path().join("control.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let socket_path = socket.clone();
+
+            tokio::spawn(async move {
+                let (conn, _) = listener.accept().await.unwrap();
+                let (read_half, write_half) = conn.into_split();
+                let write_half = Arc::new(AsyncMutex::new(write_half));
+                let mut reader = BufReader::new(read_half);
+
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let req: RpcRequest = serde_json::from_str(line.trim()).unwrap();
+                assert_eq!(req.method, method::METHOD_SUBJECT_WATCH);
+                let req_id = req.id.clone();
+
+                let ack = RpcResponse {
+                    jsonrpc: "2.0".into(),
+                    id: req_id.clone(),
+                    result: Some(serde_json::json!({ "watching": true })),
+                    error: None,
+                };
+                {
+                    let mut g = write_half.lock().await;
+                    let mut frame = serde_json::to_vec(&ack).unwrap();
+                    frame.push(b'\n');
+                    g.write_all(&frame).await.unwrap();
+                    g.flush().await.unwrap();
+                }
+
+                let event = sample_event(7);
+                let notification = RpcNotification::new(
+                    method::NOTIFICATION_SUBJECT_CHANGED.to_string(),
+                    Some(serde_json::json!({
+                        "id": req_id,
+                        "data": event,
+                    })),
+                );
+                {
+                    let mut g = write_half.lock().await;
+                    let mut frame = serde_json::to_vec(&notification).unwrap();
+                    frame.push(b'\n');
+                    g.write_all(&frame).await.unwrap();
+                    g.flush().await.unwrap();
+                }
+
+                tokio::time::sleep(Duration::from_millis(20)).await;
+
+                let closed = RpcNotification::new(
+                    method::NOTIFICATION_SUBSCRIPTION_CLOSED.to_string(),
+                    Some(serde_json::json!({
+                        "id": req_id,
+                        "reason": "subscription budget exceeded",
+                    })),
+                );
+                {
+                    let mut g = write_half.lock().await;
+                    let mut frame = serde_json::to_vec(&closed).unwrap();
+                    frame.push(b'\n');
+                    g.write_all(&frame).await.unwrap();
+                    g.flush().await.unwrap();
+                }
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            });
+
+            let client = ControlClient::connect(&socket_path).await.unwrap();
+            let mut sub = client
+                .subject_watch(SubjectWatchRequest::default())
+                .await
+                .unwrap();
+
+            let first = timeout(Duration::from_secs(2), sub.recv())
+                .await
+                .expect("recv timeout")
+                .expect("stream closed before first event");
+            assert_eq!(first.id.as_str(), "native:T7");
+
+            let terminal = timeout(Duration::from_secs(2), sub.recv())
+                .await
+                .expect("recv timeout waiting for terminal close");
+            assert!(
+                terminal.is_none(),
+                "subscription/closed should terminate the stream with None"
+            );
         }
     }
 }

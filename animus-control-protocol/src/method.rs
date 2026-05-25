@@ -38,6 +38,18 @@ pub const METHOD_SUBJECT_WATCH: &str = "subject/watch";
 /// `subject/changed` — notification emitted by [`METHOD_SUBJECT_WATCH`] streams.
 pub const NOTIFICATION_SUBJECT_CHANGED: &str = "subject/changed";
 
+/// `subscription/closed` — terminal notification emitted by the daemon on
+/// any open server-streaming subscription right before the daemon closes
+/// the stream. Carries [`crate::types::SubscriptionClosedPayload`]. Added
+/// in v0.1.12.
+///
+/// Servers that emit this notification let the client distinguish a
+/// daemon-initiated terminal close (subscription resource gone, daemon
+/// shutting down, capacity exhausted) from a transport-level disconnect.
+/// Clients that don't recognize the notification still observe the stream
+/// close via socket EOF, matching pre-v0.1.12 behavior.
+pub const NOTIFICATION_SUBSCRIPTION_CLOSED: &str = "subscription/closed";
+
 // =====================================================================
 // Plugin operations
 // =====================================================================
