@@ -134,7 +134,28 @@ pub async fn subject_backend_main<B: SubjectBackend + 'static>(
     info: PluginInfo,
     backend: B,
 ) -> Result<()> {
-    let capabilities = subject_capabilities(&backend);
+    subject_backend_main_with_capabilities(info, backend, Vec::new()).await
+}
+
+/// Run a subject-backend plugin's stdio JSON-RPC loop, advertising
+/// additional capability strings alongside the runtime-derived defaults.
+///
+/// Use this when the backend wants to opt in to host-side test scenarios
+/// or feature flags that the runtime cannot detect from the trait — e.g.
+/// the testkit's `$harness/*` opt-in capabilities. Any string in
+/// `extra_capabilities` is appended (deduplicated) to
+/// [`PluginCapabilities::methods`] returned in the `initialize` response.
+/// Passing an empty vector is exactly equivalent to calling
+/// [`subject_backend_main`].
+///
+/// Added in protocol v0.1.13. Plugins built against v0.1.12 continue to
+/// compile and run unchanged — the new entrypoint is purely additive.
+pub async fn subject_backend_main_with_capabilities<B: SubjectBackend + 'static>(
+    info: PluginInfo,
+    backend: B,
+    extra_capabilities: Vec<String>,
+) -> Result<()> {
+    let capabilities = subject_capabilities(&backend, &extra_capabilities);
     if parse_manifest_flag() {
         print_manifest_and_exit(&info, &capabilities);
     }
@@ -195,7 +216,46 @@ pub async fn provider_main<P: ProviderBackend + 'static>(
     info: PluginInfo,
     backend: P,
 ) -> Result<()> {
-    let capabilities = provider_capabilities(&backend);
+    provider_main_with_capabilities(info, backend, Vec::new()).await
+}
+
+/// Run a provider-plugin stdio JSON-RPC loop, advertising additional
+/// capability strings alongside the runtime-derived defaults.
+///
+/// Use this when the provider wants to opt in to host-side test
+/// scenarios or feature flags that the runtime cannot detect from the
+/// trait — e.g. the testkit's `$harness/cancellation-loop-v2` or
+/// `$harness/oai-style` opt-in capabilities. Any string in
+/// `extra_capabilities` is appended (deduplicated) to
+/// [`PluginCapabilities::methods`] returned in the `initialize`
+/// response. Passing an empty vector is exactly equivalent to calling
+/// [`provider_main`].
+///
+/// Added in protocol v0.1.13. Plugins built against v0.1.12 continue to
+/// compile and run unchanged — the new entrypoint is purely additive.
+///
+/// # Example
+///
+/// ```ignore
+/// use animus_plugin_protocol::{PluginInfo, PLUGIN_KIND_PROVIDER};
+/// use animus_plugin_runtime::provider_main_with_capabilities;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let info = PluginInfo { /* … */ };
+///     provider_main_with_capabilities(
+///         info,
+///         my_provider::OaiProvider::new(),
+///         vec!["$harness/oai-style".to_string()],
+///     ).await
+/// }
+/// ```
+pub async fn provider_main_with_capabilities<P: ProviderBackend + 'static>(
+    info: PluginInfo,
+    backend: P,
+    extra_capabilities: Vec<String>,
+) -> Result<()> {
+    let capabilities = provider_capabilities(&backend, &extra_capabilities);
     if parse_manifest_flag() {
         print_manifest_and_exit(&info, &capabilities);
     }
@@ -266,7 +326,24 @@ pub async fn trigger_backend_main<B: TriggerBackend + 'static>(
     info: PluginInfo,
     backend: B,
 ) -> Result<()> {
-    let capabilities = trigger_capabilities(&backend);
+    trigger_backend_main_with_capabilities(info, backend, Vec::new()).await
+}
+
+/// Run a trigger-backend plugin's stdio JSON-RPC loop, advertising
+/// additional capability strings alongside the runtime-derived defaults.
+///
+/// See [`provider_main_with_capabilities`] for the same pattern applied
+/// to provider backends. Passing an empty vector is exactly equivalent
+/// to calling [`trigger_backend_main`].
+///
+/// Added in protocol v0.1.13. Plugins built against v0.1.12 continue to
+/// compile and run unchanged.
+pub async fn trigger_backend_main_with_capabilities<B: TriggerBackend + 'static>(
+    info: PluginInfo,
+    backend: B,
+    extra_capabilities: Vec<String>,
+) -> Result<()> {
+    let capabilities = trigger_capabilities(&backend, &extra_capabilities);
     if parse_manifest_flag() {
         print_manifest_and_exit(&info, &capabilities);
     }
@@ -338,7 +415,24 @@ pub async fn log_storage_backend_main<B: LogStorageBackend + 'static>(
     info: PluginInfo,
     backend: B,
 ) -> Result<()> {
-    let capabilities = log_storage_capabilities(&backend);
+    log_storage_backend_main_with_capabilities(info, backend, Vec::new()).await
+}
+
+/// Run a log-storage-backend plugin's stdio JSON-RPC loop, advertising
+/// additional capability strings alongside the runtime-derived defaults.
+///
+/// See [`provider_main_with_capabilities`] for the same pattern applied
+/// to provider backends. Passing an empty vector is exactly equivalent
+/// to calling [`log_storage_backend_main`].
+///
+/// Added in protocol v0.1.13. Plugins built against v0.1.12 continue to
+/// compile and run unchanged.
+pub async fn log_storage_backend_main_with_capabilities<B: LogStorageBackend + 'static>(
+    info: PluginInfo,
+    backend: B,
+    extra_capabilities: Vec<String>,
+) -> Result<()> {
+    let capabilities = log_storage_capabilities(&backend, &extra_capabilities);
     if parse_manifest_flag() {
         print_manifest_and_exit(&info, &capabilities);
     }
@@ -411,7 +505,24 @@ pub async fn transport_backend_main<B: TransportBackend + 'static>(
     info: PluginInfo,
     backend: B,
 ) -> Result<()> {
-    let capabilities = transport_capabilities(&backend);
+    transport_backend_main_with_capabilities(info, backend, Vec::new()).await
+}
+
+/// Run a transport-backend plugin's stdio JSON-RPC loop, advertising
+/// additional capability strings alongside the runtime-derived defaults.
+///
+/// See [`provider_main_with_capabilities`] for the same pattern applied
+/// to provider backends. Passing an empty vector is exactly equivalent
+/// to calling [`transport_backend_main`].
+///
+/// Added in protocol v0.1.13. Plugins built against v0.1.12 continue to
+/// compile and run unchanged.
+pub async fn transport_backend_main_with_capabilities<B: TransportBackend + 'static>(
+    info: PluginInfo,
+    backend: B,
+    extra_capabilities: Vec<String>,
+) -> Result<()> {
+    let capabilities = transport_capabilities(&backend, &extra_capabilities);
     if parse_manifest_flag() {
         print_manifest_and_exit(&info, &capabilities);
     }
@@ -1358,7 +1469,26 @@ fn encoding_error(method: &str, error: serde_json::Error) -> RpcError {
 // Capability derivation
 // =====================================================================
 
-fn subject_capabilities<B: SubjectBackend>(backend: &B) -> PluginCapabilities {
+/// Append `extras` to `methods`, skipping any entries already present.
+///
+/// The dedup is order-preserving: the first occurrence wins, so a
+/// plugin that accidentally lists a method already advertised by the
+/// runtime (e.g. `agent/run`) keeps the runtime's slot and silently
+/// drops the duplicate. Stable ordering matters because the testkit's
+/// conformance gating reads `init.capabilities.methods` and humans
+/// read it in `--manifest` output.
+fn append_unique_capabilities(methods: &mut Vec<String>, extras: &[String]) {
+    for extra in extras {
+        if !methods.iter().any(|m| m == extra) {
+            methods.push(extra.clone());
+        }
+    }
+}
+
+fn subject_capabilities<B: SubjectBackend>(
+    backend: &B,
+    extra_capabilities: &[String],
+) -> PluginCapabilities {
     let schema = backend.schema();
     let mut methods = vec![
         METHOD_SUBJECT_LIST.to_string(),
@@ -1370,6 +1500,7 @@ fn subject_capabilities<B: SubjectBackend>(backend: &B) -> PluginCapabilities {
     if schema.supports_watch {
         methods.push(METHOD_SUBJECT_WATCH.to_string());
     }
+    append_unique_capabilities(&mut methods, extra_capabilities);
     PluginCapabilities {
         methods,
         streaming: schema.supports_watch,
@@ -1380,7 +1511,10 @@ fn subject_capabilities<B: SubjectBackend>(backend: &B) -> PluginCapabilities {
     }
 }
 
-fn provider_capabilities<P: ProviderBackend>(backend: &P) -> PluginCapabilities {
+fn provider_capabilities<P: ProviderBackend>(
+    backend: &P,
+    extra_capabilities: &[String],
+) -> PluginCapabilities {
     let manifest = backend.manifest();
     let mut methods = vec![METHOD_AGENT_RUN.to_string(), "health/check".to_string()];
     if manifest.capabilities.resume {
@@ -1389,6 +1523,7 @@ fn provider_capabilities<P: ProviderBackend>(backend: &P) -> PluginCapabilities 
     if manifest.capabilities.cancellation {
         methods.push(METHOD_AGENT_CANCEL.to_string());
     }
+    append_unique_capabilities(&mut methods, extra_capabilities);
     PluginCapabilities {
         methods,
         streaming: manifest.capabilities.streaming,
@@ -1399,7 +1534,10 @@ fn provider_capabilities<P: ProviderBackend>(backend: &P) -> PluginCapabilities 
     }
 }
 
-fn trigger_capabilities<B: TriggerBackend>(backend: &B) -> PluginCapabilities {
+fn trigger_capabilities<B: TriggerBackend>(
+    backend: &B,
+    extra_capabilities: &[String],
+) -> PluginCapabilities {
     let schema = backend.schema();
     let mut methods = vec![
         METHOD_TRIGGER_WATCH.to_string(),
@@ -1409,6 +1547,7 @@ fn trigger_capabilities<B: TriggerBackend>(backend: &B) -> PluginCapabilities {
     if schema.supports_ack {
         methods.push(METHOD_TRIGGER_ACK.to_string());
     }
+    append_unique_capabilities(&mut methods, extra_capabilities);
     PluginCapabilities {
         methods,
         // Trigger backends are always streaming — `trigger/watch` is the
@@ -1421,7 +1560,10 @@ fn trigger_capabilities<B: TriggerBackend>(backend: &B) -> PluginCapabilities {
     }
 }
 
-fn log_storage_capabilities<B: LogStorageBackend>(backend: &B) -> PluginCapabilities {
+fn log_storage_capabilities<B: LogStorageBackend>(
+    backend: &B,
+    extra_capabilities: &[String],
+) -> PluginCapabilities {
     let schema = backend.schema();
     let mut methods = vec![
         METHOD_LOG_STORAGE_STORE.to_string(),
@@ -1434,6 +1576,7 @@ fn log_storage_capabilities<B: LogStorageBackend>(backend: &B) -> PluginCapabili
     if schema.supports_tail {
         methods.push(METHOD_LOG_STORAGE_TAIL.to_string());
     }
+    append_unique_capabilities(&mut methods, extra_capabilities);
     PluginCapabilities {
         methods,
         // `streaming` is true only when the backend implements
@@ -1447,14 +1590,18 @@ fn log_storage_capabilities<B: LogStorageBackend>(backend: &B) -> PluginCapabili
     }
 }
 
-fn transport_capabilities<B: TransportBackend>(backend: &B) -> PluginCapabilities {
+fn transport_capabilities<B: TransportBackend>(
+    backend: &B,
+    extra_capabilities: &[String],
+) -> PluginCapabilities {
     let schema = backend.schema();
-    let methods = vec![
+    let mut methods = vec![
         TRANSPORT_METHOD_START.to_string(),
         TRANSPORT_METHOD_SHUTDOWN.to_string(),
         TRANSPORT_METHOD_SCHEMA.to_string(),
         "health/check".to_string(),
     ];
+    append_unique_capabilities(&mut methods, extra_capabilities);
     PluginCapabilities {
         methods,
         // Transport backends advertise streaming when their external
@@ -1627,7 +1774,7 @@ mod tests {
     async fn subject_dispatch_recognizes_kind_slash_verb() {
         let backend = Arc::new(RecordingBackend::new(vec!["task"]));
         let info = test_info("animus-subject-recording");
-        let capabilities = subject_capabilities(&*backend);
+        let capabilities = subject_capabilities(&*backend, &[]);
         let request = RpcRequest::new(json!(1), "task/list", Some(json!({})));
 
         handle_subject_request(request, info, capabilities, backend.clone(), test_stdout()).await;
@@ -1646,7 +1793,7 @@ mod tests {
     async fn subject_dispatch_injects_kind_into_filter() {
         let backend = Arc::new(RecordingBackend::new(vec!["task", "issue"]));
         let info = test_info("animus-subject-multi");
-        let capabilities = subject_capabilities(&*backend);
+        let capabilities = subject_capabilities(&*backend, &[]);
         let request = RpcRequest::new(json!(2), "task/list", Some(json!({})));
 
         handle_subject_request(request, info, capabilities, backend.clone(), test_stdout()).await;
@@ -1664,7 +1811,7 @@ mod tests {
     async fn subject_dispatch_rejects_unknown_verb() {
         let backend = Arc::new(RecordingBackend::new(vec!["task"]));
         let info = test_info("animus-subject-recording");
-        let capabilities = subject_capabilities(&*backend);
+        let capabilities = subject_capabilities(&*backend, &[]);
         let request = RpcRequest::new(json!(3), "task/madeup", Some(json!({})));
 
         // No panic / no backend invocation. We verify the dispatcher does
@@ -1679,7 +1826,7 @@ mod tests {
     async fn subject_dispatch_accepts_legacy_subject_prefix() {
         let backend = Arc::new(RecordingBackend::new(vec!["task"]));
         let info = test_info("animus-subject-recording");
-        let capabilities = subject_capabilities(&*backend);
+        let capabilities = subject_capabilities(&*backend, &[]);
         let request = RpcRequest::new(json!(4), "subject/list", Some(json!({})));
 
         handle_subject_request(request, info, capabilities, backend.clone(), test_stdout()).await;
@@ -2034,5 +2181,240 @@ mod tests {
         // separately verify in the in-process tests above that ordering
         // is preserved.
         forwarder.close().await;
+    }
+
+    // -----------------------------------------------------------------
+    // extra_capabilities extension point (added in protocol v0.1.13).
+    //
+    // The capability helpers must:
+    //   1. Append every extra string to `PluginCapabilities.methods`
+    //      after the runtime-derived defaults.
+    //   2. Deduplicate against the defaults so a plugin that re-lists
+    //      `agent/run` (or similar) doesn't double up.
+    //   3. Preserve insertion order across extras for deterministic
+    //      `--manifest` output.
+    //   4. Be backwards-compatible with an empty extras slice (the
+    //      pre-v0.1.13 default).
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn provider_capabilities_appends_extras() {
+        struct StubProvider;
+
+        #[async_trait]
+        impl ProviderBackend for StubProvider {
+            fn manifest(&self) -> ProviderManifest {
+                ProviderManifest {
+                    name: "stub".into(),
+                    version: "0".into(),
+                    description: "".into(),
+                    supported_models: vec![],
+                    tool: "stub".into(),
+                    capabilities: ProviderCapabilities {
+                        streaming: true,
+                        resume: false,
+                        cancellation: true,
+                        write_capable: false,
+                        mcp: false,
+                    },
+                }
+            }
+            async fn run_agent(
+                &self,
+                _: AgentRunRequest,
+            ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+                Ok(canned_response("x"))
+            }
+            async fn resume_agent(
+                &self,
+                _: AgentResumeRequest,
+            ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+                Ok(canned_response("x"))
+            }
+            async fn cancel_agent(&self, _: &str) -> std::result::Result<(), ProviderBackendError> {
+                Ok(())
+            }
+            async fn health(&self) -> std::result::Result<HealthCheckResult, ProviderBackendError> {
+                Ok(HealthCheckResult {
+                    status: HealthStatus::Healthy,
+                    uptime_ms: None,
+                    memory_usage_bytes: None,
+                    last_error: None,
+                })
+            }
+        }
+
+        let extras = vec![
+            "$harness/cancellation-loop-v2".to_string(),
+            "$harness/oai-style".to_string(),
+        ];
+        let caps = provider_capabilities(&StubProvider, &extras);
+
+        // Defaults still present, in order.
+        assert_eq!(caps.methods[0], METHOD_AGENT_RUN);
+        assert_eq!(caps.methods[1], "health/check");
+        assert_eq!(caps.methods[2], METHOD_AGENT_CANCEL);
+        // Extras appended in declared order.
+        assert_eq!(caps.methods[3], "$harness/cancellation-loop-v2");
+        assert_eq!(caps.methods[4], "$harness/oai-style");
+        assert_eq!(caps.methods.len(), 5);
+    }
+
+    #[test]
+    fn provider_capabilities_dedupes_against_defaults() {
+        struct StubProvider;
+
+        #[async_trait]
+        impl ProviderBackend for StubProvider {
+            fn manifest(&self) -> ProviderManifest {
+                ProviderManifest {
+                    name: "stub".into(),
+                    version: "0".into(),
+                    description: "".into(),
+                    supported_models: vec![],
+                    tool: "stub".into(),
+                    capabilities: ProviderCapabilities::default(),
+                }
+            }
+            async fn run_agent(
+                &self,
+                _: AgentRunRequest,
+            ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+                Ok(canned_response("x"))
+            }
+            async fn resume_agent(
+                &self,
+                _: AgentResumeRequest,
+            ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+                Ok(canned_response("x"))
+            }
+            async fn cancel_agent(&self, _: &str) -> std::result::Result<(), ProviderBackendError> {
+                Ok(())
+            }
+            async fn health(&self) -> std::result::Result<HealthCheckResult, ProviderBackendError> {
+                Ok(HealthCheckResult {
+                    status: HealthStatus::Healthy,
+                    uptime_ms: None,
+                    memory_usage_bytes: None,
+                    last_error: None,
+                })
+            }
+        }
+
+        // `agent/run` collides with the default; should appear exactly
+        // once and keep the runtime's slot.
+        let extras = vec![
+            METHOD_AGENT_RUN.to_string(),
+            "$harness/custom".to_string(),
+            "$harness/custom".to_string(),
+        ];
+        let caps = provider_capabilities(&StubProvider, &extras);
+        let count_run = caps
+            .methods
+            .iter()
+            .filter(|m| *m == METHOD_AGENT_RUN)
+            .count();
+        let count_custom = caps
+            .methods
+            .iter()
+            .filter(|m| *m == "$harness/custom")
+            .count();
+        assert_eq!(count_run, 1, "agent/run must dedupe against default");
+        assert_eq!(count_custom, 1, "duplicate extras must collapse");
+    }
+
+    #[test]
+    fn subject_capabilities_extras_flow_through() {
+        let backend = RecordingBackend::new(vec!["task"]);
+        let extras = vec!["$harness/subject-feature".to_string()];
+        let caps = subject_capabilities(&backend, &extras);
+        assert!(caps
+            .methods
+            .contains(&"$harness/subject-feature".to_string()));
+        // Default capability still in place.
+        assert!(caps.methods.iter().any(|m| m == METHOD_SUBJECT_LIST));
+    }
+
+    #[test]
+    fn capability_helpers_unchanged_when_extras_empty() {
+        // The v0.1.12 baseline: extras=&[] must produce the same method
+        // list (length and contents) as the pre-extension implementation.
+        let backend = RecordingBackend::new(vec!["task"]);
+        let caps = subject_capabilities(&backend, &[]);
+        assert_eq!(
+            caps.methods,
+            vec![
+                METHOD_SUBJECT_LIST.to_string(),
+                METHOD_SUBJECT_GET.to_string(),
+                METHOD_SUBJECT_UPDATE.to_string(),
+                METHOD_SUBJECT_SCHEMA.to_string(),
+                "health/check".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_initialize_response_carries_extra_capabilities() {
+        // End-to-end: the extension point must reach the `initialize`
+        // RPC reply, since that's what the testkit's gating reads. We
+        // construct the response builder directly (the same path
+        // `handle_provider_request` uses) and verify the method appears.
+        struct StubProvider;
+
+        #[async_trait]
+        impl ProviderBackend for StubProvider {
+            fn manifest(&self) -> ProviderManifest {
+                ProviderManifest {
+                    name: "stub".into(),
+                    version: "0".into(),
+                    description: "".into(),
+                    supported_models: vec![],
+                    tool: "stub".into(),
+                    capabilities: ProviderCapabilities::default(),
+                }
+            }
+            async fn run_agent(
+                &self,
+                _: AgentRunRequest,
+            ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+                Ok(canned_response("x"))
+            }
+            async fn resume_agent(
+                &self,
+                _: AgentResumeRequest,
+            ) -> std::result::Result<AgentRunResponse, ProviderBackendError> {
+                Ok(canned_response("x"))
+            }
+            async fn cancel_agent(&self, _: &str) -> std::result::Result<(), ProviderBackendError> {
+                Ok(())
+            }
+            async fn health(&self) -> std::result::Result<HealthCheckResult, ProviderBackendError> {
+                Ok(HealthCheckResult {
+                    status: HealthStatus::Healthy,
+                    uptime_ms: None,
+                    memory_usage_bytes: None,
+                    last_error: None,
+                })
+            }
+        }
+
+        let info = PluginInfo {
+            name: "stub".into(),
+            version: "0".into(),
+            plugin_kind: "provider".into(),
+            description: None,
+        };
+        let extras = vec!["$harness/oai-style".to_string()];
+        let caps = provider_capabilities(&StubProvider, &extras);
+        let response = initialize_response(Some(json!(1)), &info, &caps);
+        let value = response.result.expect("initialize response has result");
+        let methods = value["capabilities"]["methods"]
+            .as_array()
+            .expect("methods array");
+        let advertises = methods.iter().any(|m| m == "$harness/oai-style");
+        assert!(
+            advertises,
+            "initialize response must surface extra capability: {methods:?}"
+        );
     }
 }

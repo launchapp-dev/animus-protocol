@@ -463,6 +463,34 @@ See §2.
 }
 ```
 
+#### 8.6.1 Extra capability strings (v0.1.13)
+
+`methods` is the canonical capability registry: hosts probe it before
+issuing a method, and conformance harnesses gate scenarios on the
+strings it contains. Most entries are wire methods (`agent/run`,
+`subject/list`, …) the plugin promises to implement, but the field also
+acts as a **feature flag namespace**: plugins MAY advertise opt-in
+strings — prefixed `$harness/`, `$host/`, or `$vendor/` — that describe
+host-side capabilities the plugin opts into rather than methods it
+serves. Examples:
+
+- `$harness/cancellation-loop-v2` — provider opts in to the testkit's
+  concurrent-cancel scenario; the harness asserts the run reply
+  surfaces error `-32002` after a mid-flight `agent/cancel`.
+- `$harness/oai-style` — provider opts in to the stateless OpenAI
+  tool-call scenarios; the harness skips `agent/toolResult` assertions
+  these providers cannot honor.
+
+Unknown extras are ignored by hosts that don't recognize them, so this
+namespace is forward-compatible. The runtime crate exposes
+`*_main_with_capabilities` entrypoints for each backend kind
+(`provider`, `subject_backend`, `trigger_backend`,
+`log_storage_backend`, `transport_backend`) — pass extra strings
+through and they appear in this `methods` array after the
+runtime-derived defaults, deduplicated. Plugins built against the older
+`*_main` entrypoints behave as if they passed an empty extras vector;
+this extension point is purely additive.
+
 ### 8.7 `PluginInfo`
 
 ```json
