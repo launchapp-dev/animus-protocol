@@ -294,7 +294,7 @@ Trigger backends are push-driven event sources. The host calls `trigger/watch` o
 
 #### `trigger/watch`
 
-Opens the event stream. The response is sent immediately to acknowledge; subsequent events arrive as `trigger/event` notifications carrying the original request id in `params.id`. Hosts SHOULD only issue one in-flight `trigger/watch` per plugin connection.
+Opens the event stream. The response is sent immediately to acknowledge; subsequent events arrive as `trigger/event` notifications. Hosts SHOULD only issue one in-flight `trigger/watch` per plugin connection.
 
 Params: none. Result: `{ "watching": true }`.
 
@@ -305,28 +305,33 @@ If the backend cannot open its upstream (e.g. missing credentials), it MUST retu
 ```json
 { "jsonrpc": "2.0", "method": "trigger/event",
   "params": {
-    "id": 17,
-    "event": {
-      "id": "slack:T123/C456/1715701234.000100",
-      "occurred_at": "2026-05-14T18:20:34Z",
-      "kind": "slack_mention",
-      "payload": { "user": "U1", "text": "@animus please review" },
-      "subject_id": "linear:ENG-123",
-      "action_hint": "run-workflow:review"
-    }
+    "event_id": "slack:T123/C456/1715701234.000100",
+    "trigger_id": "configured-trigger-id",
+    "payload": {
+      "user": "U1",
+      "text": "@animus please review",
+      "kind": "slack_mention"
+    },
+    "subject_id": "linear:ENG-123",
+    "subject_kind": "issue",
+    "action_hint": "run_workflow"
   }
 }
 ```
 
-`params.id` echoes the originating `trigger/watch` request id so hosts can correlate streams. `params.event` is a [`TriggerEvent`](#111-triggerevent).
+`params` IS the [`TriggerEvent`](#111-triggerevent) struct directly — fields are flat on `params`, not nested under an `event` wrapper. See the wire-shape note below.
 
-Stream-level errors are emitted as `trigger/event` notifications with an `error` field in place of `event`; an error notification terminates the stream.
+Stream-level errors that occur after `trigger/watch` has already been ack'd are emitted as a `trigger/event` notification whose `params` carries a JSON-RPC `error` object in place of the `TriggerEvent` fields (i.e. `{ "jsonrpc": "2.0", "method": "trigger/event", "params": { "error": { "code": ..., "message": "..." } } }`). Such an error notification terminates the stream; the plugin SHOULD then exit or wait for `shutdown`.
+
+##### Wire shape note
+
+`trigger/event` notifications use a **flat** `params` object. The `TriggerEvent` fields (`event_id`, `trigger_id`, `subject_id`, `subject_kind`, `action_hint`, `payload`) live directly on `params`. There is **no** outer `{ "id": <watch-id>, "event": { ... } }` envelope — earlier drafts of this spec showed a nested shape; that wrapper was never implemented by the host and MUST NOT be emitted by plugins. The host deserializes `params` straight into [`TriggerEvent`](#111-triggerevent) (see `crates/orchestrator-daemon-runtime/src/schedule/trigger_supervisor.rs` and `crates/animus-plugin-protocol/src/lib.rs::TriggerEvent` in the `animus-cli` repo). Hosts correlate events with their originating `trigger/watch` per-connection: there is only ever one in-flight watch per plugin connection, so an echo id is unnecessary.
 
 #### `trigger/ack`
 
 Acknowledges an event id so the backend does not redeliver it on resume. Backends that don't track delivery state MAY accept any id (no-op) or MAY respond with `-32001` (`method_not_supported`); hosts must tolerate either.
 
-Params: `{ "event_id": "..." }`. Result: `{ "event_id": "...", "acked": true }`.
+Params: `{ "event_id": "..." }`. The `event_id` is the value the host received in a prior `trigger/event` notification's `params.event_id`, echoed back verbatim. Result: `{ "event_id": "...", "acked": true }`.
 
 #### `trigger/schema`
 
@@ -718,19 +723,29 @@ After streaming, the plugin emits the final `AgentRunResponse` as the response t
 
 ```json
 {
-  "id": "slack:T123/C456/1715701234.000100",
-  "occurred_at": "2026-05-14T18:20:34Z",
-  "kind": "slack_mention",
-  "payload": { "user": "U1", "text": "@animus please review" },
+  "event_id": "slack:T123/C456/1715701234.000100",
+  "trigger_id": "configured-trigger-id",
+  "payload": {
+    "user": "U1",
+    "text": "@animus please review",
+    "kind": "slack_mention"
+  },
   "subject_id": "linear:ENG-123",
-  "action_hint": "run-workflow:review"
+  "subject_kind": "issue",
+  "action_hint": "run_workflow"
 }
 ```
 
-- `id` MUST be stable for a given upstream event so hosts can deduplicate on restart. Backends that cannot produce a natural id SHOULD synthesize one (e.g. `kind + occurred_at + payload-hash`).
-- `kind` is opaque to the host; workflow YAML matches on it. Convention is `"<backend>_<event>"`.
-- `payload` is trigger-specific; the host treats it as opaque and exposes it to workflows via templating (e.g. `{{trigger.payload.user}}`).
-- `subject_id` and `action_hint` are optional. `subject_id` MUST be backend-prefixed when present (see §9.3).
+This is the flat object emitted on the wire as the `params` of every [`trigger/event`](#triggerevent-notification) notification — there is no `{ id, event }` wrapper. Field-by-field, mirroring `crates/animus-plugin-protocol/src/lib.rs::TriggerEvent` in the `animus-cli` repo:
+
+- `event_id` (string, **required**): unique event id assigned by the plugin. Used by the host to send back [`trigger/ack`](#triggerack). Plugins SHOULD make this stable across restarts when possible so duplicate deliveries can be deduplicated.
+- `trigger_id` (string, optional): logical trigger id this event belongs to. Matches the `id` of a `WorkflowTrigger` in the project's workflow YAML. Omitted when the plugin emits free-floating events not bound to a specific configured trigger.
+- `subject_id` (string, optional): subject this event refers to (e.g. `"linear:ENG-123"`). When set, the host MAY resolve the subject via its configured subject backend and kick the subject's assigned workflow. MUST be backend-prefixed when present (see §9.3).
+- `subject_kind` (string, optional): subject kind for `subject_id` (e.g. `"issue"`, `"task"`). Helps the host route to the correct subject backend without re-parsing the id prefix.
+- `action_hint` (string, optional): hint for what the host should do. Wire form is a snake_case string; known values are `"create_task"` and `"run_workflow"`. Unknown values round-trip verbatim so older hosts can still forward events from newer plugins. Plugins MAY omit this and let the host fall back to the trigger config's `workflow_ref`.
+- `payload` (object, **required**, defaults to `{}` when absent): trigger-specific event body. The host treats it as opaque and exposes it to workflows via templating (e.g. `{{trigger.payload.user}}`). Plugins SHOULD include any "kind" / event-type signal inside `payload` (e.g. `payload.kind`) rather than as a top-level `TriggerEvent` field; the host does not inspect a top-level `kind`.
+
+Omitted optional fields MUST NOT appear in the wire form (serializers `skip_serializing_if = "Option::is_none"`).
 
 ### 11.2 `TriggerSchema`
 
@@ -743,9 +758,9 @@ After streaming, the plugin emits the final `AgentRunResponse` as the response t
 }
 ```
 
-- `kinds`: every `kind` value the backend may emit. Hosts MAY surface this to workflow authors for autocompletion.
+- `kinds`: every `kind` value the backend may emit (recorded inside `TriggerEvent.payload`, not as a top-level `TriggerEvent` field — see §11.1). Hosts MAY surface this to workflow authors for autocompletion.
 - `supports_resume`: backend honors a delivery cursor across `trigger/watch` reconnects. Backends without resume re-emit only events occurring after `trigger/watch`.
-- `supports_dedup`: backend re-emits the same [`TriggerEvent::id`] for a re-seen event. Hosts may use this to skip their own dedup table.
+- `supports_dedup`: backend re-emits the same [`TriggerEvent.event_id`](#111-triggerevent) for a re-seen event. Hosts may use this to skip their own dedup table.
 - `supports_ack`: backend implements `trigger/ack`. Hosts skip the call when `false`.
 
 ## 12. Log storage types
