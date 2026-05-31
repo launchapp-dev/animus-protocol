@@ -39,25 +39,76 @@ pub const METHOD_WORKFLOW_RUN_PHASE: &str = "workflow/run_phase";
 
 /// Per-crate semver protocol version. Reported via
 /// [`animus_plugin_protocol::KindCapability::crate_version`].
-pub const PROTOCOL_VERSION: &str = "0.1.0";
+pub const PROTOCOL_VERSION: &str = "0.2.0";
 
 // =====================================================================
 // Status vocabulary (referenced from string fields below).
 // =====================================================================
 
 /// Allowed values for [`WorkflowExecuteResult::workflow_status`].
+///
+/// Additive vocabulary policy: consumers MUST default-match unknown status
+/// strings to [`RUNNING`] semantics so older clients continue to behave
+/// safely when newer runners emit values they have not learned yet. New
+/// constants since v0.2.0: [`PAUSED`] and [`PENDING`].
 pub mod workflow_status {
     /// Workflow completed all phases successfully.
     pub const COMPLETED: &str = "completed";
     /// Workflow is still running (returned only when a single phase was
     /// requested or the workflow paused mid-stream).
     pub const RUNNING: &str = "running";
+    /// Workflow is paused for a manual gate; the host MUST NOT advance it.
+    /// Added in protocol v0.2.0.
+    pub const PAUSED: &str = "paused";
+    /// Workflow is queued but has not yet started. Added in protocol
+    /// v0.2.0.
+    pub const PENDING: &str = "pending";
     /// Workflow failed in a terminal way.
     pub const FAILED: &str = "failed";
     /// Workflow was escalated to a human reviewer.
     pub const ESCALATED: &str = "escalated";
     /// Workflow was cancelled by the host or by an upstream signal.
     pub const CANCELLED: &str = "cancelled";
+
+    /// Parsed workflow status, including an `Unknown` fallback so callers
+    /// can default-match forward-compatible wire values without losing the
+    /// original string.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Parsed {
+        /// [`COMPLETED`]
+        Completed,
+        /// [`RUNNING`]
+        Running,
+        /// [`PAUSED`]
+        Paused,
+        /// [`PENDING`]
+        Pending,
+        /// [`FAILED`]
+        Failed,
+        /// [`ESCALATED`]
+        Escalated,
+        /// [`CANCELLED`]
+        Cancelled,
+        /// Wire value not recognized by this version of the protocol crate.
+        /// Consumers SHOULD treat this as [`Parsed::Running`] for safety.
+        Unknown(String),
+    }
+
+    /// Parse a wire status string into [`Parsed`]. Unknown strings round-
+    /// trip via [`Parsed::Unknown`] rather than erroring; this is the
+    /// additive-vocabulary contract.
+    pub fn parse(s: &str) -> Parsed {
+        match s {
+            COMPLETED => Parsed::Completed,
+            RUNNING => Parsed::Running,
+            PAUSED => Parsed::Paused,
+            PENDING => Parsed::Pending,
+            FAILED => Parsed::Failed,
+            ESCALATED => Parsed::Escalated,
+            CANCELLED => Parsed::Cancelled,
+            other => Parsed::Unknown(other.to_string()),
+        }
+    }
 }
 
 /// Allowed values for [`PhaseResultSnapshot::status`] /
@@ -283,6 +334,11 @@ pub struct WorkflowPhaseRunRequest {
     /// Phase routing config (opaque).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_routing: Option<Value>,
+    /// Opaque MCP runtime config — same shape as
+    /// [`WorkflowExecuteRequest::mcp_config`]. Lets phase-level retries
+    /// pass MCP server config to the agent runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_config: Option<Value>,
 }
 
 /// Result of [`METHOD_WORKFLOW_RUN_PHASE`].
@@ -394,6 +450,47 @@ mod tests {
         let back: WorkflowExecuteRequest = serde_json::from_value(v).unwrap();
         assert_eq!(back.task_id.as_deref(), Some("TASK-1"));
         assert_eq!(back.workflow_ref.as_deref(), Some("standard"));
+    }
+
+    #[test]
+    fn workflow_status_parse_recognizes_v02_additions() {
+        use workflow_status::{parse, Parsed};
+        assert_eq!(parse("paused"), Parsed::Paused);
+        assert_eq!(parse("pending"), Parsed::Pending);
+        assert_eq!(parse("running"), Parsed::Running);
+        assert_eq!(parse("completed"), Parsed::Completed);
+        match parse("future-value") {
+            Parsed::Unknown(s) => assert_eq!(s, "future-value"),
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn phase_run_request_carries_mcp_config() {
+        let req = WorkflowPhaseRunRequest {
+            execution_cwd: "/tmp".into(),
+            workflow_id: "wf_1".into(),
+            workflow_ref: "standard".into(),
+            subject_id: "TASK-1".into(),
+            subject_title: "t".into(),
+            subject_description: "d".into(),
+            phase_id: "impl".into(),
+            phase_attempt: 0,
+            phase_timeout_secs: None,
+            model_override: None,
+            tool_override: None,
+            task_complexity: None,
+            rework_context: None,
+            pipeline_vars: HashMap::new(),
+            dispatch_input: None,
+            schedule_input: None,
+            phase_routing: None,
+            mcp_config: Some(serde_json::json!({"servers": []})),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("mcp_config").is_some());
+        let back: WorkflowPhaseRunRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(back.mcp_config, req.mcp_config);
     }
 
     #[test]

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 pub const KIND: &str = "queue";
 
 /// Per-crate semver protocol version.
-pub const PROTOCOL_VERSION: &str = "0.1.0";
+pub const PROTOCOL_VERSION: &str = "0.2.0";
 
 /// Add a dispatch to the queue.
 pub const METHOD_QUEUE_ENQUEUE: &str = "queue/enqueue";
@@ -51,6 +51,11 @@ pub const METHOD_QUEUE_MARK_ASSIGNED: &str = "queue/mark_assigned";
 /// Notify the queue that a workflow has reached a terminal state so the
 /// queue can prune the corresponding assigned entry.
 pub const METHOD_QUEUE_COMPLETION: &str = "queue/completion";
+/// Return an Assigned entry back to Pending without canceling it (used
+/// when the daemon discovers the subject is already being worked on by
+/// another in-flight lease). Distinct from [`METHOD_QUEUE_RELEASE`] which
+/// targets a Held entry.
+pub const METHOD_QUEUE_RELEASE_PENDING: &str = "queue/release_pending";
 
 // =====================================================================
 // Status vocabulary
@@ -248,6 +253,24 @@ pub struct QueueMarkAssignedRequest {
     pub workflow_id: Option<String>,
 }
 
+/// Request for [`METHOD_QUEUE_RELEASE_PENDING`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct QueueReleasePendingParams {
+    /// Entry id to return to Pending.
+    pub entry_id: String,
+    /// Audit reason describing why the entry is being released back.
+    pub reason: String,
+}
+
+/// Response for [`METHOD_QUEUE_RELEASE_PENDING`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct QueueReleasePendingResponse {
+    /// Entry id whose status was changed.
+    pub entry_id: String,
+    /// New status — always [`status::PENDING`] on success.
+    pub status: String,
+}
+
 /// Request for [`METHOD_QUEUE_COMPLETION`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueCompletionRequest {
@@ -303,6 +326,10 @@ pub mod error_codes {
     pub const QUEUE_LEASE_WORKFLOW_ID_COUNT_MISMATCH: i32 = -32206;
     /// Project root mismatch.
     pub const PROJECT_BINDING_MISMATCH: i32 = -32207;
+    /// Entry was not in Assigned status (e.g., `release_pending` on a
+    /// pending or held entry). The error `data` payload SHOULD include the
+    /// entry's actual status.
+    pub const QUEUE_ENTRY_NOT_ASSIGNED: i32 = -32208;
 }
 
 #[cfg(test)]
@@ -318,6 +345,25 @@ mod tests {
         };
         let v = serde_json::to_value(&r).unwrap();
         let back: QueueEnqueueResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn release_pending_round_trips() {
+        let p = QueueReleasePendingParams {
+            entry_id: "ent_1".into(),
+            reason: "duplicate-in-flight".into(),
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        let back: QueueReleasePendingParams = serde_json::from_value(v).unwrap();
+        assert_eq!(back, p);
+
+        let r = QueueReleasePendingResponse {
+            entry_id: "ent_1".into(),
+            status: status::PENDING.into(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        let back: QueueReleasePendingResponse = serde_json::from_value(v).unwrap();
         assert_eq!(back, r);
     }
 
