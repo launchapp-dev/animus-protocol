@@ -1,24 +1,18 @@
 [package]
 name = "animus-plugin-runtime"
-description = "Shared stdio JSON-RPC loop + handshake helpers for Animus plugins. Used by all plugin authors."
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-authors.workspace = true
-homepage.workspace = true
-repository.workspace = true
-readme.workspace = true
+version = "0.1.14"
+edition = "2021"
+
+[lib]
+name = "animus_plugin_runtime"
+path = "src/lib.rs"
 
 [dependencies]
-animus-plugin-protocol = { path = "../animus-plugin-protocol", version = "0.1.12" }
-animus-subject-protocol = { path = "../animus-subject-protocol", version = "0.1.12" }
-animus-provider-protocol = { path = "../animus-provider-protocol", version = "0.1.12" }
-animus-trigger-protocol = { path = "../animus-trigger-protocol", version = "0.1.12" }
-animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.12" }
-animus-transport-protocol = { path = "../animus-transport-protocol", version = "0.1.12" }
-serde.workspace = true
-serde_json.workspace = true
-tokio.workspace = true
-anyhow.workspace = true
-async-trait.workspace = true
-futures-core.workspace = true
+anyhow = "1"
+async-trait = "0.1"
+animus-session-backend = { path = "../animus-session-backend" }
+animus-plugin-protocol = { path = "../animus-plugin-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync"] }
+tracing = "0.1"
