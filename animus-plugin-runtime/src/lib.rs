@@ -24,8 +24,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use animus_plugin_protocol::{
-    error_codes, HealthCheckResult, HealthStatus, InitializeResult, PluginCapabilities, PluginInfo, PluginManifest,
-    RpcError, RpcNotification, RpcRequest, RpcResponse, PROTOCOL_VERSION,
+    error_codes, HealthCheckResult, HealthStatus, InitializeResult, PluginCapabilities, PluginInfo,
+    PluginManifest, RpcError, RpcNotification, RpcRequest, RpcResponse, PROTOCOL_VERSION,
 };
 use animus_session_backend::session::{
     session_backend::SessionBackend, session_event::SessionEvent, session_request::SessionRequest,
@@ -91,6 +91,13 @@ impl ProviderInfo {
                 subject_kinds: Vec::new(),
                 mcp_tools: Vec::new(),
             },
+            // v0.5: leave kind_capabilities empty by default. Provider plugins
+            // built against this generic runner do not declare per-kind
+            // capability blobs; they advertise their methods via
+            // `capabilities.methods` instead. New plugin kinds (workflow_runner,
+            // queue, durable_store, memory_store) write their own
+            // initialize_result and populate this field directly.
+            kind_capabilities: std::collections::HashMap::new(),
         }
     }
 }
@@ -138,7 +145,9 @@ pub trait ProviderBackend: Send + Sync + 'static {
         &self,
         request: SessionRequest,
         resume_session: Option<&str>,
-    ) -> animus_session_backend::error::Result<animus_session_backend::session::session_run::SessionRun>;
+    ) -> animus_session_backend::error::Result<
+        animus_session_backend::session::session_run::SessionRun,
+    >;
 
     async fn cancel(&self, session_id: &str) -> animus_session_backend::error::Result<()>;
 }
@@ -160,7 +169,9 @@ impl ProviderBackend for SessionBackendProvider {
         &self,
         request: SessionRequest,
         resume_session: Option<&str>,
-    ) -> animus_session_backend::error::Result<animus_session_backend::session::session_run::SessionRun> {
+    ) -> animus_session_backend::error::Result<
+        animus_session_backend::session::session_run::SessionRun,
+    > {
         match resume_session {
             Some(sid) => self.backend.resume_session(request, sid).await,
             None => self.backend.start_session(request).await,
@@ -177,7 +188,10 @@ pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) ->
     handle_cli_args(&info);
 
     if io::stdin().is_terminal() {
-        eprintln!("{} is a STDIO plugin; pipe JSON-RPC on stdin or pass --manifest", info.plugin_name);
+        eprintln!(
+            "{} is a STDIO plugin; pipe JSON-RPC on stdin or pass --manifest",
+            info.plugin_name
+        );
         std::process::exit(2);
     }
 
@@ -215,10 +229,19 @@ fn handle_cli_args(info: &ProviderInfo) {
         match arg.as_str() {
             "--manifest" | "-m" => print_manifest_and_exit(info),
             "--help" | "-h" => {
-                eprintln!("{} {} — STDIO provider plugin for Animus", info.plugin_name, info.plugin_version);
+                eprintln!(
+                    "{} {} — STDIO provider plugin for Animus",
+                    info.plugin_name, info.plugin_version
+                );
                 eprintln!("Usage:");
-                eprintln!("  {} --manifest    Print plugin manifest as JSON and exit", info.plugin_name);
-                eprintln!("  {}               Run JSON-RPC loop on stdin/stdout", info.plugin_name);
+                eprintln!(
+                    "  {} --manifest    Print plugin manifest as JSON and exit",
+                    info.plugin_name
+                );
+                eprintln!(
+                    "  {}               Run JSON-RPC loop on stdin/stdout",
+                    info.plugin_name
+                );
                 std::process::exit(0);
             }
             _ => {}
@@ -228,7 +251,11 @@ fn handle_cli_args(info: &ProviderInfo) {
 
 fn print_manifest_and_exit(info: &ProviderInfo) -> ! {
     let mut stdout = io::stdout().lock();
-    let _ = writeln!(stdout, "{}", serde_json::to_string(&info.manifest()).expect("serialize manifest"));
+    let _ = writeln!(
+        stdout,
+        "{}",
+        serde_json::to_string(&info.manifest()).expect("serialize manifest")
+    );
     let _ = stdout.flush();
     std::process::exit(0);
 }
@@ -272,7 +299,17 @@ async fn handle_request<P: ProviderBackend>(
                 ),
             },
         ),
-        "agent/run" => Some(handle_agent_run(id, request.params, &info, backend.clone(), stdout.clone(), None).await),
+        "agent/run" => Some(
+            handle_agent_run(
+                id,
+                request.params,
+                &info,
+                backend.clone(),
+                stdout.clone(),
+                None,
+            )
+            .await,
+        ),
         "agent/resume" => {
             let resume_session = request
                 .params
@@ -280,9 +317,21 @@ async fn handle_request<P: ProviderBackend>(
                 .and_then(|p| p.get("session_id"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
-            Some(handle_agent_run(id, request.params, &info, backend.clone(), stdout.clone(), resume_session).await)
+            Some(
+                handle_agent_run(
+                    id,
+                    request.params,
+                    &info,
+                    backend.clone(),
+                    stdout.clone(),
+                    resume_session,
+                )
+                .await,
+            )
         }
-        "agent/cancel" => Some(handle_agent_cancel(id, request.params, backend.clone(), &info).await),
+        "agent/cancel" => {
+            Some(handle_agent_cancel(id, request.params, backend.clone(), &info).await)
+        }
         "shutdown" => Some(RpcResponse::ok(id, json!({}))),
         "exit" => std::process::exit(0),
         other if other.starts_with("$/") => None,
@@ -310,7 +359,11 @@ async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<tokio::io::Stdout>>
     }
 }
 
-async fn send_notification(stdout: &Arc<Mutex<tokio::io::Stdout>>, method: impl Into<String>, params: Value) {
+async fn send_notification(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    method: impl Into<String>,
+    params: Value,
+) {
     let notification = RpcNotification::new(method, Some(params));
     write_frame(stdout, &notification).await;
 }
@@ -323,18 +376,21 @@ async fn handle_agent_run<P: ProviderBackend>(
     stdout: Arc<Mutex<tokio::io::Stdout>>,
     resume_session: Option<String>,
 ) -> RpcResponse {
-    let params: AgentRunParams = match params.ok_or_else(|| invalid_params("missing params for agent/run")) {
-        Ok(p) => match serde_json::from_value::<AgentRunParams>(p) {
-            Ok(parsed) => parsed,
-            Err(error) => return invalid_rpc(id, format!("invalid agent/run params: {error}")),
-        },
-        Err(error) => return error_rpc(id, error),
-    };
+    let params: AgentRunParams =
+        match params.ok_or_else(|| invalid_params("missing params for agent/run")) {
+            Ok(p) => match serde_json::from_value::<AgentRunParams>(p) {
+                Ok(parsed) => parsed,
+                Err(error) => return invalid_rpc(id, format!("invalid agent/run params: {error}")),
+            },
+            Err(error) => return error_rpc(id, error),
+        };
 
     let session_request = build_session_request(info, params);
     let started_at = Instant::now();
 
-    let run_result = backend.start(session_request, resume_session.as_deref()).await;
+    let run_result = backend
+        .start(session_request, resume_session.as_deref())
+        .await;
     let mut run = match run_result {
         Ok(run) => run,
         Err(error) => {
@@ -363,7 +419,12 @@ async fn handle_agent_run<P: ProviderBackend>(
         match event {
             SessionEvent::Started { .. } => {}
             SessionEvent::TextDelta { text } => {
-                send_notification(&stdout, "agent/output", json!({ "text": text, "session_id": session_id })).await;
+                send_notification(
+                    &stdout,
+                    "agent/output",
+                    json!({ "text": text, "session_id": session_id }),
+                )
+                .await;
                 output.push_str(&text);
             }
             SessionEvent::FinalText { text } => {
@@ -379,10 +440,19 @@ async fn handle_agent_run<P: ProviderBackend>(
                 output.push_str(&text);
             }
             SessionEvent::Thinking { text } => {
-                send_notification(&stdout, "agent/thinking", json!({ "text": text, "session_id": session_id })).await;
+                send_notification(
+                    &stdout,
+                    "agent/thinking",
+                    json!({ "text": text, "session_id": session_id }),
+                )
+                .await;
                 thinking.push(text);
             }
-            SessionEvent::ToolCall { tool_name, arguments, server } => {
+            SessionEvent::ToolCall {
+                tool_name,
+                arguments,
+                server,
+            } => {
                 send_notification(
                     &stdout,
                     "agent/toolCall",
@@ -394,9 +464,14 @@ async fn handle_agent_run<P: ProviderBackend>(
                     }),
                 )
                 .await;
-                tool_calls.push(json!({ "tool": tool_name, "arguments": arguments, "server": server }));
+                tool_calls
+                    .push(json!({ "tool": tool_name, "arguments": arguments, "server": server }));
             }
-            SessionEvent::ToolResult { tool_name, output: tool_output, success } => {
+            SessionEvent::ToolResult {
+                tool_name,
+                output: tool_output,
+                success,
+            } => {
                 send_notification(
                     &stdout,
                     "agent/toolResult",
@@ -408,13 +483,20 @@ async fn handle_agent_run<P: ProviderBackend>(
                     }),
                 )
                 .await;
-                tool_results.push(json!({ "tool": tool_name, "output": tool_output, "success": success }));
+                tool_results
+                    .push(json!({ "tool": tool_name, "output": tool_output, "success": success }));
             }
-            SessionEvent::Artifact { artifact_id, metadata: m } => {
+            SessionEvent::Artifact {
+                artifact_id,
+                metadata: m,
+            } => {
                 metadata.push(json!({ "artifact_id": artifact_id, "metadata": m }));
             }
             SessionEvent::Metadata { metadata: m } => metadata.push(m),
-            SessionEvent::Error { message, recoverable } => {
+            SessionEvent::Error {
+                message,
+                recoverable,
+            } => {
                 send_notification(
                     &stdout,
                     "agent/error",
@@ -455,7 +537,9 @@ async fn handle_agent_cancel<P: ProviderBackend>(
     backend: Arc<P>,
     info: &ProviderInfo,
 ) -> RpcResponse {
-    let params: AgentCancelParams = match params.ok_or_else(|| invalid_params("missing params for agent/cancel")) {
+    let params: AgentCancelParams = match params
+        .ok_or_else(|| invalid_params("missing params for agent/cancel"))
+    {
         Ok(p) => match serde_json::from_value::<AgentCancelParams>(p) {
             Ok(parsed) => parsed,
             Err(error) => return invalid_rpc(id, format!("invalid agent/cancel params: {error}")),
@@ -464,7 +548,10 @@ async fn handle_agent_cancel<P: ProviderBackend>(
     };
 
     match backend.cancel(&params.session_id).await {
-        Ok(()) => RpcResponse::ok(id, json!({ "session_id": params.session_id, "cancelled": true })),
+        Ok(()) => RpcResponse::ok(
+            id,
+            json!({ "session_id": params.session_id, "cancelled": true }),
+        ),
         Err(error) => error_rpc(
             id,
             RpcError {
@@ -502,7 +589,9 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
 
     SessionRequest {
         tool: info.default_tool.to_string(),
-        model: params.model.unwrap_or_else(|| info.default_model.to_string()),
+        model: params
+            .model
+            .unwrap_or_else(|| info.default_model.to_string()),
         prompt: params.prompt,
         cwd: params.cwd,
         project_root: params.project_root,
@@ -515,11 +604,22 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
 }
 
 fn invalid_params(message: impl Into<String>) -> RpcError {
-    RpcError { code: error_codes::INVALID_PARAMS, message: message.into(), data: None }
+    RpcError {
+        code: error_codes::INVALID_PARAMS,
+        message: message.into(),
+        data: None,
+    }
 }
 
 fn invalid_rpc(id: Option<Value>, message: impl Into<String>) -> RpcResponse {
-    RpcResponse::err(id, RpcError { code: error_codes::INVALID_PARAMS, message: message.into(), data: None })
+    RpcResponse::err(
+        id,
+        RpcError {
+            code: error_codes::INVALID_PARAMS,
+            message: message.into(),
+            data: None,
+        },
+    )
 }
 
 fn error_rpc(id: Option<Value>, error: RpcError) -> RpcResponse {

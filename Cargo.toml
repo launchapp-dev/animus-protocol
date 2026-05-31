@@ -9,6 +9,10 @@ members = [
     "animus-control-protocol",
     "animus-plugin-runtime",
     "animus-session-backend",
+    "animus-workflow-runner-protocol",
+    "animus-queue-protocol",
+    "animus-durable-store-protocol",
+    "animus-memory-store-protocol",
 ]
 resolver = "2"
 

@@ -1,0 +1,15 @@
+[package]
+name = "animus-memory-store-protocol"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Launchapp.dev"]
+homepage = "https://github.com/launchapp-dev/animus-cli"
+repository = "https://github.com/launchapp-dev/animus-protocol"
+description = "Agent memory store plugin-kind protocol types for Animus v0.5 (persistent semantic memory across runs / agents / tasks)."
+
+[dependencies]
+animus-plugin-protocol = { path = "../animus-plugin-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.0" }

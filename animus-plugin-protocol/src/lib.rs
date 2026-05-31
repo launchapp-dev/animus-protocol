@@ -37,7 +37,7 @@ use serde_json::Value;
 /// declares its own in [`InitializeParams::protocol_version`]. A plugin and
 /// host with the same major version are compatible. See `spec.md` for the
 /// full versioning policy.
-pub const PROTOCOL_VERSION: &str = "1.0.0";
+pub const PROTOCOL_VERSION: &str = "1.1.0";
 
 /// Plugin kind for LLM provider plugins (Claude, Codex, Gemini, OpenAI-compat,
 /// on-prem, ...).
@@ -115,6 +115,37 @@ pub const LOG_STORAGE_METHOD_TAIL: &str = "log_storage/tail";
 /// the `animus.plugin.call` MCP tool.
 pub const PLUGIN_KIND_CUSTOM: &str = "custom";
 
+/// Plugin kind for workflow runner plugins (v0.5).
+///
+/// Workflow runners execute Animus workflow YAML by orchestrating phases,
+/// evaluating decision contracts, handling rework loops, and applying
+/// post-success actions. See `animus-workflow-runner-protocol` for the
+/// typed RPC surface (`workflow/execute`, `workflow/run_phase`).
+pub const PLUGIN_KIND_WORKFLOW_RUNNER: &str = "workflow_runner";
+
+/// Plugin kind for queue backend plugins (v0.5).
+///
+/// Queue plugins own a per-project priority FIFO of `SubjectDispatch`
+/// envelopes awaiting scheduling. See `animus-queue-protocol` for the typed
+/// RPC surface (`queue/enqueue`, `queue/lease`, `queue/list`, etc.).
+pub const PLUGIN_KIND_QUEUE: &str = "queue";
+
+/// Plugin kind for durable execution / step checkpointing plugins (v0.5).
+///
+/// Durable stores provide reservation-fenced step persistence so the daemon
+/// can recover from crashes without re-executing already-committed side
+/// effects. See `animus-durable-store-protocol` for the typed RPC surface
+/// (`durable/begin_step`, `durable/commit_step`, `durable/recover_in_flight`,
+/// etc.).
+pub const PLUGIN_KIND_DURABLE_STORE: &str = "durable_store";
+
+/// Plugin kind for agent memory store plugins (v0.5).
+///
+/// Memory stores provide persistent semantic memory across runs / agents /
+/// tasks. See `animus-memory-store-protocol` for the typed RPC surface
+/// (`memory/put`, `memory/get`, `memory/query`, etc.).
+pub const PLUGIN_KIND_MEMORY_STORE: &str = "memory_store";
+
 /// Strongly typed enumeration of plugin roles.
 ///
 /// The set of well-known kinds is captured here so callers can pattern-match
@@ -148,6 +179,15 @@ pub enum PluginKind {
     WebUi,
     /// Generic custom plugin. See [`PLUGIN_KIND_CUSTOM`].
     Custom,
+    /// Workflow runner plugin (v0.5). See [`PLUGIN_KIND_WORKFLOW_RUNNER`].
+    WorkflowRunner,
+    /// Queue backend plugin (v0.5). See [`PLUGIN_KIND_QUEUE`].
+    Queue,
+    /// Durable execution / step checkpointing plugin (v0.5).
+    /// See [`PLUGIN_KIND_DURABLE_STORE`].
+    DurableStore,
+    /// Agent memory store plugin (v0.5). See [`PLUGIN_KIND_MEMORY_STORE`].
+    MemoryStore,
     /// Any kind not understood by this crate version. Preserves the wire
     /// string so unknown roles round-trip and so hosts that recognize the
     /// role can still dispatch on the string.
@@ -166,6 +206,10 @@ impl PluginKind {
             PluginKind::TransportBackend => PLUGIN_KIND_TRANSPORT_BACKEND,
             PluginKind::WebUi => PLUGIN_KIND_WEB_UI,
             PluginKind::Custom => PLUGIN_KIND_CUSTOM,
+            PluginKind::WorkflowRunner => PLUGIN_KIND_WORKFLOW_RUNNER,
+            PluginKind::Queue => PLUGIN_KIND_QUEUE,
+            PluginKind::DurableStore => PLUGIN_KIND_DURABLE_STORE,
+            PluginKind::MemoryStore => PLUGIN_KIND_MEMORY_STORE,
             PluginKind::Other(value) => value.as_str(),
         }
     }
@@ -197,6 +241,10 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_TRANSPORT_BACKEND => PluginKind::TransportBackend,
             PLUGIN_KIND_WEB_UI => PluginKind::WebUi,
             PLUGIN_KIND_CUSTOM => PluginKind::Custom,
+            PLUGIN_KIND_WORKFLOW_RUNNER => PluginKind::WorkflowRunner,
+            PLUGIN_KIND_QUEUE => PluginKind::Queue,
+            PLUGIN_KIND_DURABLE_STORE => PluginKind::DurableStore,
+            PLUGIN_KIND_MEMORY_STORE => PluginKind::MemoryStore,
             _ => PluginKind::Other(value),
         }
     }
@@ -291,7 +339,12 @@ pub struct RpcRequest {
 impl RpcRequest {
     /// Build a request with the given id, method, and optional params.
     pub fn new(id: impl Into<Value>, method: impl Into<String>, params: Option<Value>) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id: Some(id.into()), method: method.into(), params }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: Some(id.into()),
+            method: method.into(),
+            params,
+        }
     }
 }
 
@@ -315,7 +368,11 @@ pub struct RpcNotification {
 impl RpcNotification {
     /// Build a notification with the given method and optional params.
     pub fn new(method: impl Into<String>, params: Option<Value>) -> Self {
-        Self { jsonrpc: "2.0".to_string(), method: method.into(), params }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            method: method.into(),
+            params,
+        }
     }
 }
 
@@ -342,12 +399,22 @@ pub struct RpcResponse {
 impl RpcResponse {
     /// Build a successful response carrying the given result value.
     pub fn ok(id: Option<Value>, result: Value) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     /// Build an error response carrying the given error payload.
     pub fn err(id: Option<Value>, error: RpcError) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id, result: None, error: Some(error) }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: None,
+            error: Some(error),
+        }
     }
 }
 
@@ -488,13 +555,25 @@ pub struct InitializeParams {
     pub host_info: HostInfo,
     /// Capabilities the host promises to honor.
     pub capabilities: HostCapabilities,
+    /// Forward-compatible per-extension blobs the host may pass on initialize.
+    ///
+    /// v0.5 uses this for `project_binding` (the project root the plugin
+    /// process is bound to for its lifetime). Plugins ignore extensions they
+    /// don't recognize; hosts SHOULD only populate extensions a plugin's
+    /// declared protocol version is known to understand.
+    ///
+    /// Defaults to empty for back-compat with v1.0.0 hosts.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub init_extensions: std::collections::HashMap<String, Value>,
 }
 
 /// Plugin's response to `initialize`.
 ///
 /// The host inspects `protocol_version` for compatibility and stores
-/// `capabilities` for the lifetime of the plugin connection so it can avoid
-/// calling unsupported methods.
+/// `capabilities` (the legacy method allowlist) and `kind_capabilities`
+/// (the typed per-kind capability map introduced in v1.1.0) for the
+/// lifetime of the plugin connection so it can avoid calling unsupported
+/// methods.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InitializeResult {
     /// Protocol version the plugin speaks. See [`PROTOCOL_VERSION`].
@@ -503,6 +582,35 @@ pub struct InitializeResult {
     pub plugin_info: PluginInfo,
     /// Capabilities the plugin advertises.
     pub capabilities: PluginCapabilities,
+    /// Typed per-kind capability map introduced in protocol v1.1.0.
+    ///
+    /// Keyed by `PLUGIN_KIND_*` string. Each value declares the per-kind
+    /// protocol crate version the plugin was built against plus backend-
+    /// specific capability flags via [`KindCapability::extra`]. v1.0.0
+    /// plugins leave this empty; v1.1.0+ plugins populate one entry per
+    /// kind they implement (most plugins implement a single kind).
+    ///
+    /// Defaults to empty for back-compat with v1.0.0 plugins.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub kind_capabilities: std::collections::HashMap<String, KindCapability>,
+}
+
+/// Typed per-kind capability declaration carried in
+/// [`InitializeResult::kind_capabilities`].
+///
+/// Each new plugin-kind protocol crate (e.g.,
+/// `animus-workflow-runner-protocol`) defines a strongly-typed Capabilities
+/// struct (e.g., `WorkflowRunnerCapabilities`) which serializes into the
+/// [`KindCapability::extra`] field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct KindCapability {
+    /// Per-kind protocol crate semver the plugin was built against, e.g.
+    /// `"0.1.0"`. Hosts use the major component for compatibility checks.
+    pub crate_version: String,
+    /// Backend-specific capability flags, typed by the per-kind protocol
+    /// crate. Opaque to `animus-plugin-protocol`.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub extra: Value,
 }
 
 /// One-shot manifest emitted when a plugin is invoked with `--manifest`.
@@ -879,7 +987,11 @@ mod tests {
     fn response_err_sets_error_and_clears_result() {
         let response = RpcResponse::err(
             Some(serde_json::json!(1)),
-            RpcError { code: error_codes::METHOD_NOT_FOUND, message: "nope".into(), data: None },
+            RpcError {
+                code: error_codes::METHOD_NOT_FOUND,
+                message: "nope".into(),
+                data: None,
+            },
         );
         assert!(response.error.is_some());
         assert!(response.result.is_none());
@@ -895,11 +1007,21 @@ mod tests {
             "protocol_version": "1.0.0",
             "capabilities": ["ticket/get"]
         });
-        let manifest: PluginManifest = serde_json::from_value(value).expect("manifest should parse");
+        let manifest: PluginManifest =
+            serde_json::from_value(value).expect("manifest should parse");
         assert_eq!(manifest.plugin_kind, "ticket_backend");
-        assert_eq!(manifest.kind(), PluginKind::Other("ticket_backend".to_string()));
-        assert!(!manifest.kind().is_known(), "ticket_backend is not a built-in role");
-        assert!(manifest.env_required.is_empty(), "env_required must default to empty for back-compat");
+        assert_eq!(
+            manifest.kind(),
+            PluginKind::Other("ticket_backend".to_string())
+        );
+        assert!(
+            !manifest.kind().is_known(),
+            "ticket_backend is not a built-in role"
+        );
+        assert!(
+            manifest.env_required.is_empty(),
+            "env_required must default to empty for back-compat"
+        );
     }
 
     #[test]
@@ -916,7 +1038,8 @@ mod tests {
                 { "name": "ANTHROPIC_BASE_URL" }
             ]
         });
-        let manifest: PluginManifest = serde_json::from_value(value).expect("manifest should parse");
+        let manifest: PluginManifest =
+            serde_json::from_value(value).expect("manifest should parse");
         assert_eq!(manifest.env_required.len(), 2);
         assert_eq!(manifest.env_required[0].name, "ANTHROPIC_API_KEY");
         assert!(manifest.env_required[0].sensitive);
@@ -939,7 +1062,10 @@ mod tests {
             notification_buffer_size: None,
         };
         let value = serde_json::to_value(&manifest).unwrap();
-        assert!(value.get("env_required").is_none(), "empty env_required must not be serialized for back-compat");
+        assert!(
+            value.get("env_required").is_none(),
+            "empty env_required must not be serialized for back-compat"
+        );
         assert!(
             value.get("notification_buffer_size").is_none(),
             "unset notification_buffer_size must not be serialized for back-compat"
@@ -959,7 +1085,8 @@ mod tests {
             "capabilities": ["agent/run"],
             "notification_buffer_size": 1024
         });
-        let manifest: PluginManifest = serde_json::from_value(value).expect("manifest should parse");
+        let manifest: PluginManifest =
+            serde_json::from_value(value).expect("manifest should parse");
         assert_eq!(manifest.notification_buffer_size, Some(1024));
     }
 
@@ -1012,7 +1139,10 @@ mod tests {
         assert_eq!(decoded, PluginKind::Other("ticket_backend".to_string()));
         assert!(!decoded.is_known());
         let encoded = serde_json::to_value(&decoded).unwrap();
-        assert_eq!(encoded, raw, "unknown plugin_kind must round-trip byte-for-byte");
+        assert_eq!(
+            encoded, raw,
+            "unknown plugin_kind must round-trip byte-for-byte"
+        );
     }
 
     #[test]
@@ -1026,10 +1156,16 @@ mod tests {
 
         let raw = serde_json::json!("publish_release");
         let unknown: TriggerActionHint = serde_json::from_value(raw.clone()).unwrap();
-        assert_eq!(unknown, TriggerActionHint::Other("publish_release".to_string()));
+        assert_eq!(
+            unknown,
+            TriggerActionHint::Other("publish_release".to_string())
+        );
         assert!(!unknown.is_known());
         let reencoded = serde_json::to_value(&unknown).unwrap();
-        assert_eq!(reencoded, raw, "unknown action_hint must round-trip byte-for-byte");
+        assert_eq!(
+            reencoded, raw,
+            "unknown action_hint must round-trip byte-for-byte"
+        );
     }
 
     #[test]

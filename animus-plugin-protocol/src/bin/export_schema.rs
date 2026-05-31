@@ -24,9 +24,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use animus_plugin_protocol::{
-    EnvRequirement, HealthCheckResult, HealthStatus, HostCapabilities, HostInfo, InitializeParams, InitializeResult,
-    McpTool, PluginCapabilities, PluginInfo, PluginManifest, RpcError, RpcNotification, RpcRequest, RpcResponse,
-    TriggerAckParams, TriggerEvent, TriggerWatchParams,
+    EnvRequirement, HealthCheckResult, HealthStatus, HostCapabilities, HostInfo, InitializeParams,
+    InitializeResult, McpTool, PluginCapabilities, PluginInfo, PluginManifest, RpcError,
+    RpcNotification, RpcRequest, RpcResponse, TriggerAckParams, TriggerEvent, TriggerWatchParams,
 };
 use schemars::{schema_for, Schema};
 
@@ -160,20 +160,36 @@ mod tests {
             let raw = std::fs::read_to_string(&path).expect("schema file readable");
             let value: Value = serde_json::from_str(&raw).expect("schema file parses");
             assert!(value.is_object(), "{name} schema should be a JSON object");
-            assert!(value.get("$schema").is_some(), "{name} schema should include $schema");
-            assert!(value.get("title").is_some(), "{name} schema should include title");
+            assert!(
+                value.get("$schema").is_some(),
+                "{name} schema should include $schema"
+            );
+            assert!(
+                value.get("title").is_some(),
+                "{name} schema should include title"
+            );
         }
 
         // Bundle exists and includes every type under $defs so that
         // `#/$defs/<Name>` refs inside bundled schemas resolve at the
         // bundle root.
-        let bundle_raw = std::fs::read_to_string(tmp.path().join("_all.json")).expect("bundle readable");
+        let bundle_raw =
+            std::fs::read_to_string(tmp.path().join("_all.json")).expect("bundle readable");
         let bundle: Value = serde_json::from_str(&bundle_raw).expect("bundle parses");
-        let defs = bundle.get("$defs").and_then(|d| d.as_object()).expect("bundle has $defs");
+        let defs = bundle
+            .get("$defs")
+            .and_then(|d| d.as_object())
+            .expect("bundle has $defs");
         for (name, _) in all_schemas() {
-            assert!(defs.contains_key(name), "bundle $defs should contain {name}");
+            assert!(
+                defs.contains_key(name),
+                "bundle $defs should contain {name}"
+            );
         }
-        assert!(bundle.get("$schema").is_some(), "bundle should advertise $schema");
+        assert!(
+            bundle.get("$schema").is_some(),
+            "bundle should advertise $schema"
+        );
     }
 
     #[test]
@@ -186,7 +202,10 @@ mod tests {
         let type_field = value.get("type").expect("schema has a type field").clone();
         assert!(
             type_field == Value::String("object".to_string())
-                || type_field.as_array().map(|arr| arr.iter().any(|v| v == "object")).unwrap_or(false),
+                || type_field
+                    .as_array()
+                    .map(|arr| arr.iter().any(|v| v == "object"))
+                    .unwrap_or(false),
             "RpcRequest schema should report object type, got {type_field}"
         );
     }

@@ -187,6 +187,10 @@ A plugin declares its kind in [`PluginInfo::plugin_kind`](#87-plugininfo) during
 | `trigger_backend` | `trigger/watch`, `trigger/event` (notification), `trigger/ack` (optional), `trigger/schema` |
 | `log_storage_backend` | `log_storage/store`, `log_storage/query` (optional), `log_storage/tail` (optional), `log_storage/event` (notification), `log_storage/schema` |
 | `transport_backend` | `transport/start`, `transport/shutdown`, `transport/schema` |
+| `workflow_runner` (v1.1.0+) | `workflow/execute`, `workflow/run_phase` |
+| `queue` (v1.1.0+) | `queue/enqueue`, `queue/list`, `queue/lease`, `queue/stats`, `queue/hold`, `queue/release`, `queue/drop`, `queue/reorder`, `queue/mark_assigned`, `queue/completion` |
+| `durable_store` (v1.1.0+) | `durable/begin_workflow_run`, `durable/begin_step`, `durable/commit_step`, `durable/abandon_step`, `durable/recover_in_flight`, `durable/query_run` |
+| `memory_store` (v1.1.0+) | `memory/put`, `memory/get`, `memory/query`, `memory/list_scopes`, `memory/delete_scope` |
 | `custom` | none predefined; host treats domain methods opaquely and surfaces them via `animus.plugin.call` MCP |
 
 Hosts MUST NOT call domain methods for a kind other than the one declared.
@@ -418,11 +422,82 @@ Stream-level errors are emitted as `log_storage/event` notifications with an `er
 
 Returns a [`LogStorageSchema`](#124-logstorageschema) capability declaration. SHOULD be cheap (constant or one-shot at startup).
 
+### 7.5 Workflow runner methods (v1.1.0+)
+
+Workflow runners execute Animus workflow YAML by orchestrating phases, evaluating decision contracts, and applying post-success actions. Defined in [`animus-workflow-runner-protocol`](animus-workflow-runner-protocol/src/lib.rs).
+
+#### `workflow/execute`
+
+Drive a full workflow run. Request: `WorkflowExecuteRequest` (subject envelope via `subject_dispatch` OR convenience fields, plus workflow ref, overrides, opaque routing configs). Response: `WorkflowExecuteResult` (terminal `workflow_status`, per-phase results, and the full `phase_events` vector).
+
+Project root is bound at `initialize` time via the `init_extensions.project_binding` extension; it is NOT a per-request field.
+
+#### `workflow/run_phase`
+
+Execute exactly one phase (used by the daemon's per-phase scheduler). Request: `WorkflowPhaseRunRequest`. Response: `WorkflowPhaseRunResult` with `phase_status` of `"completed" | "manual_pending" | "failed"`.
+
+### 7.6 Queue methods (v1.1.0+)
+
+Queue plugins own a per-project priority FIFO of `SubjectDispatch` envelopes. Defined in [`animus-queue-protocol`](animus-queue-protocol/src/lib.rs).
+
+Capacity policy stays in the kernel — the queue plugin just provides ordered access. The daemon polls the queue for items via `queue/lease` (atomic dispatch path) or `queue/list` (read-only inspection) and decides how many to lease per tick based on its own capacity logic.
+
+Methods:
+
+- `queue/enqueue` — append a dispatch to the queue. Idempotent on duplicate dispatches.
+- `queue/list` — paginated, filterable read-only view.
+- `queue/lease` — atomic dispatch path: claim up to `max` pending entries (optionally tagging them with daemon-supplied `workflow_ids`) and transition them to Assigned in one transaction.
+- `queue/stats` — fast aggregate counts.
+- `queue/hold` / `queue/release` / `queue/drop` / `queue/mark_assigned` / `queue/completion` — entry-id-targeted mutations returning `QueueMutationResponse { changed, not_found }`.
+- `queue/reorder` — atomic reorder by entry id list; returns `QueueReorderResponse { reordered_count }`.
+
+Project root bound at `initialize` time.
+
+### 7.7 Durable store methods (v1.1.0+)
+
+Durable stores provide reservation-fenced step persistence so the daemon can recover from crashes without re-executing already-committed side effects. Defined in [`animus-durable-store-protocol`](animus-durable-store-protocol/src/lib.rs).
+
+The contract:
+
+1. Caller issues `durable/begin_workflow_run` to register a fresh phase execution; the plugin returns a monotonically increasing `epoch`.
+2. Before each side-effecting step, the caller issues `durable/begin_step`. The plugin checks committed steps first, then live reservations:
+   - `step_status: "already_committed"` / `"prior_error"` → caller short-circuits the side effect.
+   - `step_status: "in_progress"` → another caller has the reservation; back off until `reservation_expires_at`.
+   - `step_status: "new"` → caller proceeds; reservation is held with the supplied `reservation_ttl_secs` (or backend default).
+3. After the side effect, the caller issues `durable/commit_step` with the **required** `outcome: "success" | "error"` field (independent of `output`/`error` payload nulls).
+4. If the caller abandons before commit (e.g. upstream cancellation), it issues `durable/abandon_step` to release the reservation. Committed errors are NOT cleared — `prior_error` is terminal for that `idempotency_key`.
+5. On daemon restart, `durable/recover_in_flight` reports workflows with outstanding reservations or pending state, keyed off the `since_epoch` cursor.
+6. `durable/query_run` returns the full committed-step history for a `(run_id, phase_id)` pair.
+
+Project root bound at `initialize` time.
+
+### 7.8 Memory store methods (v1.1.0+)
+
+Memory stores provide persistent semantic memory across runs, agents, and tasks. Defined in [`animus-memory-store-protocol`](animus-memory-store-protocol/src/lib.rs).
+
+Scopes are hierarchical: project-wide (`project_id` only), per-agent (`+ agent_id`), or per-task (`+ task_id`). Plugins map this hierarchy to backend-specific structures.
+
+Methods:
+
+- `memory/put` — store a value under a key. Response includes `indexed_immediately: bool` so callers can tell whether read-after-write semantics apply (Zep is `false`; SQLite-backed is typically `true`).
+- `memory/get` — retrieve a value by exact key. Backends that lack native key get (Zep) fall back to a search-based implementation; this is declared via the `native_key_get` capability flag.
+- `memory/query` — semantic search within a scope. Clamped to `max_query_top_k` capability.
+- `memory/list_scopes` — cursor-paginated list of scopes, optionally filtered by `project_id`.
+- `memory/delete_scope` — delete a scope and all its entries.
+
+Project root bound at `initialize` time.
+
 ## 8. Plugin protocol types
 
 ### 8.1 `PROTOCOL_VERSION`
 
-A constant string. Current value: `"1.0.0"`. Plugins MUST advertise their built-against version in `initialize`. Hosts MUST advertise theirs.
+A constant string. Current value: `"1.1.0"` (v0.5 release; bumped from `"1.0.0"` additively). Plugins MUST advertise their built-against version in `initialize`. Hosts MUST advertise theirs.
+
+The v1.1.0 changes are all additive:
+
+1. Four new plugin-kind constants: `workflow_runner`, `queue`, `durable_store`, `memory_store`. v1.0.0 plugins continue to work unchanged.
+2. New optional field `InitializeParams.init_extensions: HashMap<String, Value>` — opaque per-extension blobs the host may pass on initialize. v0.5 uses this for `project_binding` (the project root the plugin process is bound to for its lifetime). v1.0.0 plugins simply ignore this field.
+3. New optional field `InitializeResult.kind_capabilities: HashMap<String, KindCapability>` — typed per-kind capability map. Each entry declares the per-kind protocol crate version the plugin was built against plus a `extra: Value` blob typed by the per-kind protocol crate. v1.0.0 plugins leave this empty.
 
 ### 8.2 `PluginManifest`
 
