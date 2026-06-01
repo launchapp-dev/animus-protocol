@@ -16,6 +16,19 @@
 //!
 //! With this contract, any wrapped session backend gets live-streaming and
 //! collect-and-return semantics simultaneously without per-provider plumbing.
+//!
+//! # Generic plugin shell
+//!
+//! Plugin authors writing a new plugin kind (workflow runner, queue,
+//! durable store, memory store, custom) should reach for the generic
+//! [`plugin::Plugin`] builder instead of hand-rolling the stdio loop. It
+//! exposes typed request method registration, notification handlers,
+//! init/shutdown hooks, a clonable [`plugin::Notifier`], and end-to-end
+//! handling of `initialize`/`shutdown`/`$/cancelRequest` framing.
+
+pub mod plugin;
+
+pub use plugin::{CancellationToken, InitContext, MethodContext, Notifier, Plugin};
 
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
