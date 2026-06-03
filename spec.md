@@ -446,7 +446,7 @@ Methods:
 
 - `queue/enqueue` — append a dispatch to the queue. Idempotent on duplicate dispatches.
 - `queue/list` — paginated, filterable read-only view.
-- `queue/lease` — atomic dispatch path: claim up to `max` pending entries (optionally tagging them with daemon-supplied `workflow_ids`) and transition them to Assigned in one transaction.
+- `queue/lease` — atomic dispatch path: claim up to `max` pending entries (optionally tagging them with daemon-supplied `workflow_ids`) and transition them to Assigned in one transaction. Optional `exclude_subjects: Vec<SubjectId>` (queue-protocol v0.3.0+) instructs the plugin to skip over entries whose `subject_dispatch.subject_key()` matches any id in the list; matched entries stay in Pending with no state change. Hosts use this to advance past head-of-line entries whose subjects already have an in-flight workflow without round-tripping through `queue/release_pending`. Omitting the field is identical to v0.2.0 behavior.
 - `queue/stats` — fast aggregate counts.
 - `queue/hold` / `queue/release` / `queue/drop` / `queue/mark_assigned` / `queue/completion` — entry-id-targeted mutations returning `QueueMutationResponse { changed, not_found }`.
 - `queue/reorder` — atomic reorder by entry id list; returns `QueueReorderResponse { reordered_count }`.

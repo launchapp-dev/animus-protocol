@@ -18,7 +18,7 @@
 
 #![warn(missing_docs)]
 
-use animus_subject_protocol::SubjectDispatch;
+use animus_subject_protocol::{SubjectDispatch, SubjectId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 pub const KIND: &str = "queue";
 
 /// Per-crate semver protocol version.
-pub const PROTOCOL_VERSION: &str = "0.2.0";
+pub const PROTOCOL_VERSION: &str = "0.3.0";
 
 /// Add a dispatch to the queue.
 pub const METHOD_QUEUE_ENQUEUE: &str = "queue/enqueue";
@@ -183,6 +183,17 @@ pub struct QueueLeaseRequest {
     /// otherwise). If `None`, the plugin generates synthetic UUIDs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_ids: Option<Vec<String>>,
+    /// Subjects to skip during lease selection.
+    ///
+    /// Entries whose `subject_dispatch.subject_key()` matches any id in
+    /// this list stay in Pending status and are not returned in the
+    /// lease response. No state transition occurs for them. Hosts use
+    /// this to tell the queue "this subject already has an in-flight
+    /// workflow" so it advances past the head-of-line entry instead of
+    /// returning it for the daemon to immediately release back.
+    /// Backward-compat: `None` / omitted is identical to today's behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_subjects: Option<Vec<SubjectId>>,
 }
 
 /// Response for [`METHOD_QUEUE_LEASE`].
@@ -377,5 +388,44 @@ mod tests {
         assert!(v.get("not_found").is_some_and(|v| !v.as_bool().unwrap()));
         let back: QueueMutationResponse = serde_json::from_value(v).unwrap();
         assert_eq!(back, r);
+    }
+
+    #[test]
+    fn lease_request_round_trips_with_exclude_subjects() {
+        let req = QueueLeaseRequest {
+            max: 3,
+            workflow_ids: Some(vec!["wf-1".into(), "wf-2".into(), "wf-3".into()]),
+            exclude_subjects: Some(vec![
+                SubjectId::new("TASK-1"),
+                SubjectId::new("linear:ENG-7"),
+            ]),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        let back: QueueLeaseRequest = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(back, req);
+        // Transparent newtype: SubjectId serializes as a bare string.
+        let arr = v
+            .get("exclude_subjects")
+            .and_then(|v| v.as_array())
+            .expect("exclude_subjects present");
+        assert_eq!(arr[0].as_str(), Some("TASK-1"));
+        assert_eq!(arr[1].as_str(), Some("linear:ENG-7"));
+    }
+
+    #[test]
+    fn lease_request_omits_exclude_subjects_when_none() {
+        let req = QueueLeaseRequest {
+            max: 1,
+            workflow_ids: None,
+            exclude_subjects: None,
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("exclude_subjects").is_none());
+        // Older clients that omit the field MUST still decode as None.
+        let legacy = serde_json::json!({ "max": 1 });
+        let back: QueueLeaseRequest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.exclude_subjects, None);
+        assert_eq!(back.workflow_ids, None);
+        assert_eq!(back.max, 1);
     }
 }
