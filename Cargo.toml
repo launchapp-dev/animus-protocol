@@ -13,6 +13,7 @@ members = [
     "animus-queue-protocol",
     "animus-durable-store-protocol",
     "animus-memory-store-protocol",
+    "animus-notifier-protocol",
 ]
 resolver = "2"
 
