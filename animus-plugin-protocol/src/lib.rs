@@ -146,6 +146,16 @@ pub const PLUGIN_KIND_DURABLE_STORE: &str = "durable_store";
 /// (`memory/put`, `memory/get`, `memory/query`, etc.).
 pub const PLUGIN_KIND_MEMORY_STORE: &str = "memory_store";
 
+/// Plugin kind for agent-runner sidecar plugins (v0.5).
+///
+/// Agent-runner plugins own the sidecar that spawns coding-agent CLIs
+/// (claude, codex, gemini, opencode, ...), supervises their lifetime,
+/// parses stdout into structured events, and reports cost / token /
+/// artifact telemetry. See `animus-agent-runner-protocol` for the typed
+/// RPC surface (`agent_runner/run`, `agent_runner/control`,
+/// `agent_runner/agent_status`, etc.).
+pub const PLUGIN_KIND_AGENT_RUNNER: &str = "agent_runner";
+
 /// Strongly typed enumeration of plugin roles.
 ///
 /// The set of well-known kinds is captured here so callers can pattern-match
@@ -188,6 +198,8 @@ pub enum PluginKind {
     DurableStore,
     /// Agent memory store plugin (v0.5). See [`PLUGIN_KIND_MEMORY_STORE`].
     MemoryStore,
+    /// Agent-runner sidecar plugin (v0.5). See [`PLUGIN_KIND_AGENT_RUNNER`].
+    AgentRunner,
     /// Any kind not understood by this crate version. Preserves the wire
     /// string so unknown roles round-trip and so hosts that recognize the
     /// role can still dispatch on the string.
@@ -210,6 +222,7 @@ impl PluginKind {
             PluginKind::Queue => PLUGIN_KIND_QUEUE,
             PluginKind::DurableStore => PLUGIN_KIND_DURABLE_STORE,
             PluginKind::MemoryStore => PLUGIN_KIND_MEMORY_STORE,
+            PluginKind::AgentRunner => PLUGIN_KIND_AGENT_RUNNER,
             PluginKind::Other(value) => value.as_str(),
         }
     }
@@ -245,6 +258,7 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_QUEUE => PluginKind::Queue,
             PLUGIN_KIND_DURABLE_STORE => PluginKind::DurableStore,
             PLUGIN_KIND_MEMORY_STORE => PluginKind::MemoryStore,
+            PLUGIN_KIND_AGENT_RUNNER => PluginKind::AgentRunner,
             _ => PluginKind::Other(value),
         }
     }
