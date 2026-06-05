@@ -1,9 +1,26 @@
 //! Protocol types for `agent_runner` plugins.
 //!
-//! Agent-runner plugins own the sidecar process that actually spawns the
-//! coding-agent CLI (claude, codex, gemini, opencode, oai-runner, ...),
-//! supervises its lifetime, parses its stdout into structured events, and
-//! reports cost / token / artifact / tool-call telemetry back to the host.
+//! # DEPRECATED in animus-cli v0.5.3
+//!
+//! The standalone `agent-runner` sidecar was deleted from `animus-cli` in
+//! v0.5.3. The CLI's `animus agent {run, status, cancel, control}` family
+//! now talks directly to provider plugins via
+//! `orchestrator_plugin_host::session::SessionBackendResolver` — there is
+//! no longer a Unix-domain socket, a shared-secret auth handshake, or any
+//! per-process sidecar to talk to. As a consequence, no consumer of this
+//! crate exists inside the published animus-cli surface and no first-party
+//! `agent_runner` plugin will ship.
+//!
+//! This crate is preserved at v0.1.1 as a historical reference for anyone
+//! still running v0.5.2 or earlier. New plugin authors should target the
+//! provider-plugin surface (`animus-provider-protocol` /
+//! `animus-session-backend`) instead.
+//!
+//! Agent-runner plugins owned the sidecar process that actually spawned
+//! the coding-agent CLI (claude, codex, gemini, opencode, oai-runner,
+//! ...), supervised its lifetime, parsed its stdout into structured
+//! events, and reported cost / token / artifact / tool-call telemetry
+//! back to the host.
 //!
 //! The v0.5 reference implementation will be
 //! `launchapp-dev/animus-agent-runner` (a lift-and-shift of the in-tree

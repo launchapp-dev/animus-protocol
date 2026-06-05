@@ -1,12 +1,12 @@
 [package]
 name = "animus-agent-runner-protocol"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 authors = ["Launchapp.dev"]
 homepage = "https://github.com/launchapp-dev/animus-cli"
 repository = "https://github.com/launchapp-dev/animus-protocol"
-description = "Agent-runner plugin-kind protocol types for Animus v0.5 (stdio JSON-RPC surface for the agent-runner sidecar: per-run spawn, output streaming, control, status)."
+description = "DEPRECATED — agent-runner plugin-kind protocol types for Animus v0.5. As of v0.5.3 the agent-runner sidecar was deleted; CLI agent calls now route directly through provider plugins via SessionBackendResolver. New code should not depend on this crate."
 
 [dependencies]
 animus-plugin-protocol = { path = "../animus-plugin-protocol" }
