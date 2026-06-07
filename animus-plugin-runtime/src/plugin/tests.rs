@@ -233,6 +233,81 @@ async fn shutdown_hook_runs_then_response_is_emitted() {
 }
 
 #[tokio::test]
+async fn on_health_hook_routes_response_through_the_backend() {
+    use animus_plugin_protocol::{HealthCheckResult, HealthStatus};
+
+    let (mut host_to_plugin, plugin_in) = duplex(8 * 1024);
+    let (plugin_out, mut host_from_plugin) = duplex(8 * 1024);
+
+    let plugin = Plugin::new("test-health", "0.0.1", "custom").on_health(|| async {
+        Ok(HealthCheckResult {
+            status: HealthStatus::Degraded,
+            uptime_ms: Some(7777),
+            memory_usage_bytes: None,
+            last_error: Some("upstream timeout".into()),
+        })
+    });
+
+    let join = tokio::spawn(async move { plugin.run_with_io(plugin_in, plugin_out).await });
+
+    host_to_plugin
+        .write_all(initialize_frame(1).as_bytes())
+        .await
+        .unwrap();
+    let _ = read_frame_line(&mut host_from_plugin).await;
+
+    let health = json!({ "jsonrpc": "2.0", "id": 5, "method": "health/check" });
+    host_to_plugin
+        .write_all(format!("{health}\n").as_bytes())
+        .await
+        .unwrap();
+    let resp = read_frame_line(&mut host_from_plugin).await;
+    let result = resp.result.expect("health result");
+    assert_eq!(result["status"], "degraded");
+    assert_eq!(result["uptime_ms"], 7777);
+    assert_eq!(result["last_error"], "upstream timeout");
+
+    drop(host_to_plugin);
+    join.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn on_health_hook_propagates_backend_failure_as_error_envelope() {
+    let (mut host_to_plugin, plugin_in) = duplex(8 * 1024);
+    let (plugin_out, mut host_from_plugin) = duplex(8 * 1024);
+
+    let plugin = Plugin::new("test-health-fail", "0.0.1", "custom").on_health(|| async {
+        Err(RpcError {
+            code: -32099,
+            message: "backend down".into(),
+            data: None,
+        })
+    });
+
+    let join = tokio::spawn(async move { plugin.run_with_io(plugin_in, plugin_out).await });
+
+    host_to_plugin
+        .write_all(initialize_frame(1).as_bytes())
+        .await
+        .unwrap();
+    let _ = read_frame_line(&mut host_from_plugin).await;
+
+    let health = json!({ "jsonrpc": "2.0", "id": 5, "method": "health/check" });
+    host_to_plugin
+        .write_all(format!("{health}\n").as_bytes())
+        .await
+        .unwrap();
+    let resp = read_frame_line(&mut host_from_plugin).await;
+    assert!(resp.result.is_none());
+    let error = resp.error.expect("error envelope");
+    assert_eq!(error.code, -32099);
+    assert_eq!(error.message, "backend down");
+
+    drop(host_to_plugin);
+    join.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn handler_error_becomes_json_rpc_error_envelope() {
     let (mut host_to_plugin, plugin_in) = duplex(8 * 1024);
     let (plugin_out, mut host_from_plugin) = duplex(8 * 1024);

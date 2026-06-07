@@ -27,8 +27,13 @@
 //! handling of `initialize`/`shutdown`/`$/cancelRequest` framing.
 
 pub mod plugin;
+pub mod subject;
 
 pub use plugin::{CancellationToken, InitContext, MethodContext, Notifier, Plugin};
+pub use subject::{
+    subject_backend_main, subject_backend_main_with_capabilities, subject_backend_main_with_kinds,
+    subject_plugin, subject_plugin_with_kind_aliases,
+};
 
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};

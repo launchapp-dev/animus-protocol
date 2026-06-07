@@ -25,15 +25,16 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use animus_subject_protocol::{
-    ChangeKind, CustomFieldKind, CustomFieldSpec, Subject, SubjectChangedEvent, SubjectFilter,
-    SubjectId, SubjectList, SubjectPatch, SubjectSchema, SubjectStatus,
+    ChangeKind, CustomFieldKind, CustomFieldSpec, DeleteSubjectRequest, DeleteSubjectResponse,
+    StatusDispatchHint, Subject, SubjectAttachment, SubjectChangedEvent, SubjectFilter, SubjectId,
+    SubjectList, SubjectPatch, SubjectSchema, SubjectStatus,
 };
 use schemars::{schema_for, Schema};
 
 fn default_out_dir() -> PathBuf {
     let base = env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
-        .and_then(|dir| dir.parent().and_then(Path::parent).map(Path::to_path_buf))
+        .and_then(|dir| dir.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     base.join("schemas").join("animus-subject-protocol")
 }
@@ -63,10 +64,14 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("SubjectId", schema_for!(SubjectId)),
         ("SubjectStatus", schema_for!(SubjectStatus)),
         ("Subject", schema_for!(Subject)),
+        ("SubjectAttachment", schema_for!(SubjectAttachment)),
         ("SubjectFilter", schema_for!(SubjectFilter)),
         ("SubjectList", schema_for!(SubjectList)),
         ("SubjectPatch", schema_for!(SubjectPatch)),
+        ("DeleteSubjectRequest", schema_for!(DeleteSubjectRequest)),
+        ("DeleteSubjectResponse", schema_for!(DeleteSubjectResponse)),
         ("SubjectSchema", schema_for!(SubjectSchema)),
+        ("StatusDispatchHint", schema_for!(StatusDispatchHint)),
         ("CustomFieldSpec", schema_for!(CustomFieldSpec)),
         ("CustomFieldKind", schema_for!(CustomFieldKind)),
         ("SubjectChangedEvent", schema_for!(SubjectChangedEvent)),

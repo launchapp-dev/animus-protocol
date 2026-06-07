@@ -171,6 +171,7 @@ type MethodHandler =
 type NotificationHandler = Arc<dyn Fn(Value, Notifier) -> BoxFuture<()> + Send + Sync>;
 type InitHook = Arc<dyn Fn(InitContext) -> BoxFuture<Result<(), RpcError>> + Send + Sync>;
 type ShutdownHook = Arc<dyn Fn() -> BoxFuture<()> + Send + Sync>;
+type HealthHook = Arc<dyn Fn() -> BoxFuture<Result<HealthCheckResult, RpcError>> + Send + Sync>;
 
 /// Builder + driver for an Animus stdio plugin.
 ///
@@ -209,6 +210,7 @@ pub struct Plugin {
     notification_handlers: HashMap<String, NotificationHandler>,
     on_init: Option<InitHook>,
     on_shutdown: Option<ShutdownHook>,
+    on_health: Option<HealthHook>,
 }
 
 impl Plugin {
@@ -242,6 +244,7 @@ impl Plugin {
             notification_handlers: HashMap::new(),
             on_init: None,
             on_shutdown: None,
+            on_health: None,
         }
     }
 
@@ -371,6 +374,22 @@ impl Plugin {
         self
     }
 
+    /// Register a `health/check` hook. The shell still owns the `health/check`
+    /// method dispatch; the hook decides what gets reported. Without a hook
+    /// the shell answers `HealthStatus::Healthy` with empty fields, which is
+    /// fine for stateless plugins but masks upstream outages for backends
+    /// that connect to remote APIs. Subject and provider backends should
+    /// wire their backend-specific health check through this hook.
+    pub fn on_health<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<HealthCheckResult, RpcError>> + Send + 'static,
+    {
+        let hook: HealthHook = Arc::new(move || Box::pin(hook()));
+        self.on_health = Some(hook);
+        self
+    }
+
     /// Register a typed request method handler.
     ///
     /// The handler receives a deserialized `Req` and a [`MethodContext`].
@@ -431,6 +450,19 @@ impl Plugin {
         let handler: MethodHandler = Arc::new(move |params, ctx| Box::pin(handler(params, ctx)));
         self.method_handlers.insert(method.into(), handler);
         self
+    }
+
+    /// Read the methods list this plugin would report in its manifest /
+    /// `initialize` response. Test helper — read-only view of the builder
+    /// state.
+    pub fn advertised_methods(&self) -> &[String] {
+        &self.methods
+    }
+
+    /// `true` if a method handler has been registered for `method`. Test
+    /// helper — read-only view of the builder state.
+    pub fn has_method_handler(&self, method: &str) -> bool {
+        self.method_handlers.contains_key(method)
     }
 
     /// Register a notification handler. The handler receives the raw params
@@ -569,6 +601,7 @@ impl Plugin {
             notification_handlers: self.notification_handlers,
             on_init: self.on_init,
             on_shutdown: self.on_shutdown,
+            on_health: self.on_health,
             initialize_result,
             cancellation_enabled: self.cancellation,
             plugin_name: self.name,
@@ -735,21 +768,28 @@ async fn dispatch_frame(
             handle_cancel_notification(params, &state).await;
         }
         "health/check" => {
-            let response = match serde_json::to_value(HealthCheckResult {
-                status: HealthStatus::Healthy,
-                uptime_ms: None,
-                memory_usage_bytes: None,
-                last_error: None,
-            }) {
-                Ok(value) => RpcResponse::ok(id, value),
-                Err(error) => RpcResponse::err(
-                    id,
-                    RpcError {
-                        code: error_codes::INTERNAL_ERROR,
-                        message: format!("failed to encode health result: {error}"),
-                        data: None,
-                    },
-                ),
+            let health_result: Result<HealthCheckResult, RpcError> = match &state.on_health {
+                Some(hook) => hook().await,
+                None => Ok(HealthCheckResult {
+                    status: HealthStatus::Healthy,
+                    uptime_ms: None,
+                    memory_usage_bytes: None,
+                    last_error: None,
+                }),
+            };
+            let response = match health_result {
+                Ok(value) => match serde_json::to_value(value) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(
+                        id,
+                        RpcError {
+                            code: error_codes::INTERNAL_ERROR,
+                            message: format!("failed to encode health result: {error}"),
+                            data: None,
+                        },
+                    ),
+                },
+                Err(error) => RpcResponse::err(id, error),
             };
             write_response(&notifier, response).await;
         }
@@ -886,6 +926,7 @@ struct PluginState {
     notification_handlers: HashMap<String, NotificationHandler>,
     on_init: Option<InitHook>,
     on_shutdown: Option<ShutdownHook>,
+    on_health: Option<HealthHook>,
     initialize_result: InitializeResult,
     cancellation_enabled: bool,
     plugin_name: String,

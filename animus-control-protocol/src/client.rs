@@ -939,7 +939,12 @@ mod imp {
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                     custom: Default::default(),
+                    native_status: None,
+                    status_metadata: serde_json::Value::Null,
+                    attachments: vec![],
                 },
+                previous_native_status: None,
+                previous_dispatch_label: None,
             }
         }
 

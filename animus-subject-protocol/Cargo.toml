@@ -1,6 +1,6 @@
 [package]
 name = "animus-subject-protocol"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2021"
 description = "SubjectBackend trait + normalized Subject schema for Animus subject backend plugins (Linear, Jira, GitHub Issues, Notion, native task store, etc.)."
 
@@ -17,6 +17,7 @@ schemars = { version = "1.0", features = ["chrono04"] }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [[bin]]
 name = "animus-subject-protocol-export-schema"
