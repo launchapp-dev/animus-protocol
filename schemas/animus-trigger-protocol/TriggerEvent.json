@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TriggerEvent",
+  "description": "One event emitted by a trigger backend.\n\nTrigger backends produce these in response to external activity (a Slack\nmention, a webhook POST, a file change, a cron tick, ...). The daemon\nconsumes the stream returned by [`TriggerBackend::watch`] and decides\nwhat to do with each event using configuration the workflow YAML\ndeclares — typically \"enqueue this workflow\" or \"create this task\".\n\nBackend-specific payload data lives in [`TriggerEvent::payload`] and is\naddressable from workflow YAML via templating (e.g.\n`{{trigger.payload.user}}`).",
+  "type": "object",
+  "properties": {
+    "action_hint": {
+      "description": "Optional hint about what the daemon should do (e.g.\n`\"run-workflow:review\"`, `\"create-task\"`). Workflows MAY ignore\nthis — it is an advisory field, not a routing decision.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "Stable identifier for this event. Used for deduplication if the\ndaemon restarts and the backend redelivers from its journal, and as\nthe argument to [`TriggerBackend::ack`].\n\nBackends that cannot produce a stable id (e.g. timer-based triggers)\nSHOULD synthesize one from `(kind, occurred_at, payload-hash)` so\nduplicates collapse.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "What kind of trigger fired. Convention is\n`\"<backend>_<event>\"`, e.g. `\"slack_mention\"`,\n`\"slack_channel_message\"`, `\"github_webhook_push\"`,\n`\"file_changed\"`, `\"cron_tick\"`. The daemon treats the value as\nopaque; workflows match on it.",
+      "type": "string"
+    },
+    "occurred_at": {
+      "description": "When the upstream event occurred. Falls back to `Utc::now()` if the\nsource does not carry a timestamp.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "description": "Free-form payload describing the event. Schema is trigger-specific\nand documented by each backend's plugin."
+    },
+    "subject_id": {
+      "description": "Optional subject id (e.g. `\"linear:ENG-123\"`) this event is about,\nif the backend can resolve one. Lets workflows correlate triggers\nwith subject backends without re-querying.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "occurred_at",
+    "kind",
+    "payload"
+  ]
+}

@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentNotification",
+  "description": "A streaming notification a provider may emit mid-run.\n\nThe runtime in [`animus-plugin-runtime`] wraps these into JSON-RPC\nnotifications using the wire-method constants ([`NOTIFICATION_AGENT_OUTPUT`],\n[`NOTIFICATION_AGENT_THINKING`], [`NOTIFICATION_AGENT_TOOL_CALL`],\n[`NOTIFICATION_AGENT_TOOL_RESULT`], [`NOTIFICATION_AGENT_ERROR`]) and\nforwards them to the host on the same channel as the eventual\n[`AgentRunResponse`] reply. Providers only construct the variants — they\ndon't need to touch JSON-RPC themselves.\n\n`session_id` is filled in by the provider once known. All variants are\nsafe to emit before [`AgentRunResponse`] is returned; emissions after the\nresponse are ignored by the runtime.",
+  "oneOf": [
+    {
+      "description": "Incremental text the model has produced. Maps to\n[`NOTIFICATION_AGENT_OUTPUT`].",
+      "type": "object",
+      "properties": {
+        "is_final": {
+          "description": "`true` when this is the final aggregated text for the turn.",
+          "type": "boolean",
+          "default": false
+        },
+        "kind": {
+          "type": "string",
+          "const": "output"
+        },
+        "session_id": {
+          "description": "Stable session id this delta belongs to.",
+          "type": "string"
+        },
+        "text": {
+          "description": "Text delta.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "session_id",
+        "text"
+      ]
+    },
+    {
+      "description": "Visible reasoning from the model. Maps to\n[`NOTIFICATION_AGENT_THINKING`].",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "thinking"
+        },
+        "session_id": {
+          "description": "Stable session id.",
+          "type": "string"
+        },
+        "text": {
+          "description": "Reasoning text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "session_id",
+        "text"
+      ]
+    },
+    {
+      "description": "Agent invoked a tool. Maps to [`NOTIFICATION_AGENT_TOOL_CALL`].",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "Tool arguments."
+        },
+        "kind": {
+          "type": "string",
+          "const": "toolCall"
+        },
+        "name": {
+          "description": "Tool name.",
+          "type": "string"
+        },
+        "server": {
+          "description": "MCP server that hosts the tool, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "description": "Stable session id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "session_id",
+        "name",
+        "arguments"
+      ]
+    },
+    {
+      "description": "Tool returned a result. Maps to [`NOTIFICATION_AGENT_TOOL_RESULT`].",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "toolResult"
+        },
+        "name": {
+          "description": "Tool name.",
+          "type": "string"
+        },
+        "output": {
+          "description": "Tool output."
+        },
+        "session_id": {
+          "description": "Stable session id.",
+          "type": "string"
+        },
+        "success": {
+          "description": "True if the tool reported success.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "session_id",
+        "name",
+        "output",
+        "success"
+      ]
+    },
+    {
+      "description": "Error encountered mid-run. Maps to [`NOTIFICATION_AGENT_ERROR`].",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "error"
+        },
+        "message": {
+          "description": "Error message.",
+          "type": "string"
+        },
+        "recoverable": {
+          "description": "True if the run continues after this error.",
+          "type": "boolean"
+        },
+        "session_id": {
+          "description": "Stable session id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "session_id",
+        "message",
+        "recoverable"
+      ]
+    }
+  ]
+}

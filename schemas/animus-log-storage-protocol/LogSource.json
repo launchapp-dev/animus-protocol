@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogSource",
+  "description": "What produced a [`LogEntry`].\n\nThe set is closed — every emitter in the Animus protocol maps to one of\nthese four buckets. Disambiguate finer-grained emitters via\n[`LogEntry::source_name`].",
+  "oneOf": [
+    {
+      "description": "The Animus daemon process itself.",
+      "type": "string",
+      "const": "daemon"
+    },
+    {
+      "description": "A plugin process (subject backend, provider, trigger, log storage, ...).\nUse [`LogEntry::source_name`] to name the specific plugin.",
+      "type": "string",
+      "const": "plugin"
+    },
+    {
+      "description": "A short-lived CLI invocation. Use [`LogEntry::source_name`] to name\nthe command (`\"queue list\"`, `\"workflow run\"`, ...).",
+      "type": "string",
+      "const": "cli"
+    },
+    {
+      "description": "An in-flight workflow run. Use [`LogEntry::source_name`] to carry the\nworkflow id.",
+      "type": "string",
+      "const": "workflow"
+    }
+  ]
+}

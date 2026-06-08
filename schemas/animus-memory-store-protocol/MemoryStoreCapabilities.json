@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MemoryStoreCapabilities",
+  "description": "Capability flags for memory_store plugins.",
+  "type": "object",
+  "properties": {
+    "max_query_top_k": {
+      "description": "Maximum `top_k` allowed on a query.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    },
+    "native_key_get": {
+      "description": "`true` if `memory/get` is O(1) exact-key. Zep: `false`\n(search-based fallback).",
+      "type": "boolean",
+      "default": false
+    },
+    "native_ttl": {
+      "description": "`true` if the backend natively honors `ttl_secs`. Zep: `false`.\nSQLite-backed: `true`.",
+      "type": "boolean",
+      "default": false
+    },
+    "strong_consistency": {
+      "description": "`true` if put → query is immediately consistent. Zep: `false`.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

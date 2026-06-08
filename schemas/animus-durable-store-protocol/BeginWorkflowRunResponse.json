@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BeginWorkflowRunResponse",
+  "description": "Response for [`METHOD_DURABLE_BEGIN_WORKFLOW_RUN`].",
+  "type": "object",
+  "properties": {
+    "epoch": {
+      "description": "Plugin-issued, monotonically increasing epoch. The plugin persists\nthe current epoch counter to its durable store; on restart, it\nresumes from the persisted value, not zero. The daemon does not\nstore epoch values across restarts; instead it queries\n[`METHOD_DURABLE_RECOVER_IN_FLIGHT`] with `since_epoch = 0` after\nrestart to get all in-flight runs.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "epoch"
+  ]
+}

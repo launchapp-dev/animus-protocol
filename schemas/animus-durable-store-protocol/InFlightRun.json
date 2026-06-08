@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InFlightRun",
+  "description": "A run that had outstanding reservations at recovery time.",
+  "type": "object",
+  "properties": {
+    "last_committed_step": {
+      "description": "Step name of the last committed step, if any.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "phase_id": {
+      "description": "Phase id.",
+      "type": "string"
+    },
+    "replay_state": {
+      "description": "Backend-specific replay state (e.g., DBOS workflow status payload)."
+    },
+    "run_id": {
+      "description": "Run id.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "phase_id"
+  ]
+}

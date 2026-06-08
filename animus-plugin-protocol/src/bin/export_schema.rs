@@ -36,7 +36,7 @@ fn default_out_dir() -> PathBuf {
     // current working directory.
     let base = env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
-        .and_then(|dir| dir.parent().and_then(Path::parent).map(Path::to_path_buf))
+        .and_then(|dir| dir.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     base.join("schemas").join("animus-plugin-protocol")
 }

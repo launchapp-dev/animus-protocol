@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueMarkAssignedRequest",
+  "description": "Request for [`METHOD_QUEUE_MARK_ASSIGNED`].",
+  "type": "object",
+  "properties": {
+    "entry_id": {
+      "description": "Entry id to transition.",
+      "type": "string"
+    },
+    "workflow_id": {
+      "description": "Workflow id to attach.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "entry_id"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TriggerSchema",
+  "description": "Capability declaration returned by [`METHOD_TRIGGER_SCHEMA`].\n\nThe daemon uses this to adapt behavior without runtime guessing — for\nexample, to skip [`TriggerBackend::ack`] calls for fire-and-forget\nbackends, or to expose the set of event kinds to workflow authors so\nthey can match on `kind`.",
+  "type": "object",
+  "properties": {
+    "kinds": {
+      "description": "Event kinds this backend can emit. Examples:\n`[\"slack_mention\", \"slack_channel_message\"]`,\n`[\"github_webhook_push\", \"github_webhook_pull_request\"]`,\n`[\"cron_tick\"]`.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "supports_ack": {
+      "description": "Whether the backend honors [`METHOD_TRIGGER_ACK`]. Backends without\nack support return [`error_codes::METHOD_NOT_SUPPORTED`] from\n`trigger/ack`; hosts then skip the call.",
+      "type": "boolean"
+    },
+    "supports_dedup": {
+      "description": "Whether the backend deduplicates events across restarts by emitting\nthe same [`TriggerEvent::id`] for a re-seen event. Hosts use this to\ndecide whether to maintain their own dedup table.",
+      "type": "boolean"
+    },
+    "supports_resume": {
+      "description": "Whether the backend can resume a subscription after a host restart\n(i.e. honors a delivery cursor). Backends without resume support\nre-emit events from the moment [`TriggerBackend::watch`] is called.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "kinds",
+    "supports_resume",
+    "supports_dedup",
+    "supports_ack"
+  ]
+}

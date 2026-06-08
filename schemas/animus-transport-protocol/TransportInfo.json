@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TransportInfo",
+  "description": "Reply returned by [`TransportBackend::start`] once the listener is bound.\n\n`bound_addr` is the *actual* address the listener accepted on (after any\n`0` port resolution) and is what the daemon advertises to operators.\n`started_at` lets dashboards display \"transport up for N minutes\" without\nthe daemon tracking it separately.",
+  "type": "object",
+  "properties": {
+    "bound_addr": {
+      "description": "Address the listener actually bound to. For TCP transports this is\n`host:port`. For Unix-socket transports (future) this is the socket\npath. Daemons MAY surface this verbatim in `daemon/status` output.",
+      "type": "string"
+    },
+    "started_at": {
+      "description": "When the listener became ready to accept connections. UTC, RFC 3339.",
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "bound_addr",
+    "started_at"
+  ]
+}

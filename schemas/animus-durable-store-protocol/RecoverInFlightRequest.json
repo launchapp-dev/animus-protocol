@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RecoverInFlightRequest",
+  "description": "Request for [`METHOD_DURABLE_RECOVER_IN_FLIGHT`].",
+  "type": "object",
+  "properties": {
+    "since_epoch": {
+      "description": "Epoch cursor. Daemon passes `0` after restart to get all in-flight\nruns; subsequent polls pass the highest epoch seen previously.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "since_epoch"
+  ]
+}

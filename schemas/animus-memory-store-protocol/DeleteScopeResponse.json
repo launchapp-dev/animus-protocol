@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeleteScopeResponse",
+  "description": "Response for [`METHOD_MEMORY_DELETE_SCOPE`].",
+  "type": "object",
+  "properties": {
+    "ack": {
+      "description": "`true` if the scope was deleted (or didn't exist; idempotent).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ack"
+  ]
+}

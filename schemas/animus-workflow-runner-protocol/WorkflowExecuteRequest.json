@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowExecuteRequest",
+  "description": "Parameters for [`METHOD_WORKFLOW_EXECUTE`].\n\nEither `subject_dispatch` must be set OR (`subject_ref` + one of\n`task_id` / `requirement_id` / (`title` + `description`)). Generic\nsubject backends MUST use `subject_dispatch`; task and requirement\nbackends MAY use the convenience fields.",
+  "type": "object",
+  "properties": {
+    "description": {
+      "description": "For custom ad-hoc subjects.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "input": {
+      "description": "Initial input JSON for workflow variables."
+    },
+    "mcp_config": {
+      "description": "Opaque MCP runtime config."
+    },
+    "model": {
+      "description": "Force a specific model.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "phase_filter": {
+      "description": "Single-phase filter: run only this phase id.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "phase_routing": {
+      "description": "Opaque phase routing config (backend-specific)."
+    },
+    "phase_timeout_secs": {
+      "description": "Per-phase timeout in seconds.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "requirement_id": {
+      "description": "Requirement id.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "subject_dispatch": {
+      "description": "Generic dispatch envelope (preferred for non-task/requirement subjects).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubjectDispatch"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "subject_ref": {
+      "description": "Identifies which subject to run when `subject_dispatch` is not set.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubjectRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "task_id": {
+      "description": "Task id (used only when `subject_dispatch` is None and\n`subject_ref.kind == \"animus.task\"`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "For custom ad-hoc subjects without an existing `subject_ref`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tool": {
+      "description": "Force a specific tool (`\"claude\"`, `\"codex\"`, `\"gemini\"`, ...).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "vars": {
+      "description": "Workflow scalar variables.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "workflow_id": {
+      "description": "Existing workflow id to resume, or `None` to start a fresh run.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workflow_ref": {
+      "description": "Workflow YAML ref (e.g., `\"standard\"`, `\"research-first\"`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "SubjectDispatch": {
+      "description": "Full dispatch envelope handed off from queue / scheduler / trigger to the\nworkflow runner.\n\nCarries the subject identity (`subject`), the workflow ref to run, and\noptional input + variables + priority + trigger source + requested-at\ntimestamp. The shape is wire-compatible with the previous home in\nao-cli's `protocol` crate.",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "Optional initial input JSON for workflow variables."
+        },
+        "priority": {
+          "description": "Optional priority hint (`\"low\"`, `\"medium\"`, `\"high\"`, `\"critical\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_at": {
+          "description": "When the dispatch was created.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "subject": {
+          "description": "The subject this dispatch targets.",
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "trigger_source": {
+          "description": "Tag identifying which subsystem produced this dispatch\n(e.g., `\"ready-queue\"`, `\"trigger:slack\"`, `\"schedule:nightly\"`).",
+          "type": "string"
+        },
+        "vars": {
+          "description": "Workflow scalar variables.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "workflow_ref": {
+          "description": "Workflow YAML ref to execute (e.g., `\"standard\"`, `\"quick-fix\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "workflow_ref",
+        "trigger_source",
+        "requested_at"
+      ]
+    },
+    "SubjectRef": {
+      "description": "Backend-qualified subject reference with optional display metadata.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metadata": true,
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    }
+  }
+}

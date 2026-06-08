@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GetMemoryResponse",
+  "description": "Response for [`METHOD_MEMORY_GET`].",
+  "type": "object",
+  "properties": {
+    "found": {
+      "description": "`true` iff the key was found.",
+      "type": "boolean"
+    },
+    "value": {
+      "description": "The stored value, if found."
+    }
+  },
+  "required": [
+    "found"
+  ]
+}

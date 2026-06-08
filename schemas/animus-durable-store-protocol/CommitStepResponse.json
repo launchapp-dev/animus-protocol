@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommitStepResponse",
+  "description": "Response for [`METHOD_DURABLE_COMMIT_STEP`].",
+  "type": "object",
+  "properties": {
+    "ack": {
+      "description": "`true` if the commit was persisted (or already persisted under\nidempotent retry).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ack"
+  ]
+}

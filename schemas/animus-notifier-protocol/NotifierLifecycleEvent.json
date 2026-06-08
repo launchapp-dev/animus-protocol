@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NotifierLifecycleEvent",
+  "description": "Lifecycle record emitted by a notifier plugin so the daemon can mirror\nit into operator-visible logs.",
+  "type": "object",
+  "properties": {
+    "data": {
+      "description": "Free-form payload mirrored verbatim into `DaemonEventRecord.data`."
+    },
+    "event_type": {
+      "description": "Event-type label, e.g. `\"notification-delivery-enqueued\"`.",
+      "type": "string"
+    },
+    "project_root": {
+      "description": "Project root the underlying event belonged to, if known.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "event_type",
+    "data"
+  ]
+}

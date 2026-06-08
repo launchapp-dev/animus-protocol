@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubjectList",
+  "description": "Result of `subject/list`.",
+  "type": "object",
+  "properties": {
+    "fetched_at": {
+      "description": "When the backend snapshot was taken. Used by the daemon for cache\nfreshness reasoning.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_cursor": {
+      "description": "Opaque cursor for the next page, or `None` if exhausted.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "subjects": {
+      "description": "Subjects in this page.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Subject"
+      }
+    }
+  },
+  "required": [
+    "subjects",
+    "fetched_at"
+  ],
+  "$defs": {
+    "Subject": {
+      "description": "A normalized cross-backend representation of a unit of dispatchable work.\n\nSubjects flow from backends into the daemon's dispatch queue and back as\nupdates after a workflow run completes. Backend-specific fields the\ndaemon doesn't interpret live in [`Subject::custom`] and are addressable\nfrom workflow YAML via templating (e.g.\n`{{subject.custom.story_points}}`).",
+      "type": "object",
+      "properties": {
+        "assignee": {
+          "description": "Free-form assignee identifier. Format is backend-specific; commonly\na username, email, or `\"agent:<name>\"` for an Animus agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attachments": {
+          "description": "First-class attachments the subject carries — documents, URLs,\nuploaded files, comment threads. Backends like Linear surface\nattached spec docs here; workflow YAML can gate on attachment\npresence (`requires_document_attachment: true`) to drive\ndocument-aware phases. Defaults to empty, which is skipped on\nserialization for v0.1.0 wire compatibility.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubjectAttachment"
+          }
+        },
+        "children": {
+          "description": "Child subjects, if any.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubjectId"
+          }
+        },
+        "created_at": {
+          "description": "When the subject was first created in its native system.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "custom": {
+          "description": "Backend-specific fields the daemon does not interpret. Workflows\ncan read these via templating.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "description": {
+          "description": "Long-form description (markdown encouraged).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Backend-qualified identifier. See [`SubjectId`].",
+          "$ref": "#/$defs/SubjectId"
+        },
+        "kind": {
+          "description": "Subject kind. Backend-defined. Examples: `\"task\"`, `\"issue\"`,\n`\"epic\"`, `\"ticket\"`, `\"document\"`, `\"lead\"`, `\"contract\"`,\n`\"incident\"`.",
+          "type": "string"
+        },
+        "labels": {
+          "description": "Labels/tags. Backend-defined string set.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "native_status": {
+          "description": "Backend-raw status string, e.g. `\"In Review\"`, `\"Spec\"`, `\"Shipped\"`,\n`\"Cycle 12 / blocked on infra\"`. The normalized [`Subject::status`]\nis the coarse-grained bucket; this preserves the upstream signal so\nworkflows can dispatch on rich vocabularies. Optional —\nbackends that have nothing more specific than the normalized status\nshould leave this `None`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "description": "Parent subject, if any (e.g. an epic for an issue).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "description": "Optional priority on a 0..=4 scale: 0 = none, 1 = low, 2 = medium,\n3 = high, 4 = critical.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "status": {
+          "description": "Normalized status. See [`SubjectStatus`].",
+          "$ref": "#/$defs/SubjectStatus"
+        },
+        "status_metadata": {
+          "description": "Free-form backend status payload — state id, color, type, ordering\nposition, transition rules, etc. Workflows may read this via\ntemplating (e.g. `{{subject.status_metadata.color}}`). Defaults to\nJSON `null`, which is skipped on serialization so v0.1.0 consumers\nsee no extra field."
+        },
+        "title": {
+          "description": "Short human-readable title.",
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "When the subject was last updated in its native system.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "url": {
+          "description": "Permalink to the subject in its native system, if one exists.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "SubjectAttachment": {
+      "description": "An attachment on a [`Subject`] — document, URL, file, comment thread, or\nany other backend-defined artifact carried alongside the work item.\n\nThe `kind` field is opaque to the daemon; workflow YAML matches on it.\nConvention: `\"document\"`, `\"url\"`, `\"file\"`, `\"comment-thread\"`. Backends\nMAY introduce custom kinds.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable identifier for this attachment within the backend.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Attachment category. Conventional values: `\"document\"`, `\"url\"`,\n`\"file\"`, `\"comment-thread\"`. Backends MAY emit custom values.",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Free-form backend metadata (size, author, revision, etc.). Defaults\nto JSON `null` and is skipped on serialization at that default."
+        },
+        "mime_type": {
+          "description": "MIME type, if known (e.g. `\"text/markdown\"`, `\"application/pdf\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Human-readable title, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "description": "Location-of-truth URI. Examples: `linear://issue/ENG-123/doc/spec`,\n`https://docs.example.com/spec.md`, `file:///tmp/handoff.md`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "uri"
+      ]
+    },
+    "SubjectId": {
+      "description": "Backend-qualified identifier for a subject.\n\nConvention is `\"<backend>:<native_id>\"`, e.g. `\"linear:ENG-123\"`,\n`\"jira:PROJ-456\"`, `\"github:owner/repo#789\"`, `\"native:TASK-001\"`. The\ndaemon treats the value as opaque; only the originating backend\ninterprets the native portion.\n\nThe `backend:` prefix is reserved. Plugin authors should always emit\nprefixed ids so cross-backend collisions are impossible.",
+      "type": "string"
+    },
+    "SubjectStatus": {
+      "description": "Normalized cross-backend subject status.\n\nBackend-native states (`\"Backlog\"`, `\"In Review\"`, `\"Won't Fix\"`, ...) map\ninto one of these five via the `status_map` declared per-subject in\nworkflow YAML. The mapping lives in configuration, not code, so adding a\nnew backend never requires extending this enum.",
+      "oneOf": [
+        {
+          "description": "Eligible for dispatch.",
+          "type": "string",
+          "const": "ready"
+        },
+        {
+          "description": "Currently being worked by a workflow run (or by a human, in the\nupstream system).",
+          "type": "string",
+          "const": "in-progress"
+        },
+        {
+          "description": "Cannot proceed; awaiting unblock.",
+          "type": "string",
+          "const": "blocked"
+        },
+        {
+          "description": "Successfully completed.",
+          "type": "string",
+          "const": "done"
+        },
+        {
+          "description": "Abandoned without completion.",
+          "type": "string",
+          "const": "cancelled"
+        }
+      ]
+    }
+  }
+}

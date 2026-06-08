@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use animus_plugin_protocol::{error_codes, HealthCheckResult, RpcError};
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -70,7 +71,7 @@ pub const NOTIFICATION_AGENT_ERROR: &str = "agent/error";
 /// Returned by both the one-shot `--manifest` CLI mode and the `initialize`
 /// JSON-RPC handshake. The fields here are the provider-specific overlay on
 /// top of [`animus_plugin_protocol::PluginManifest`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderManifest {
     /// Plugin name (e.g. `"animus-provider-claude"`).
     pub name: String,
@@ -93,7 +94,7 @@ pub struct ProviderManifest {
 }
 
 /// Provider capability flags.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderCapabilities {
     /// Provider emits `agent/output` deltas as the model produces them.
     #[serde(default)]
@@ -124,7 +125,7 @@ pub struct ProviderCapabilities {
 /// carry the prior `session_id` so the provider knows which transcript to
 /// continue. The shape is intentionally tolerant of provider-specific
 /// extensions via [`AgentRunRequest::extras`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentRunRequest {
     /// Existing session id when resuming. `None` for fresh runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -195,7 +196,7 @@ pub struct AgentRunRequest {
 pub type AgentResumeRequest = AgentRunRequest;
 
 /// Parameters for an `agent/cancel` call.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentCancelRequest {
     /// Session id to cancel.
     pub session_id: String,
@@ -205,7 +206,7 @@ pub struct AgentCancelRequest {
 ///
 /// Streaming notifications are sent during the run; this is the aggregated
 /// terminal payload. Hosts may persist it as the canonical run record.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentRunResponse {
     /// Provider-issued session id. Stable for the life of the session;
     /// usable with `agent/resume` later.
@@ -255,7 +256,7 @@ pub struct AgentRunResponse {
 }
 
 /// Token-accounting summary for an agent run.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TokenUsage {
     /// Input tokens consumed.
     pub input: u64,
@@ -355,7 +356,7 @@ impl From<BackendError> for RpcError {
 /// `session_id` is filled in by the provider once known. All variants are
 /// safe to emit before [`AgentRunResponse`] is returned; emissions after the
 /// response are ignored by the runtime.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum AgentNotification {
     /// Incremental text the model has produced. Maps to

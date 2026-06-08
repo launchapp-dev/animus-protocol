@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeleteSubjectResponse",
+  "description": "Response payload for `subject/delete`. Added in v0.1.8.\n\nCarries a single `ok` flag so the wire shape remains an object (matching\nevery other subject verb) and so future fields — e.g. a tombstone id or a\n`permanent: bool` discriminator — can be added without breaking v0.1.8\nclients.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "description": "True when the backend successfully deleted the subject.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ok"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AbandonStepResponse",
+  "description": "Response for [`METHOD_DURABLE_ABANDON_STEP`].",
+  "type": "object",
+  "properties": {
+    "ack": {
+      "description": "`true` if a reservation was found and released.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ack"
+  ]
+}

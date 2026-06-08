@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueLeaseRequest",
+  "description": "Request for [`METHOD_QUEUE_LEASE`].",
+  "type": "object",
+  "properties": {
+    "exclude_subjects": {
+      "description": "Subjects to skip during lease selection.\n\nEntries whose `subject_dispatch.subject_key()` matches any id in\nthis list stay in Pending status and are not returned in the\nlease response. No state transition occurs for them. Hosts use\nthis to tell the queue \"this subject already has an in-flight\nworkflow\" so it advances past the head-of-line entry instead of\nreturning it for the daemon to immediately release back.\nBackward-compat: `None` / omitted is identical to today's behavior.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/SubjectId"
+      }
+    },
+    "max": {
+      "description": "Maximum number of entries to lease in this call.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "workflow_ids": {
+      "description": "Optional daemon-provided workflow ids to attach to leased entries.\nIf set, length MUST be exactly `max` (plugin returns an error\notherwise). If `None`, the plugin generates synthetic UUIDs.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "max"
+  ],
+  "$defs": {
+    "SubjectId": {
+      "description": "Backend-qualified identifier for a subject.\n\nConvention is `\"<backend>:<native_id>\"`, e.g. `\"linear:ENG-123\"`,\n`\"jira:PROJ-456\"`, `\"github:owner/repo#789\"`, `\"native:TASK-001\"`. The\ndaemon treats the value as opaque; only the originating backend\ninterprets the native portion.\n\nThe `backend:` prefix is reserved. Plugin authors should always emit\nprefixed ids so cross-backend collisions are impossible.",
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowPhaseRunRequest",
+  "description": "Parameters for [`METHOD_WORKFLOW_RUN_PHASE`].",
+  "type": "object",
+  "properties": {
+    "dispatch_input": {
+      "description": "Dispatch input JSON (opaque).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "execution_cwd": {
+      "description": "Execution working directory for the phase.",
+      "type": "string"
+    },
+    "mcp_config": {
+      "description": "Opaque MCP runtime config — same shape as\n[`WorkflowExecuteRequest::mcp_config`]. Lets phase-level retries\npass MCP server config to the agent runner."
+    },
+    "model_override": {
+      "description": "Model override.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "phase_attempt": {
+      "description": "Attempt counter (0, 1, 2, ...).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "phase_id": {
+      "description": "Phase id to run.",
+      "type": "string"
+    },
+    "phase_routing": {
+      "description": "Phase routing config (opaque)."
+    },
+    "phase_timeout_secs": {
+      "description": "Optional timeout override (seconds).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "pipeline_vars": {
+      "description": "Pipeline variables.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "rework_context": {
+      "description": "Rework context from a prior phase's `rework` verdict.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schedule_input": {
+      "description": "Schedule input JSON (opaque).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "subject_description": {
+      "description": "Subject description for prompts.",
+      "type": "string"
+    },
+    "subject_id": {
+      "description": "Subject id.",
+      "type": "string"
+    },
+    "subject_title": {
+      "description": "Subject title for prompts.",
+      "type": "string"
+    },
+    "task_complexity": {
+      "description": "Task complexity hint: `\"minimal\" | \"low\" | \"medium\" | \"high\" | \"critical\"`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tool_override": {
+      "description": "Tool override.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workflow_id": {
+      "description": "Workflow id.",
+      "type": "string"
+    },
+    "workflow_ref": {
+      "description": "Workflow ref.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "execution_cwd",
+    "workflow_id",
+    "workflow_ref",
+    "subject_id",
+    "subject_title",
+    "subject_description",
+    "phase_id",
+    "phase_attempt"
+  ]
+}

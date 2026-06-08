@@ -39,6 +39,7 @@ use animus_plugin_protocol::{error_codes, HealthCheckResult, RpcError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures_core::Stream;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -81,7 +82,7 @@ pub const PLUGIN_KIND_LOG_STORAGE_BACKEND: &str = "log_storage_backend";
 /// `fields` value is opaque to the host and lets emitters attach structured
 /// key/value context (`request_id`, `subject_id`, `workflow_id`, ...) without
 /// stretching the fixed schema.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LogEntry {
     /// Backend-assigned unique id. UUID, ULID, monotonic timestamp,
     /// `(source, ts, hash(message))` — whatever the backend can dedupe on.
@@ -134,7 +135,9 @@ fn is_null(value: &Value) -> bool {
 /// Levels follow the [`tracing`](https://docs.rs/tracing) convention.
 /// Backends MAY drop entries below a configured floor; the daemon does not
 /// require backends to persist every level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     /// Highest-volume, lowest-priority. Used for fine-grained instrumentation.
@@ -158,7 +161,7 @@ pub enum LogLevel {
 /// The set is closed — every emitter in the Animus protocol maps to one of
 /// these four buckets. Disambiguate finer-grained emitters via
 /// [`LogEntry::source_name`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LogSource {
     /// The Animus daemon process itself.
@@ -185,7 +188,7 @@ pub enum LogSource {
 /// honor filters they advertise via [`LogStorageSchema::supports_filtering`]
 /// and MAY return [`error_codes::METHOD_NOT_SUPPORTED`] for filters they
 /// can't apply — the daemon then filters in-process.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LogQuery {
     /// Minimum severity. Entries below this level are excluded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -240,7 +243,7 @@ pub struct LogQuery {
 /// Backends that paginate set `next_cursor` to an opaque string the caller
 /// passes back as [`LogQuery::cursor`]. Backends that return everything
 /// in one shot leave it `None`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LogQueryResult {
     /// Matched entries in chronological order (oldest first). Backends MAY
     /// reverse this for performance; if so, document it.
@@ -261,7 +264,7 @@ pub struct LogQueryResult {
 /// example, to skip [`LogStorageBackend::tail`] for batch-only backends, or
 /// to know whether to apply filters in-process before/after sending the
 /// query.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LogStorageSchema {
     /// Backend implements [`LogStorageBackend::query`] for historical reads.
     /// If `false`, the backend is write-only (a sink); hosts MUST NOT call
@@ -284,12 +287,14 @@ pub struct LogStorageSchema {
     /// wire to keep the schema serde-friendly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(with = "duration_ms_opt")]
+    #[schemars(with = "Option<i64>")]
     pub max_query_window: Option<chrono::Duration>,
 
     /// Typical retention period after which entries are evicted. Surfaced to
     /// operators so they understand how far back queries can reach.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(with = "duration_ms_opt")]
+    #[schemars(with = "Option<i64>")]
     pub retention_hint: Option<chrono::Duration>,
 }
 
@@ -298,7 +303,7 @@ pub struct LogStorageSchema {
 /// Fields default to `false`; backends opt into each filter they can apply
 /// natively. Filters the backend doesn't support are evaluated in-process
 /// by the daemon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SupportsFiltering {
     /// Backend honors [`LogQuery::min_level`].
     #[serde(default)]

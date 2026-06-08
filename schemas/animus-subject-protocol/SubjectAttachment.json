@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubjectAttachment",
+  "description": "An attachment on a [`Subject`] — document, URL, file, comment thread, or\nany other backend-defined artifact carried alongside the work item.\n\nThe `kind` field is opaque to the daemon; workflow YAML matches on it.\nConvention: `\"document\"`, `\"url\"`, `\"file\"`, `\"comment-thread\"`. Backends\nMAY introduce custom kinds.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "description": "Stable identifier for this attachment within the backend.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Attachment category. Conventional values: `\"document\"`, `\"url\"`,\n`\"file\"`, `\"comment-thread\"`. Backends MAY emit custom values.",
+      "type": "string"
+    },
+    "metadata": {
+      "description": "Free-form backend metadata (size, author, revision, etc.). Defaults\nto JSON `null` and is skipped on serialization at that default."
+    },
+    "mime_type": {
+      "description": "MIME type, if known (e.g. `\"text/markdown\"`, `\"application/pdf\"`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "Human-readable title, if known.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "uri": {
+      "description": "Location-of-truth URI. Examples: `linear://issue/ENG-123/doc/spec`,\n`https://docs.example.com/spec.md`, `file:///tmp/handoff.md`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "uri"
+  ]
+}

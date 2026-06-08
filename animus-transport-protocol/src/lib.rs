@@ -40,6 +40,7 @@ use std::path::PathBuf;
 use animus_plugin_protocol::{error_codes, HealthCheckResult, RpcError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -87,7 +88,7 @@ pub const PLUGIN_KIND_TRANSPORT_BACKEND: &str = "transport_backend";
 ///   "..." }`
 /// - GraphQL transport: `{ "introspection": false, "subscriptions": true }`
 /// - gRPC transport: `{ "tls": {"cert": "...", "key": "..."} }`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TransportConfig {
     /// Absolute path to the daemon's control Unix socket. The transport
     /// connects to this socket to issue control RPCs on behalf of inbound
@@ -128,7 +129,7 @@ fn is_null(value: &Value) -> bool {
 /// `0` port resolution) and is what the daemon advertises to operators.
 /// `started_at` lets dashboards display "transport up for N minutes" without
 /// the daemon tracking it separately.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TransportInfo {
     /// Address the listener actually bound to. For TCP transports this is
     /// `host:port`. For Unix-socket transports (future) this is the socket
@@ -148,7 +149,7 @@ pub struct TransportInfo {
 /// The daemon uses this to adapt behavior without runtime guessing — for
 /// example, to skip WebSocket-bound features for transports that don't
 /// support them, or to pick a default port when the operator omits one.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TransportSchema {
     /// Protocol kinds this transport exposes. Convention is a single
     /// lowercase token per kind, e.g. `["http", "rest"]` for an HTTP/REST

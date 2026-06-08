@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PhaseEvent",
+  "description": "Event emitted by the runner during a workflow. Daemon callers receive\nthe full vector in [`WorkflowExecuteResult::phase_events`]; real-time\nstreaming is deferred to v0.6.",
+  "oneOf": [
+    {
+      "description": "Phase started.",
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "description": "Attempt number (0, 1, ...).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "const": "started"
+        },
+        "phase_id": {
+          "description": "Phase id.",
+          "type": "string"
+        },
+        "ts": {
+          "description": "RFC 3339 timestamp.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "phase_id",
+        "attempt",
+        "ts"
+      ]
+    },
+    {
+      "description": "Phase recorded a decision contract verdict.",
+      "type": "object",
+      "properties": {
+        "confidence": {
+          "description": "Optional confidence score, 0.0 – 1.0.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "kind": {
+          "type": "string",
+          "const": "decision"
+        },
+        "phase_id": {
+          "description": "Phase id.",
+          "type": "string"
+        },
+        "ts": {
+          "description": "RFC 3339 timestamp.",
+          "type": "string"
+        },
+        "verdict": {
+          "description": "`\"advance\"`, `\"rework\"`, `\"skip\"`, `\"fail\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "phase_id",
+        "verdict",
+        "ts"
+      ]
+    },
+    {
+      "description": "Phase finished with a final status.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "completed"
+        },
+        "phase_id": {
+          "description": "Phase id.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Status; one of [`phase_status`] values.",
+          "type": "string"
+        },
+        "ts": {
+          "description": "RFC 3339 timestamp.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "phase_id",
+        "status",
+        "ts"
+      ]
+    }
+  ]
+}

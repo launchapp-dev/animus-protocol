@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NotifierNotifyParams",
+  "description": "Parameters for [`METHOD_NOTIFIER_NOTIFY`].",
+  "type": "object",
+  "properties": {
+    "event": {
+      "description": "One daemon event record to forward.",
+      "$ref": "#/$defs/DaemonEventRecord"
+    }
+  },
+  "required": [
+    "event"
+  ],
+  "$defs": {
+    "DaemonEventRecord": {
+      "description": "Wire shape of one daemon event record forwarded to notifiers.\n\nMirrors `protocol::DaemonEventRecord` from `animus-cli` so the daemon\ncan hand its native event record over the wire without translation.\nKept in this crate (rather than imported from the main protocol\ncrate) so notifier plugin authors only need to depend on this crate\n+ `animus-plugin-runtime`.",
+      "type": "object",
+      "properties": {
+        "data": {
+          "description": "Free-form event payload."
+        },
+        "event_type": {
+          "description": "Event kind (e.g. `\"workflow_completed\"`, `\"task-state-change\"`).",
+          "type": "string"
+        },
+        "id": {
+          "description": "Globally-unique event id.",
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Optional project root path this event is about.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "description": "Schema URI for the event payload (e.g. `\"animus.daemon-event.v1\"`).",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Monotonic sequence number assigned by the daemon for this run.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "timestamp": {
+          "description": "RFC3339 timestamp the daemon stamped at emission.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "timestamp",
+        "event_type",
+        "data"
+      ]
+    }
+  }
+}

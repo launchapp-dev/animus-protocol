@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubjectSchema",
+  "description": "Capability declaration returned by `subject/schema`.\n\nThe daemon uses this to adapt behavior without runtime guessing — for\nexample, to skip `subject/watch` for polling-only backends, or to\npre-populate a UI with the subject's available custom-field values.",
+  "type": "object",
+  "properties": {
+    "custom_fields": {
+      "description": "Custom field declarations.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CustomFieldSpec"
+      }
+    },
+    "kinds": {
+      "description": "Subject kinds this backend produces.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "native_status_values": {
+      "description": "Native (pre-mapping) status values the backend uses upstream. Useful\nfor documenting `status_map` entries in workflow YAML.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "status_dispatch_hints": {
+      "description": "Status dispatch hints: for each backend-native status the backend\ndeclares what normalized [`SubjectStatus`] it bucketizes to and an\noptional `dispatch_label` workflow YAML can fire phases on.\n\n`dispatch_label` decouples workflow YAML from any one backend's\nvocabulary. Multiple backends (Linear `\"In Review\"`, GitHub\n`\"awaiting-review\"`, Jira `\"Code Review\"`) can advertise the same\n`dispatch_label = \"code-review\"`, and a workflow phase keyed on\nthat label fires for all of them.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StatusDispatchHint"
+      }
+    },
+    "status_values": {
+      "description": "Normalized status values this backend can emit.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SubjectStatus"
+      }
+    },
+    "supports_create": {
+      "description": "True iff the plugin honors `<kind>/create` verb invocations.\n\nThe protocol-standard `subject/create` verb has not been wired in\nany first-party plugin or daemon path; the kind-prefixed form is\nthe durable surface in production today. Backends that intend\ncallers to be able to insert new subjects should set this to\n`true` and register a `<kind>/create` method handler.",
+      "type": "boolean"
+    },
+    "supports_delete": {
+      "description": "True iff the plugin honors [`METHOD_SUBJECT_DELETE`] (or the\nequivalent kind-prefixed `<kind>/delete` form).\n\nBackends that leave this `false` MUST respond to delete attempts\nwith [`error_codes::METHOD_NOT_SUPPORTED`] so the daemon can fall\nback to status-only soft-cancel semantics. Defaults to `false`\nfor v0.1.x wire compatibility: pre-v0.5.7 backends that emit\nschemas without this field decode as \"delete unsupported\".",
+      "type": "boolean",
+      "default": false
+    },
+    "supports_pagination": {
+      "description": "Whether `subject/list` honors `cursor`.",
+      "type": "boolean"
+    },
+    "supports_watch": {
+      "description": "Whether `subject/watch` is implemented.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "kinds",
+    "status_values",
+    "supports_watch",
+    "supports_create",
+    "supports_pagination"
+  ],
+  "$defs": {
+    "CustomFieldKind": {
+      "description": "The type of a custom field.",
+      "oneOf": [
+        {
+          "description": "Free-form string.",
+          "type": "string",
+          "const": "string"
+        },
+        {
+          "description": "Numeric (integer or float).",
+          "type": "string",
+          "const": "number"
+        },
+        {
+          "description": "Boolean.",
+          "type": "string",
+          "const": "bool"
+        },
+        {
+          "description": "Enumerated string; allowed values in [`CustomFieldSpec::values`].",
+          "type": "string",
+          "const": "enum"
+        },
+        {
+          "description": "Date/time (ISO 8601).",
+          "type": "string",
+          "const": "date"
+        }
+      ]
+    },
+    "CustomFieldSpec": {
+      "description": "Description of one custom field a backend exposes.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "Field key as it appears in [`Subject::custom`].",
+          "type": "string"
+        },
+        "type": {
+          "description": "Field type.",
+          "$ref": "#/$defs/CustomFieldKind"
+        },
+        "values": {
+          "description": "For [`CustomFieldKind::Enum`] fields, the enumerated values.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "type"
+      ]
+    },
+    "StatusDispatchHint": {
+      "description": "A mapping from a backend-native status string to its normalized bucket\nand optional dispatch label.\n\nSee [`SubjectSchema::status_dispatch_hints`].",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional human-readable description of the semantics of this\nnative status.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dispatch_label": {
+          "description": "Optional workflow dispatch label. When set, workflow YAML can\ntrigger phases keyed on this label (e.g.\n`triggered_by_dispatch_label: code-review`) regardless of which\nbackend the subject came from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maps_to": {
+          "description": "The normalized [`SubjectStatus`] bucket this native value maps into.",
+          "$ref": "#/$defs/SubjectStatus"
+        },
+        "native_status": {
+          "description": "The backend's native status string, e.g. `\"In Review\"`, `\"Spec\"`,\n`\"Shipped\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "native_status",
+        "maps_to"
+      ]
+    },
+    "SubjectStatus": {
+      "description": "Normalized cross-backend subject status.\n\nBackend-native states (`\"Backlog\"`, `\"In Review\"`, `\"Won't Fix\"`, ...) map\ninto one of these five via the `status_map` declared per-subject in\nworkflow YAML. The mapping lives in configuration, not code, so adding a\nnew backend never requires extending this enum.",
+      "oneOf": [
+        {
+          "description": "Eligible for dispatch.",
+          "type": "string",
+          "const": "ready"
+        },
+        {
+          "description": "Currently being worked by a workflow run (or by a human, in the\nupstream system).",
+          "type": "string",
+          "const": "in-progress"
+        },
+        {
+          "description": "Cannot proceed; awaiting unblock.",
+          "type": "string",
+          "const": "blocked"
+        },
+        {
+          "description": "Successfully completed.",
+          "type": "string",
+          "const": "done"
+        },
+        {
+          "description": "Abandoned without completion.",
+          "type": "string",
+          "const": "cancelled"
+        }
+      ]
+    }
+  }
+}

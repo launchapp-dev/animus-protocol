@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChangeKind",
+  "description": "Categorization of a subject change event.",
+  "oneOf": [
+    {
+      "description": "Subject was newly created upstream.",
+      "type": "string",
+      "const": "created"
+    },
+    {
+      "description": "Subject was updated (any field).",
+      "type": "string",
+      "const": "updated"
+    },
+    {
+      "description": "Subject's normalized status transitioned.",
+      "type": "string",
+      "const": "status-changed"
+    },
+    {
+      "description": "Subject was deleted upstream.",
+      "type": "string",
+      "const": "deleted"
+    },
+    {
+      "description": "Subject's workflow dispatch label moved, independent of any change\nto the normalized [`SubjectStatus`] bucket. Emitted when the\nbackend's native status moved between two values that share the\nsame normalized bucket but have different\n[`StatusDispatchHint::dispatch_label`]s.",
+      "type": "string",
+      "const": "dispatch-label-changed"
+    },
+    {
+      "description": "A [`SubjectAttachment`] was added to the subject.",
+      "type": "string",
+      "const": "attachment-added"
+    },
+    {
+      "description": "A [`SubjectAttachment`] was removed from the subject.",
+      "type": "string",
+      "const": "attachment-removed"
+    }
+  ]
+}

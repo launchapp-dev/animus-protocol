@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DurableStoreCapabilities",
+  "description": "Capability flags for durable_store plugins.",
+  "type": "object",
+  "properties": {
+    "default_reservation_ttl_secs": {
+      "description": "Default reservation TTL in seconds. If unset on a `begin_step` call,\nthe plugin uses this value. Hosts SHOULD respect this when picking\ntimeouts.",
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    },
+    "max_payload_bytes": {
+      "description": "Maximum serialized payload size (bytes) the backend accepts for a\nsingle step's `output` or `error`. Larger payloads should be passed\nby reference via Animus's artifact store.",
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    },
+    "supports_recovery": {
+      "description": "`true` if the backend supports the `recover_in_flight` cursor /\nepoch model.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

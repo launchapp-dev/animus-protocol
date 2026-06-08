@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueCapabilities",
+  "description": "Capability flags for queue plugins.",
+  "type": "object",
+  "properties": {
+    "max_lease_batch": {
+      "description": "Maximum batch size accepted on [`METHOD_QUEUE_LEASE`]. Hosts clamp\nrequested `max` to this value.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    },
+    "priority_weighted": {
+      "description": "`true` if the backend honors `priority` on `SubjectDispatch` (v0.5\nreference implementation is strict FIFO within Pending status; later\nbackends may weight by priority).",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

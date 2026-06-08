@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TokenUsage",
+  "description": "Token-accounting summary for an agent run.",
+  "type": "object",
+  "properties": {
+    "cache_writes": {
+      "description": "Tokens written to a prompt cache, if applicable.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "cached": {
+      "description": "Tokens served from a prompt cache, if applicable.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "input": {
+      "description": "Input tokens consumed.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "output": {
+      "description": "Output tokens generated.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "input",
+    "output"
+  ]
+}

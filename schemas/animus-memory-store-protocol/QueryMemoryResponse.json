@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueryMemoryResponse",
+  "description": "Response for [`METHOD_MEMORY_QUERY`].",
+  "type": "object",
+  "properties": {
+    "results": {
+      "description": "Top-k semantic matches in descending relevance.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MemoryQueryResult"
+      }
+    }
+  },
+  "required": [
+    "results"
+  ],
+  "$defs": {
+    "MemoryQueryResult": {
+      "description": "A single semantic query hit.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The key the value was stored under.",
+          "type": "string"
+        },
+        "score": {
+          "description": "Relevance score (backend-specific; higher is more relevant).",
+          "type": "number",
+          "format": "float"
+        },
+        "value": {
+          "description": "The stored value."
+        }
+      },
+      "required": [
+        "key",
+        "value",
+        "score"
+      ]
+    }
+  }
+}

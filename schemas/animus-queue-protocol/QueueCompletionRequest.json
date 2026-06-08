@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueCompletionRequest",
+  "description": "Request for [`METHOD_QUEUE_COMPLETION`].",
+  "type": "object",
+  "properties": {
+    "entry_id": {
+      "description": "Entry id whose workflow terminated.",
+      "type": "string"
+    },
+    "status": {
+      "description": "Terminal status (from [`completion_status`]).",
+      "type": "string"
+    },
+    "workflow_id": {
+      "description": "Workflow id that ran.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workflow_ref": {
+      "description": "Workflow ref that ran.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "entry_id",
+    "status"
+  ]
+}

@@ -20,6 +20,7 @@
 #![warn(missing_docs)]
 
 use animus_plugin_protocol::{error_codes, RpcError};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -62,7 +63,7 @@ pub const METHOD_NOTIFIER_SCHEMA: &str = "notifier/schema";
 /// Kept in this crate (rather than imported from the main protocol
 /// crate) so notifier plugin authors only need to depend on this crate
 /// + `animus-plugin-runtime`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DaemonEventRecord {
     /// Schema URI for the event payload (e.g. `"animus.daemon-event.v1"`).
     pub schema: String,
@@ -83,7 +84,7 @@ pub struct DaemonEventRecord {
 }
 
 /// Parameters for [`METHOD_NOTIFIER_NOTIFY`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct NotifierNotifyParams {
     /// One daemon event record to forward.
     pub event: DaemonEventRecord,
@@ -98,7 +99,7 @@ pub struct NotifierNotifyParams {
 /// best-effort lifecycle reporting (enqueued / sent / failed /
 /// dead-lettered) that the daemon can fan out into `events.jsonl` for
 /// operator visibility.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 pub struct NotifierNotifyResult {
     /// `true` iff at least one connector accepted the event for delivery.
     pub accepted: bool,
@@ -113,7 +114,7 @@ pub struct NotifierNotifyResult {
 
 /// Lifecycle record emitted by a notifier plugin so the daemon can mirror
 /// it into operator-visible logs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct NotifierLifecycleEvent {
     /// Event-type label, e.g. `"notification-delivery-enqueued"`.
     pub event_type: String,
@@ -125,7 +126,7 @@ pub struct NotifierLifecycleEvent {
 }
 
 /// Parameters for [`METHOD_NOTIFIER_FLUSH`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 pub struct NotifierFlushParams {
     /// Optional project-root scoping. `None` means flush every project
     /// the plugin tracks.
@@ -134,7 +135,7 @@ pub struct NotifierFlushParams {
 }
 
 /// Result for [`METHOD_NOTIFIER_FLUSH`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 pub struct NotifierFlushResult {
     /// Lifecycle records produced by the flush. Same shape as
     /// [`NotifierNotifyResult::lifecycle_events`].
@@ -143,7 +144,7 @@ pub struct NotifierFlushResult {
 }
 
 /// Capability declaration returned by [`METHOD_NOTIFIER_SCHEMA`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 pub struct NotifierSchema {
     /// Free-form connector kinds this plugin can route to (e.g.
     /// `["webhook", "slack_webhook"]`). Workflows may use this to

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NotifierSchema",
+  "description": "Capability declaration returned by [`METHOD_NOTIFIER_SCHEMA`].",
+  "type": "object",
+  "properties": {
+    "connector_kinds": {
+      "description": "Free-form connector kinds this plugin can route to (e.g.\n`[\"webhook\", \"slack_webhook\"]`). Workflows may use this to\nsurface which transports are available.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "supports_flush": {
+      "description": "Whether the plugin maintains its own outbox + background retry\nloop. When `true`, the daemon SHOULD call [`METHOD_NOTIFIER_FLUSH`]\non its tick boundary; when `false`, the daemon should skip flush.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "connector_kinds",
+    "supports_flush"
+  ]
+}

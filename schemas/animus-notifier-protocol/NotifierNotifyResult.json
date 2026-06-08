@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NotifierNotifyResult",
+  "description": "Result for [`METHOD_NOTIFIER_NOTIFY`].\n\n`accepted` reports whether the plugin took ownership of the event for\nat-least-one configured connector. `delivered` reports the number of\nsuccessful synchronous deliveries (useful for telemetry; backends that\nonly enqueue MUST set this to `0`). `lifecycle_events` carries\nbest-effort lifecycle reporting (enqueued / sent / failed /\ndead-lettered) that the daemon can fan out into `events.jsonl` for\noperator visibility.",
+  "type": "object",
+  "properties": {
+    "accepted": {
+      "description": "`true` iff at least one connector accepted the event for delivery.",
+      "type": "boolean"
+    },
+    "delivered": {
+      "description": "Number of deliveries the plugin completed synchronously.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    },
+    "lifecycle_events": {
+      "description": "Optional lifecycle records (delivery-enqueued / sent / failed /\ndead-lettered) the daemon can fan out into `events.jsonl`.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/NotifierLifecycleEvent"
+      }
+    }
+  },
+  "required": [
+    "accepted"
+  ],
+  "$defs": {
+    "NotifierLifecycleEvent": {
+      "description": "Lifecycle record emitted by a notifier plugin so the daemon can mirror\nit into operator-visible logs.",
+      "type": "object",
+      "properties": {
+        "data": {
+          "description": "Free-form payload mirrored verbatim into `DaemonEventRecord.data`."
+        },
+        "event_type": {
+          "description": "Event-type label, e.g. `\"notification-delivery-enqueued\"`.",
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Project root the underlying event belonged to, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event_type",
+        "data"
+      ]
+    }
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentRunRequest",
+  "description": "Parameters for an `agent/run` (or `agent/resume`) call.\n\nThe same struct is reused for both methods; resume calls additionally\ncarry the prior `session_id` so the provider knows which transcript to\ncontinue. The shape is intentionally tolerant of provider-specific\nextensions via [`AgentRunRequest::extras`].",
+  "type": "object",
+  "properties": {
+    "cwd": {
+      "description": "Working directory the agent should operate from. The provider\npasses this through to the wrapped CLI (e.g. `cwd` for `claude`).",
+      "type": "string"
+    },
+    "env": {
+      "description": "Environment variables to inject into the spawned child.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "mcp_servers": {
+      "description": "MCP server descriptors for the provider to bridge."
+    },
+    "model": {
+      "description": "Concrete model identifier. Must appear in\n[`ProviderManifest::supported_models`].",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "permission_mode": {
+      "description": "Permission mode (`\"safe\"`, `\"acceptEdits\"`, `\"bypassPermissions\"`,\n...). Provider-specific; consult the provider's manifest.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "project_root": {
+      "description": "Project root, if distinct from `cwd` (e.g. running from a subdir).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "prompt": {
+      "description": "User prompt (latest turn).",
+      "type": "string"
+    },
+    "response_schema": {
+      "description": "Optional response schema (JSON Schema) the provider should constrain\nthe model to."
+    },
+    "runtime_contract": {
+      "description": "Runtime contract envelope (workflow-runner-supplied metadata)."
+    },
+    "session_id": {
+      "description": "Existing session id when resuming. `None` for fresh runs.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "system_prompt": {
+      "description": "Optional system prompt. Many providers prefer this be set once at\nsession start and ignored on subsequent turns; the provider decides.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timeout_secs": {
+      "description": "Hard timeout in seconds. The runtime will issue `agent/cancel` if\nthis elapses.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "tools": {
+      "description": "Tool allow/deny config. Provider-specific shape."
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "prompt",
+    "cwd"
+  ]
+}

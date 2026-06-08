@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PutMemoryRequest",
+  "description": "Request for [`METHOD_MEMORY_PUT`].",
+  "type": "object",
+  "properties": {
+    "key": {
+      "description": "Key under which to store the value.",
+      "type": "string"
+    },
+    "scope": {
+      "description": "Target scope.",
+      "$ref": "#/$defs/MemoryScope"
+    },
+    "ttl_secs": {
+      "description": "Optional hint; backends MAY ignore. Backends MUST declare\n`native_ttl` in their capabilities; when false, the TTL is recorded\nin metadata only and the caller is responsible for eviction.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "value": {
+      "description": "Value to store (JSON)."
+    }
+  },
+  "required": [
+    "scope",
+    "key",
+    "value"
+  ],
+  "$defs": {
+    "MemoryScope": {
+      "description": "Memory scope identifier. The scope id is derived by the plugin from\nthese fields as a flat namespace. Project-wide memory: `project_id`\nonly. Per-agent: `project_id` + `agent_id`. Per-task: `project_id` +\n`agent_id` + `task_id`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Optional agent identifier (per-agent or per-task scopes).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_id": {
+          "description": "Project identifier (required).",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Optional task identifier (per-task scopes only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    }
+  }
+}

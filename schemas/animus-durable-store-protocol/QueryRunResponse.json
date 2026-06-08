@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueryRunResponse",
+  "description": "Response for [`METHOD_DURABLE_QUERY_RUN`].",
+  "type": "object",
+  "properties": {
+    "phase_id": {
+      "description": "Phase id (echoed).",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "Run id (echoed).",
+      "type": "string"
+    },
+    "status": {
+      "description": "Status value from [`run_status`].",
+      "type": "string"
+    },
+    "steps": {
+      "description": "Committed step records, in commit order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StepRecord"
+      }
+    }
+  },
+  "required": [
+    "run_id",
+    "phase_id",
+    "status",
+    "steps"
+  ],
+  "$defs": {
+    "StepError": {
+      "description": "Structured error payload returned with PRIOR_ERROR or carried by\n[`CommitStepRequest`].",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "Backend-specific error code.",
+          "type": "string"
+        },
+        "details": {
+          "description": "Backend-specific details."
+        },
+        "message": {
+          "description": "Human-readable message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "StepRecord": {
+      "description": "A committed step record returned by [`METHOD_DURABLE_QUERY_RUN`].",
+      "type": "object",
+      "properties": {
+        "committed_at": {
+          "description": "RFC 3339 commit timestamp.",
+          "type": "string"
+        },
+        "error": {
+          "description": "Optional error payload.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "idempotency_key": {
+          "description": "Idempotency key.",
+          "type": "string"
+        },
+        "outcome": {
+          "description": "`\"success\"` or `\"error\"` — the authoritative outcome (see\n[`commit_outcome`]). Independent of payload nulls.",
+          "type": "string"
+        },
+        "output": {
+          "description": "Optional success payload."
+        },
+        "step_id": {
+          "description": "Step id.",
+          "type": "string"
+        },
+        "step_name": {
+          "description": "Step name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id",
+        "step_name",
+        "idempotency_key",
+        "committed_at",
+        "outcome"
+      ]
+    }
+  }
+}

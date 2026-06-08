@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentCancelRequest",
+  "description": "Parameters for an `agent/cancel` call.",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "description": "Session id to cancel.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id"
+  ]
+}

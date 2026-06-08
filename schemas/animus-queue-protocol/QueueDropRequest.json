@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueDropRequest",
+  "description": "Request for [`METHOD_QUEUE_DROP`].",
+  "type": "object",
+  "properties": {
+    "entry_id": {
+      "description": "Entry id to drop.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "entry_id"
+  ]
+}

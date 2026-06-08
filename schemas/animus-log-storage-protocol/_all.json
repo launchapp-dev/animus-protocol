@@ -1,0 +1,294 @@
+{
+  "$defs": {
+    "LogEntry": {
+      "description": "One structured log record persisted by a log storage backend.\n\n`LogEntry` is the unit of work for `log_storage/*` methods — the daemon\nproduces them, the backend persists them, and operators query them. The\n`fields` value is opaque to the host and lets emitters attach structured\nkey/value context (`request_id`, `subject_id`, `workflow_id`, ...) without\nstretching the fixed schema.",
+      "properties": {
+        "fields": {
+          "description": "Structured key/value context. Defaults to `null` (omitted on the\nwire) when the emitter has no structured context to attach."
+        },
+        "id": {
+          "description": "Backend-assigned unique id. UUID, ULID, monotonic timestamp,\n`(source, ts, hash(message))` — whatever the backend can dedupe on.",
+          "type": "string"
+        },
+        "level": {
+          "$ref": "#/$defs/LogLevel",
+          "description": "Severity level. Used both for filtering and for surfacing in operator\nUIs."
+        },
+        "message": {
+          "description": "Human-readable log message. Multi-line content is allowed; emitters\nSHOULD avoid stuffing entire JSON blobs here and use `fields` instead.",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/LogSource",
+          "description": "What produced this entry — the daemon process, a plugin, the CLI, or\nan in-flight workflow run."
+        },
+        "source_name": {
+          "description": "Free-form name disambiguating multiple emitters within a [`LogSource`]:\nplugin name (`\"animus-subject-linear\"`), workflow id, CLI command,\netc. `None` is acceptable for source kinds with only one emitter.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "Hierarchical target identifier matching the\n[`tracing`](https://docs.rs/tracing) module convention, e.g.\n`\"plugin.animus-subject-linear.client\"`. Backends MAY index this for\nfaster glob matches.",
+          "type": "string"
+        },
+        "ts": {
+          "description": "When the upstream emitter produced the entry. Backends MUST preserve\nthe original timestamp rather than overwriting with arrival time.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ts",
+        "level",
+        "source",
+        "target",
+        "message"
+      ],
+      "title": "LogEntry",
+      "type": "object"
+    },
+    "LogLevel": {
+      "description": "Severity level for a [`LogEntry`].\n\nLevels follow the [`tracing`](https://docs.rs/tracing) convention.\nBackends MAY drop entries below a configured floor; the daemon does not\nrequire backends to persist every level.",
+      "oneOf": [
+        {
+          "const": "trace",
+          "description": "Highest-volume, lowest-priority. Used for fine-grained instrumentation.",
+          "type": "string"
+        },
+        {
+          "const": "debug",
+          "description": "Debug-level diagnostic detail. Off by default in production.",
+          "type": "string"
+        },
+        {
+          "const": "info",
+          "description": "Routine informational messages.",
+          "type": "string"
+        },
+        {
+          "const": "warn",
+          "description": "Recoverable problem the operator should know about.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "Failure that prevented the requested work from completing.",
+          "type": "string"
+        }
+      ],
+      "title": "LogLevel"
+    },
+    "LogQuery": {
+      "description": "Filter applied to [`LogStorageBackend::query`] and\n[`LogStorageBackend::tail`].\n\nAll fields are optional and combined with AND semantics. Backends MUST\nhonor filters they advertise via [`LogStorageSchema::supports_filtering`]\nand MAY return [`error_codes::METHOD_NOT_SUPPORTED`] for filters they\ncan't apply — the daemon then filters in-process.",
+      "properties": {
+        "cursor": {
+          "description": "Opaque resume cursor returned by a prior\n[`LogQueryResult::next_cursor`]. Backends define the encoding.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "follow": {
+          "default": false,
+          "description": "`true` = continue streaming new entries as they arrive (only\nmeaningful for [`LogStorageBackend::tail`]). Default `false`.",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Maximum number of entries to return from a single\n[`LogStorageBackend::query`] call. `None` means no caller-imposed\nlimit; the backend may still enforce its own.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Minimum severity. Entries below this level are excluded."
+        },
+        "since": {
+          "description": "Lower bound (inclusive) on [`LogEntry::ts`].",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Match on [`LogEntry::source`]."
+        },
+        "source_name": {
+          "description": "Exact-match against [`LogEntry::source_name`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_glob": {
+          "description": "Glob pattern matched against [`LogEntry::target`]. Conventional glob\nsemantics: `*` matches any run of non-`.` characters, `**` matches\nany run including `.`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "until": {
+          "description": "Upper bound (exclusive) on [`LogEntry::ts`].",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "LogQuery",
+      "type": "object"
+    },
+    "LogQueryResult": {
+      "description": "One page of [`LogEntry`] records returned by\n[`LogStorageBackend::query`].\n\nBackends that paginate set `next_cursor` to an opaque string the caller\npasses back as [`LogQuery::cursor`]. Backends that return everything\nin one shot leave it `None`.",
+      "properties": {
+        "entries": {
+          "description": "Matched entries in chronological order (oldest first). Backends MAY\nreverse this for performance; if so, document it.",
+          "items": {
+            "$ref": "#/$defs/LogEntry"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "description": "Opaque cursor for the next page, or `None` if exhausted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "title": "LogQueryResult",
+      "type": "object"
+    },
+    "LogSource": {
+      "description": "What produced a [`LogEntry`].\n\nThe set is closed — every emitter in the Animus protocol maps to one of\nthese four buckets. Disambiguate finer-grained emitters via\n[`LogEntry::source_name`].",
+      "oneOf": [
+        {
+          "const": "daemon",
+          "description": "The Animus daemon process itself.",
+          "type": "string"
+        },
+        {
+          "const": "plugin",
+          "description": "A plugin process (subject backend, provider, trigger, log storage, ...).\nUse [`LogEntry::source_name`] to name the specific plugin.",
+          "type": "string"
+        },
+        {
+          "const": "cli",
+          "description": "A short-lived CLI invocation. Use [`LogEntry::source_name`] to name\nthe command (`\"queue list\"`, `\"workflow run\"`, ...).",
+          "type": "string"
+        },
+        {
+          "const": "workflow",
+          "description": "An in-flight workflow run. Use [`LogEntry::source_name`] to carry the\nworkflow id.",
+          "type": "string"
+        }
+      ],
+      "title": "LogSource"
+    },
+    "LogStorageSchema": {
+      "description": "Capability declaration returned by [`METHOD_LOG_STORAGE_SCHEMA`].\n\nThe daemon uses this to adapt behavior without runtime guessing — for\nexample, to skip [`LogStorageBackend::tail`] for batch-only backends, or\nto know whether to apply filters in-process before/after sending the\nquery.",
+      "properties": {
+        "max_query_window": {
+          "description": "Maximum query window the backend will honor. Loki caps at 30d by\ndefault; ClickHouse has no hard cap. `None` means the backend\ndeclines to advertise a limit. Stored as a millisecond count on the\nwire to keep the schema serde-friendly.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retention_hint": {
+          "description": "Typical retention period after which entries are evicted. Surfaced to\noperators so they understand how far back queries can reach.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "supports_dedup": {
+          "description": "Backend deduplicates by [`LogEntry::id`]. Hosts MAY skip their own\ndedup table when this is `true`.",
+          "type": "boolean"
+        },
+        "supports_filtering": {
+          "$ref": "#/$defs/SupportsFiltering",
+          "description": "Which [`LogQuery`] filters the backend can evaluate server-side."
+        },
+        "supports_query": {
+          "description": "Backend implements [`LogStorageBackend::query`] for historical reads.\nIf `false`, the backend is write-only (a sink); hosts MUST NOT call\n`query`.",
+          "type": "boolean"
+        },
+        "supports_tail": {
+          "description": "Backend implements [`LogStorageBackend::tail`] for streaming reads.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supports_query",
+        "supports_tail",
+        "supports_dedup",
+        "supports_filtering"
+      ],
+      "title": "LogStorageSchema",
+      "type": "object"
+    },
+    "SupportsFiltering": {
+      "description": "Server-side filter support advertised by [`LogStorageSchema`].\n\nFields default to `false`; backends opt into each filter they can apply\nnatively. Filters the backend doesn't support are evaluated in-process\nby the daemon.",
+      "properties": {
+        "by_glob": {
+          "default": false,
+          "description": "Backend evaluates [`LogQuery::target_glob`] with full glob semantics.\nImplies (but does not require) [`SupportsFiltering::by_target`].",
+          "type": "boolean"
+        },
+        "by_level": {
+          "default": false,
+          "description": "Backend honors [`LogQuery::min_level`].",
+          "type": "boolean"
+        },
+        "by_source": {
+          "default": false,
+          "description": "Backend honors [`LogQuery::source`].",
+          "type": "boolean"
+        },
+        "by_target": {
+          "default": false,
+          "description": "Backend honors [`LogQuery::target_glob`] as an exact-target match\n(without the glob expansion).",
+          "type": "boolean"
+        },
+        "by_time_range": {
+          "default": false,
+          "description": "Backend honors [`LogQuery::since`] and [`LogQuery::until`].",
+          "type": "boolean"
+        }
+      },
+      "title": "SupportsFiltering",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-log-storage-protocol"
+}

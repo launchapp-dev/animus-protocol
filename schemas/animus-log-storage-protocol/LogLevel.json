@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogLevel",
+  "description": "Severity level for a [`LogEntry`].\n\nLevels follow the [`tracing`](https://docs.rs/tracing) convention.\nBackends MAY drop entries below a configured floor; the daemon does not\nrequire backends to persist every level.",
+  "oneOf": [
+    {
+      "description": "Highest-volume, lowest-priority. Used for fine-grained instrumentation.",
+      "type": "string",
+      "const": "trace"
+    },
+    {
+      "description": "Debug-level diagnostic detail. Off by default in production.",
+      "type": "string",
+      "const": "debug"
+    },
+    {
+      "description": "Routine informational messages.",
+      "type": "string",
+      "const": "info"
+    },
+    {
+      "description": "Recoverable problem the operator should know about.",
+      "type": "string",
+      "const": "warn"
+    },
+    {
+      "description": "Failure that prevented the requested work from completing.",
+      "type": "string",
+      "const": "error"
+    }
+  ]
+}

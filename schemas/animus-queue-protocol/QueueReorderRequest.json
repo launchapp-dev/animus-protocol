@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueReorderRequest",
+  "description": "Request for [`METHOD_QUEUE_REORDER`].",
+  "type": "object",
+  "properties": {
+    "entry_ids": {
+      "description": "New order (partial — entries not in this list keep their existing\nposition).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "entry_ids"
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "$defs": {
+    "TransportConfig": {
+      "description": "Configuration handed to a transport plugin on [`TRANSPORT_METHOD_START`].\n\nThe daemon owns the control socket and the project root; the transport\nowns translation of its protocol (HTTP, GraphQL, gRPC, ...) into control\nRPCs against that socket. `bind_addr` is optional so the daemon can let\nthe transport pick its own default (e.g. `127.0.0.1:8080` for HTTP,\n`127.0.0.1:8090` for GraphQL); operators that want a specific port set\nit explicitly in workflow YAML.\n\n`config` is a free-form JSON blob carrying transport-specific knobs that\nthe daemon does not parse. Examples:\n\n- HTTP transport: `{ \"cors\": {\"allowed_origins\": [\"*\"]}, \"auth_token\":\n  \"...\" }`\n- GraphQL transport: `{ \"introspection\": false, \"subscriptions\": true }`\n- gRPC transport: `{ \"tls\": {\"cert\": \"...\", \"key\": \"...\"} }`",
+      "properties": {
+        "bind_addr": {
+          "description": "Address (and port) the transport should bind. Format is\ntransport-specific; HTTP/GraphQL/gRPC use `host:port` (e.g.\n`\"127.0.0.1:8080\"`, `\"[::1]:8080\"`). `None` lets the plugin pick a\nsensible default — usually the value reported in\n[`TransportSchema::default_port`] on `localhost`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config": {
+          "description": "Transport-specific configuration. Defaults to `null` (omitted on the\nwire) when the operator did not supply any."
+        },
+        "control_socket_path": {
+          "description": "Absolute path to the daemon's control Unix socket. The transport\nconnects to this socket to issue control RPCs on behalf of inbound\nrequests. POSIX hosts only; Windows named-pipe naming is reserved\nfor a future revision.",
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute path to the project root the daemon is serving. Transports\nsurface this in metadata responses (e.g. HTTP `/healthz`) and use it\nto scope filesystem access if they expose static-file routes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "control_socket_path",
+        "project_root"
+      ],
+      "title": "TransportConfig",
+      "type": "object"
+    },
+    "TransportInfo": {
+      "description": "Reply returned by [`TransportBackend::start`] once the listener is bound.\n\n`bound_addr` is the *actual* address the listener accepted on (after any\n`0` port resolution) and is what the daemon advertises to operators.\n`started_at` lets dashboards display \"transport up for N minutes\" without\nthe daemon tracking it separately.",
+      "properties": {
+        "bound_addr": {
+          "description": "Address the listener actually bound to. For TCP transports this is\n`host:port`. For Unix-socket transports (future) this is the socket\npath. Daemons MAY surface this verbatim in `daemon/status` output.",
+          "type": "string"
+        },
+        "started_at": {
+          "description": "When the listener became ready to accept connections. UTC, RFC 3339.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bound_addr",
+        "started_at"
+      ],
+      "title": "TransportInfo",
+      "type": "object"
+    },
+    "TransportSchema": {
+      "description": "Capability declaration returned by [`TRANSPORT_METHOD_SCHEMA`].\n\nThe daemon uses this to adapt behavior without runtime guessing — for\nexample, to skip WebSocket-bound features for transports that don't\nsupport them, or to pick a default port when the operator omits one.",
+      "properties": {
+        "default_port": {
+          "description": "Default port the transport binds to when [`TransportConfig::bind_addr`]\nis `None`. Hosts surface this to operators so they know where to\npoint clients. `None` means the transport refuses to start without\nan explicit `bind_addr`.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kinds": {
+          "description": "Protocol kinds this transport exposes. Convention is a single\nlowercase token per kind, e.g. `[\"http\", \"rest\"]` for an HTTP/REST\ntransport, `[\"graphql\"]` for a GraphQL transport, `[\"grpc\"]`,\n`[\"mqtt\"]`, `[\"websocket\"]`. Multi-protocol transports (e.g. one\nprocess that serves HTTP and gRPC) list every kind they expose.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supports_streaming": {
+          "description": "Whether the transport supports server-streaming responses\n(HTTP/2 server push, gRPC server streaming, GraphQL subscriptions\nover SSE, ...). Hosts use this to decide whether to route streaming\ncontrol methods (`daemon/events`, `daemon/logs`, `subject/watch`)\nthrough this transport.",
+          "type": "boolean"
+        },
+        "supports_websocket": {
+          "description": "Whether the transport accepts WebSocket upgrades. Distinct from\n[`supports_streaming`] because HTTP transports may stream without\nsupporting WebSocket and vice versa.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kinds",
+        "supports_streaming",
+        "supports_websocket"
+      ],
+      "title": "TransportSchema",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-transport-protocol"
+}

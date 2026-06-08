@@ -1,0 +1,172 @@
+{
+  "$defs": {
+    "DaemonEventRecord": {
+      "description": "Wire shape of one daemon event record forwarded to notifiers.\n\nMirrors `protocol::DaemonEventRecord` from `animus-cli` so the daemon\ncan hand its native event record over the wire without translation.\nKept in this crate (rather than imported from the main protocol\ncrate) so notifier plugin authors only need to depend on this crate\n+ `animus-plugin-runtime`.",
+      "properties": {
+        "data": {
+          "description": "Free-form event payload."
+        },
+        "event_type": {
+          "description": "Event kind (e.g. `\"workflow_completed\"`, `\"task-state-change\"`).",
+          "type": "string"
+        },
+        "id": {
+          "description": "Globally-unique event id.",
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Optional project root path this event is about.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "description": "Schema URI for the event payload (e.g. `\"animus.daemon-event.v1\"`).",
+          "type": "string"
+        },
+        "seq": {
+          "default": 0,
+          "description": "Monotonic sequence number assigned by the daemon for this run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timestamp": {
+          "description": "RFC3339 timestamp the daemon stamped at emission.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "timestamp",
+        "event_type",
+        "data"
+      ],
+      "title": "DaemonEventRecord",
+      "type": "object"
+    },
+    "NotifierFlushParams": {
+      "description": "Parameters for [`METHOD_NOTIFIER_FLUSH`].",
+      "properties": {
+        "project_root": {
+          "description": "Optional project-root scoping. `None` means flush every project\nthe plugin tracks.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "NotifierFlushParams",
+      "type": "object"
+    },
+    "NotifierFlushResult": {
+      "description": "Result for [`METHOD_NOTIFIER_FLUSH`].",
+      "properties": {
+        "lifecycle_events": {
+          "default": [],
+          "description": "Lifecycle records produced by the flush. Same shape as\n[`NotifierNotifyResult::lifecycle_events`].",
+          "items": {
+            "$ref": "#/$defs/NotifierLifecycleEvent"
+          },
+          "type": "array"
+        }
+      },
+      "title": "NotifierFlushResult",
+      "type": "object"
+    },
+    "NotifierLifecycleEvent": {
+      "description": "Lifecycle record emitted by a notifier plugin so the daemon can mirror\nit into operator-visible logs.",
+      "properties": {
+        "data": {
+          "description": "Free-form payload mirrored verbatim into `DaemonEventRecord.data`."
+        },
+        "event_type": {
+          "description": "Event-type label, e.g. `\"notification-delivery-enqueued\"`.",
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Project root the underlying event belonged to, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event_type",
+        "data"
+      ],
+      "title": "NotifierLifecycleEvent",
+      "type": "object"
+    },
+    "NotifierNotifyParams": {
+      "description": "Parameters for [`METHOD_NOTIFIER_NOTIFY`].",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/DaemonEventRecord",
+          "description": "One daemon event record to forward."
+        }
+      },
+      "required": [
+        "event"
+      ],
+      "title": "NotifierNotifyParams",
+      "type": "object"
+    },
+    "NotifierNotifyResult": {
+      "description": "Result for [`METHOD_NOTIFIER_NOTIFY`].\n\n`accepted` reports whether the plugin took ownership of the event for\nat-least-one configured connector. `delivered` reports the number of\nsuccessful synchronous deliveries (useful for telemetry; backends that\nonly enqueue MUST set this to `0`). `lifecycle_events` carries\nbest-effort lifecycle reporting (enqueued / sent / failed /\ndead-lettered) that the daemon can fan out into `events.jsonl` for\noperator visibility.",
+      "properties": {
+        "accepted": {
+          "description": "`true` iff at least one connector accepted the event for delivery.",
+          "type": "boolean"
+        },
+        "delivered": {
+          "default": 0,
+          "description": "Number of deliveries the plugin completed synchronously.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lifecycle_events": {
+          "default": [],
+          "description": "Optional lifecycle records (delivery-enqueued / sent / failed /\ndead-lettered) the daemon can fan out into `events.jsonl`.",
+          "items": {
+            "$ref": "#/$defs/NotifierLifecycleEvent"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "title": "NotifierNotifyResult",
+      "type": "object"
+    },
+    "NotifierSchema": {
+      "description": "Capability declaration returned by [`METHOD_NOTIFIER_SCHEMA`].",
+      "properties": {
+        "connector_kinds": {
+          "description": "Free-form connector kinds this plugin can route to (e.g.\n`[\"webhook\", \"slack_webhook\"]`). Workflows may use this to\nsurface which transports are available.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supports_flush": {
+          "description": "Whether the plugin maintains its own outbox + background retry\nloop. When `true`, the daemon SHOULD call [`METHOD_NOTIFIER_FLUSH`]\non its tick boundary; when `false`, the daemon should skip flush.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "connector_kinds",
+        "supports_flush"
+      ],
+      "title": "NotifierSchema",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-notifier-protocol"
+}

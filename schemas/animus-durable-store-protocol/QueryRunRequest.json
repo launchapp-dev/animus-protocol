@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueryRunRequest",
+  "description": "Request for [`METHOD_DURABLE_QUERY_RUN`].",
+  "type": "object",
+  "properties": {
+    "phase_id": {
+      "description": "Phase id (DBOS workflow id is keyed by `(run_id, phase_id)`).",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "Run id to query.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "phase_id"
+  ]
+}

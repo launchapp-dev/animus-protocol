@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogStorageSchema",
+  "description": "Capability declaration returned by [`METHOD_LOG_STORAGE_SCHEMA`].\n\nThe daemon uses this to adapt behavior without runtime guessing — for\nexample, to skip [`LogStorageBackend::tail`] for batch-only backends, or\nto know whether to apply filters in-process before/after sending the\nquery.",
+  "type": "object",
+  "properties": {
+    "max_query_window": {
+      "description": "Maximum query window the backend will honor. Loki caps at 30d by\ndefault; ClickHouse has no hard cap. `None` means the backend\ndeclines to advertise a limit. Stored as a millisecond count on the\nwire to keep the schema serde-friendly.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "retention_hint": {
+      "description": "Typical retention period after which entries are evicted. Surfaced to\noperators so they understand how far back queries can reach.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "supports_dedup": {
+      "description": "Backend deduplicates by [`LogEntry::id`]. Hosts MAY skip their own\ndedup table when this is `true`.",
+      "type": "boolean"
+    },
+    "supports_filtering": {
+      "description": "Which [`LogQuery`] filters the backend can evaluate server-side.",
+      "$ref": "#/$defs/SupportsFiltering"
+    },
+    "supports_query": {
+      "description": "Backend implements [`LogStorageBackend::query`] for historical reads.\nIf `false`, the backend is write-only (a sink); hosts MUST NOT call\n`query`.",
+      "type": "boolean"
+    },
+    "supports_tail": {
+      "description": "Backend implements [`LogStorageBackend::tail`] for streaming reads.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "supports_query",
+    "supports_tail",
+    "supports_dedup",
+    "supports_filtering"
+  ],
+  "$defs": {
+    "SupportsFiltering": {
+      "description": "Server-side filter support advertised by [`LogStorageSchema`].\n\nFields default to `false`; backends opt into each filter they can apply\nnatively. Filters the backend doesn't support are evaluated in-process\nby the daemon.",
+      "type": "object",
+      "properties": {
+        "by_glob": {
+          "description": "Backend evaluates [`LogQuery::target_glob`] with full glob semantics.\nImplies (but does not require) [`SupportsFiltering::by_target`].",
+          "type": "boolean",
+          "default": false
+        },
+        "by_level": {
+          "description": "Backend honors [`LogQuery::min_level`].",
+          "type": "boolean",
+          "default": false
+        },
+        "by_source": {
+          "description": "Backend honors [`LogQuery::source`].",
+          "type": "boolean",
+          "default": false
+        },
+        "by_target": {
+          "description": "Backend honors [`LogQuery::target_glob`] as an exact-target match\n(without the glob expansion).",
+          "type": "boolean",
+          "default": false
+        },
+        "by_time_range": {
+          "description": "Backend honors [`LogQuery::since`] and [`LogQuery::until`].",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  }
+}

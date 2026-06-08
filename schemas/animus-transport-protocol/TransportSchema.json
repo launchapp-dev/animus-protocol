@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TransportSchema",
+  "description": "Capability declaration returned by [`TRANSPORT_METHOD_SCHEMA`].\n\nThe daemon uses this to adapt behavior without runtime guessing — for\nexample, to skip WebSocket-bound features for transports that don't\nsupport them, or to pick a default port when the operator omits one.",
+  "type": "object",
+  "properties": {
+    "default_port": {
+      "description": "Default port the transport binds to when [`TransportConfig::bind_addr`]\nis `None`. Hosts surface this to operators so they know where to\npoint clients. `None` means the transport refuses to start without\nan explicit `bind_addr`.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "kinds": {
+      "description": "Protocol kinds this transport exposes. Convention is a single\nlowercase token per kind, e.g. `[\"http\", \"rest\"]` for an HTTP/REST\ntransport, `[\"graphql\"]` for a GraphQL transport, `[\"grpc\"]`,\n`[\"mqtt\"]`, `[\"websocket\"]`. Multi-protocol transports (e.g. one\nprocess that serves HTTP and gRPC) list every kind they expose.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "supports_streaming": {
+      "description": "Whether the transport supports server-streaming responses\n(HTTP/2 server push, gRPC server streaming, GraphQL subscriptions\nover SSE, ...). Hosts use this to decide whether to route streaming\ncontrol methods (`daemon/events`, `daemon/logs`, `subject/watch`)\nthrough this transport.",
+      "type": "boolean"
+    },
+    "supports_websocket": {
+      "description": "Whether the transport accepts WebSocket upgrades. Distinct from\n[`supports_streaming`] because HTTP transports may stream without\nsupporting WebSocket and vice versa.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "kinds",
+    "supports_streaming",
+    "supports_websocket"
+  ]
+}

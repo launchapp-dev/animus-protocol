@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueMutationResponse",
+  "description": "Generic mutation result used by hold / release / drop / mark_assigned /\ncompletion.",
+  "type": "object",
+  "properties": {
+    "changed": {
+      "description": "`true` if the entry state changed. `false` if the entry was already\nin the requested state (idempotent no-op) or was not found.",
+      "type": "boolean"
+    },
+    "not_found": {
+      "description": "`true` if the entry was not found (idempotent on missing).",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "changed"
+  ]
+}

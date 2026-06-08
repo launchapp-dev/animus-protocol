@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueStats",
+  "description": "Queue aggregate counts.",
+  "type": "object",
+  "properties": {
+    "assigned": {
+      "description": "Assigned entries.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "held": {
+      "description": "Held entries.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "pending": {
+      "description": "Pending entries.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "total": {
+      "description": "Total entries.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "total",
+    "pending",
+    "assigned",
+    "held"
+  ]
+}

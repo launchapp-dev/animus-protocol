@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AbandonStepRequest",
+  "description": "Request for [`METHOD_DURABLE_ABANDON_STEP`].",
+  "type": "object",
+  "properties": {
+    "reason": {
+      "description": "Optional audit reason.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "step_id": {
+      "description": "Step id whose reservation should be released.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "step_id"
+  ]
+}

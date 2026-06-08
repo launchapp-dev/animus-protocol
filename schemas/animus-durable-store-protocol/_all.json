@@ -1,0 +1,416 @@
+{
+  "$defs": {
+    "AbandonStepRequest": {
+      "description": "Request for [`METHOD_DURABLE_ABANDON_STEP`].",
+      "properties": {
+        "reason": {
+          "description": "Optional audit reason.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "step_id": {
+          "description": "Step id whose reservation should be released.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id"
+      ],
+      "title": "AbandonStepRequest",
+      "type": "object"
+    },
+    "AbandonStepResponse": {
+      "description": "Response for [`METHOD_DURABLE_ABANDON_STEP`].",
+      "properties": {
+        "ack": {
+          "description": "`true` if a reservation was found and released.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ack"
+      ],
+      "title": "AbandonStepResponse",
+      "type": "object"
+    },
+    "BeginStepRequest": {
+      "description": "Request for [`METHOD_DURABLE_BEGIN_STEP`].",
+      "properties": {
+        "idempotency_key": {
+          "description": "Caller-supplied idempotency key. Daemon convention:\n`format!(\"{}:{}:{}\", run_id, phase_id, step_name)`. The plugin\nuses this key to deduplicate replays.",
+          "type": "string"
+        },
+        "payload": {
+          "description": "Backend-specific payload."
+        },
+        "phase_id": {
+          "description": "Phase id.",
+          "type": "string"
+        },
+        "reservation_ttl_secs": {
+          "description": "Reservation TTL in seconds. If unset, the plugin uses its\nconfigured default (manifest-declared, typically 300). Caller MAY\noverride per-step for known-long operations.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "description": "Run id (must match the one used in `begin_workflow_run`).",
+          "type": "string"
+        },
+        "step_name": {
+          "description": "Stable name for this step within the phase\n(e.g., `\"spawn_agent\"`, `\"apply_git_ops\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "phase_id",
+        "step_name",
+        "idempotency_key"
+      ],
+      "title": "BeginStepRequest",
+      "type": "object"
+    },
+    "BeginStepResponse": {
+      "description": "Response for [`METHOD_DURABLE_BEGIN_STEP`].",
+      "properties": {
+        "prior_error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when `status == PRIOR_ERROR`. Contains the previously\ncommitted error."
+        },
+        "prior_output": {
+          "description": "Present when `status == ALREADY_COMMITTED`. Contains the previously\ncommitted `output` so the caller can short-circuit the side effect."
+        },
+        "reservation_expires_at": {
+          "description": "Present when `status == IN_PROGRESS`. RFC 3339 timestamp of when\nthe existing reservation expires.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Value from [`step_status`].",
+          "type": "string"
+        },
+        "step_id": {
+          "description": "Plugin-issued step id (used as the handle for `commit_step` /\n`abandon_step`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id",
+        "status"
+      ],
+      "title": "BeginStepResponse",
+      "type": "object"
+    },
+    "BeginWorkflowRunRequest": {
+      "description": "Request for [`METHOD_DURABLE_BEGIN_WORKFLOW_RUN`].",
+      "properties": {
+        "inputs": {
+          "description": "Opaque inputs payload."
+        },
+        "phase_id": {
+          "description": "Caller-supplied phase id (DBOS workflow IDs are keyed by\n`(run_id, phase_id)`; different phases are different workflows).",
+          "type": "string"
+        },
+        "run_id": {
+          "description": "Caller-supplied workflow run id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "phase_id"
+      ],
+      "title": "BeginWorkflowRunRequest",
+      "type": "object"
+    },
+    "BeginWorkflowRunResponse": {
+      "description": "Response for [`METHOD_DURABLE_BEGIN_WORKFLOW_RUN`].",
+      "properties": {
+        "epoch": {
+          "description": "Plugin-issued, monotonically increasing epoch. The plugin persists\nthe current epoch counter to its durable store; on restart, it\nresumes from the persisted value, not zero. The daemon does not\nstore epoch values across restarts; instead it queries\n[`METHOD_DURABLE_RECOVER_IN_FLIGHT`] with `since_epoch = 0` after\nrestart to get all in-flight runs.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "epoch"
+      ],
+      "title": "BeginWorkflowRunResponse",
+      "type": "object"
+    },
+    "CommitStepRequest": {
+      "description": "Request for [`METHOD_DURABLE_COMMIT_STEP`].",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional error payload."
+        },
+        "outcome": {
+          "description": "Required: `\"success\"` or `\"error\"`. Use [`commit_outcome`] constants.\nThis is the authoritative dedupe signal for replay — `output` and\n`error` payloads MAY be null (no-payload commits are valid in both\ndirections), so the outcome cannot be inferred from payload presence.",
+          "type": "string"
+        },
+        "output": {
+          "description": "Optional success payload."
+        },
+        "step_id": {
+          "description": "Step id from [`BeginStepResponse`].",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id",
+        "outcome"
+      ],
+      "title": "CommitStepRequest",
+      "type": "object"
+    },
+    "CommitStepResponse": {
+      "description": "Response for [`METHOD_DURABLE_COMMIT_STEP`].",
+      "properties": {
+        "ack": {
+          "description": "`true` if the commit was persisted (or already persisted under\nidempotent retry).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ack"
+      ],
+      "title": "CommitStepResponse",
+      "type": "object"
+    },
+    "DurableStoreCapabilities": {
+      "description": "Capability flags for durable_store plugins.",
+      "properties": {
+        "default_reservation_ttl_secs": {
+          "default": 0,
+          "description": "Default reservation TTL in seconds. If unset on a `begin_step` call,\nthe plugin uses this value. Hosts SHOULD respect this when picking\ntimeouts.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_payload_bytes": {
+          "default": 0,
+          "description": "Maximum serialized payload size (bytes) the backend accepts for a\nsingle step's `output` or `error`. Larger payloads should be passed\nby reference via Animus's artifact store.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "supports_recovery": {
+          "default": false,
+          "description": "`true` if the backend supports the `recover_in_flight` cursor /\nepoch model.",
+          "type": "boolean"
+        }
+      },
+      "title": "DurableStoreCapabilities",
+      "type": "object"
+    },
+    "InFlightRun": {
+      "description": "A run that had outstanding reservations at recovery time.",
+      "properties": {
+        "last_committed_step": {
+          "description": "Step name of the last committed step, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase_id": {
+          "description": "Phase id.",
+          "type": "string"
+        },
+        "replay_state": {
+          "description": "Backend-specific replay state (e.g., DBOS workflow status payload)."
+        },
+        "run_id": {
+          "description": "Run id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "phase_id"
+      ],
+      "title": "InFlightRun",
+      "type": "object"
+    },
+    "QueryRunRequest": {
+      "description": "Request for [`METHOD_DURABLE_QUERY_RUN`].",
+      "properties": {
+        "phase_id": {
+          "description": "Phase id (DBOS workflow id is keyed by `(run_id, phase_id)`).",
+          "type": "string"
+        },
+        "run_id": {
+          "description": "Run id to query.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "phase_id"
+      ],
+      "title": "QueryRunRequest",
+      "type": "object"
+    },
+    "QueryRunResponse": {
+      "description": "Response for [`METHOD_DURABLE_QUERY_RUN`].",
+      "properties": {
+        "phase_id": {
+          "description": "Phase id (echoed).",
+          "type": "string"
+        },
+        "run_id": {
+          "description": "Run id (echoed).",
+          "type": "string"
+        },
+        "status": {
+          "description": "Status value from [`run_status`].",
+          "type": "string"
+        },
+        "steps": {
+          "description": "Committed step records, in commit order.",
+          "items": {
+            "$ref": "#/$defs/StepRecord"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "phase_id",
+        "status",
+        "steps"
+      ],
+      "title": "QueryRunResponse",
+      "type": "object"
+    },
+    "RecoverInFlightRequest": {
+      "description": "Request for [`METHOD_DURABLE_RECOVER_IN_FLIGHT`].",
+      "properties": {
+        "since_epoch": {
+          "description": "Epoch cursor. Daemon passes `0` after restart to get all in-flight\nruns; subsequent polls pass the highest epoch seen previously.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "since_epoch"
+      ],
+      "title": "RecoverInFlightRequest",
+      "type": "object"
+    },
+    "RecoverInFlightResponse": {
+      "description": "Response for [`METHOD_DURABLE_RECOVER_IN_FLIGHT`].",
+      "properties": {
+        "in_flight": {
+          "description": "Workflow runs that have outstanding reservations or pending state.",
+          "items": {
+            "$ref": "#/$defs/InFlightRun"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "in_flight"
+      ],
+      "title": "RecoverInFlightResponse",
+      "type": "object"
+    },
+    "StepError": {
+      "description": "Structured error payload returned with PRIOR_ERROR or carried by\n[`CommitStepRequest`].",
+      "properties": {
+        "code": {
+          "description": "Backend-specific error code.",
+          "type": "string"
+        },
+        "details": {
+          "description": "Backend-specific details."
+        },
+        "message": {
+          "description": "Human-readable message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "StepError",
+      "type": "object"
+    },
+    "StepRecord": {
+      "description": "A committed step record returned by [`METHOD_DURABLE_QUERY_RUN`].",
+      "properties": {
+        "committed_at": {
+          "description": "RFC 3339 commit timestamp.",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional error payload."
+        },
+        "idempotency_key": {
+          "description": "Idempotency key.",
+          "type": "string"
+        },
+        "outcome": {
+          "description": "`\"success\"` or `\"error\"` — the authoritative outcome (see\n[`commit_outcome`]). Independent of payload nulls.",
+          "type": "string"
+        },
+        "output": {
+          "description": "Optional success payload."
+        },
+        "step_id": {
+          "description": "Step id.",
+          "type": "string"
+        },
+        "step_name": {
+          "description": "Step name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id",
+        "step_name",
+        "idempotency_key",
+        "committed_at",
+        "outcome"
+      ],
+      "title": "StepRecord",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-durable-store-protocol"
+}

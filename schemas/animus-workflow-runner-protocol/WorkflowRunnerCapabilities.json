@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowRunnerCapabilities",
+  "description": "Backend-specific capability flags serialized into\n[`animus_plugin_protocol::KindCapability::extra`].",
+  "type": "object",
+  "properties": {
+    "crash_recovery": {
+      "description": "Plugin replays persisted phase markers on restart.",
+      "type": "boolean",
+      "default": false
+    },
+    "manual_pause_support": {
+      "description": "Plugin honors `manual_pending` phase statuses.",
+      "type": "boolean",
+      "default": false
+    },
+    "phase_decision_parsing": {
+      "description": "Plugin parses agent text output to extract `PhaseDecision`.",
+      "type": "boolean",
+      "default": false
+    },
+    "post_success_actions": {
+      "description": "Plugin executes post-success actions (push / merge / PR).",
+      "type": "boolean",
+      "default": false
+    },
+    "rework_context_support": {
+      "description": "Plugin propagates `rework_context` to subsequent phases.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

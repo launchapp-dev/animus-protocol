@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueLeaseResponse",
+  "description": "Response for [`METHOD_QUEUE_LEASE`].",
+  "type": "object",
+  "properties": {
+    "leased": {
+      "description": "Leased entries (already transitioned to Assigned).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/QueueEntry"
+      }
+    }
+  },
+  "required": [
+    "leased"
+  ],
+  "$defs": {
+    "QueueEntry": {
+      "description": "A queue entry shape returned by list / lease.",
+      "type": "object",
+      "properties": {
+        "assigned_at": {
+          "description": "RFC 3339 assignment timestamp.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enqueued_at": {
+          "description": "RFC 3339 enqueue timestamp.",
+          "type": "string"
+        },
+        "entry_id": {
+          "description": "Stable entry id (unique within the project queue). Mutation calls\ntarget this id.",
+          "type": "string"
+        },
+        "held_at": {
+          "description": "RFC 3339 hold timestamp.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Status value from [`status`].",
+          "type": "string"
+        },
+        "subject_dispatch": {
+          "description": "Full dispatch envelope — included so the daemon can lease an entry\nand start work without a second roundtrip.",
+          "$ref": "#/$defs/SubjectDispatch"
+        },
+        "subject_id": {
+          "description": "Subject id from the dispatch envelope.",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Task id, if this entry's subject is a built-in task.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow_id": {
+          "description": "Workflow id attached to an Assigned entry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entry_id",
+        "subject_id",
+        "subject_dispatch",
+        "status",
+        "enqueued_at"
+      ]
+    },
+    "SubjectDispatch": {
+      "description": "Full dispatch envelope handed off from queue / scheduler / trigger to the\nworkflow runner.\n\nCarries the subject identity (`subject`), the workflow ref to run, and\noptional input + variables + priority + trigger source + requested-at\ntimestamp. The shape is wire-compatible with the previous home in\nao-cli's `protocol` crate.",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "Optional initial input JSON for workflow variables."
+        },
+        "priority": {
+          "description": "Optional priority hint (`\"low\"`, `\"medium\"`, `\"high\"`, `\"critical\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_at": {
+          "description": "When the dispatch was created.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "subject": {
+          "description": "The subject this dispatch targets.",
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "trigger_source": {
+          "description": "Tag identifying which subsystem produced this dispatch\n(e.g., `\"ready-queue\"`, `\"trigger:slack\"`, `\"schedule:nightly\"`).",
+          "type": "string"
+        },
+        "vars": {
+          "description": "Workflow scalar variables.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "workflow_ref": {
+          "description": "Workflow YAML ref to execute (e.g., `\"standard\"`, `\"quick-fix\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "workflow_ref",
+        "trigger_source",
+        "requested_at"
+      ]
+    },
+    "SubjectRef": {
+      "description": "Backend-qualified subject reference with optional display metadata.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metadata": true,
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BeginStepRequest",
+  "description": "Request for [`METHOD_DURABLE_BEGIN_STEP`].",
+  "type": "object",
+  "properties": {
+    "idempotency_key": {
+      "description": "Caller-supplied idempotency key. Daemon convention:\n`format!(\"{}:{}:{}\", run_id, phase_id, step_name)`. The plugin\nuses this key to deduplicate replays.",
+      "type": "string"
+    },
+    "payload": {
+      "description": "Backend-specific payload."
+    },
+    "phase_id": {
+      "description": "Phase id.",
+      "type": "string"
+    },
+    "reservation_ttl_secs": {
+      "description": "Reservation TTL in seconds. If unset, the plugin uses its\nconfigured default (manifest-declared, typically 300). Caller MAY\noverride per-step for known-long operations.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "run_id": {
+      "description": "Run id (must match the one used in `begin_workflow_run`).",
+      "type": "string"
+    },
+    "step_name": {
+      "description": "Stable name for this step within the phase\n(e.g., `\"spawn_agent\"`, `\"apply_git_ops\"`).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "phase_id",
+    "step_name",
+    "idempotency_key"
+  ]
+}

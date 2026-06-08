@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueReleasePendingResponse",
+  "description": "Response for [`METHOD_QUEUE_RELEASE_PENDING`].",
+  "type": "object",
+  "properties": {
+    "entry_id": {
+      "description": "Entry id whose status was changed.",
+      "type": "string"
+    },
+    "status": {
+      "description": "New status — always [`status::PENDING`] on success.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "entry_id",
+    "status"
+  ]
+}

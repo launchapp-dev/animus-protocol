@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ListScopesRequest",
+  "description": "Request for [`METHOD_MEMORY_LIST_SCOPES`].",
+  "type": "object",
+  "properties": {
+    "cursor": {
+      "description": "Cursor-based pagination. `None` for the first page.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "page_size": {
+      "description": "Page size. Backends MAY clamp to their declared per-backend\nmaximum. Defaults to 100 if unset.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "project_id": {
+      "description": "If set, only return scopes under this project. Else return all\nscopes.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

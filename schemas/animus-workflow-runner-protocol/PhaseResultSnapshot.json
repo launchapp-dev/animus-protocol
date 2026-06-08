@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PhaseResultSnapshot",
+  "description": "A single phase's result snapshot returned in [`WorkflowExecuteResult`].",
+  "type": "object",
+  "properties": {
+    "close_reason": {
+      "description": "Close reason if verdict was a skip / close.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "duration_secs": {
+      "description": "Duration of this phase in seconds.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "metadata": {
+      "description": "Backend-specific metadata payload."
+    },
+    "next_phase_id": {
+      "description": "Next phase id, if available.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "outcome": {
+      "description": "Backend-specific outcome payload."
+    },
+    "phase_id": {
+      "description": "Phase id (workflow-local).",
+      "type": "string"
+    },
+    "status": {
+      "description": "Status; one of [`phase_status`] values.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "phase_id",
+    "status",
+    "duration_secs",
+    "outcome",
+    "metadata"
+  ]
+}

@@ -15,3 +15,10 @@ serde_json = "1"
 schemars = { version = "1.0" }
 thiserror = "1"
 anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "animus-notifier-protocol-export-schema"
+path = "src/bin/export_schema.rs"

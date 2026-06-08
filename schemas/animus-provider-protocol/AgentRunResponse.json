@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentRunResponse",
+  "description": "Final response to `agent/run` or `agent/resume`.\n\nStreaming notifications are sent during the run; this is the aggregated\nterminal payload. Hosts may persist it as the canonical run record.",
+  "type": "object",
+  "properties": {
+    "backend": {
+      "description": "Provider-specific backend label (e.g. `\"claude-code:1.0.0\"`).",
+      "type": "string"
+    },
+    "decision_verdict": {
+      "description": "Optional verdict for review/QA agents that produce pass/fail\ndecisions. Free-form so review providers can shape their own\nenvelopes."
+    },
+    "duration_ms": {
+      "description": "Total wall-clock duration of the run.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "errors": {
+      "description": "Errors emitted during the run (recoverable or terminal).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "exit_code": {
+      "description": "Process exit code from the wrapped CLI, if any.",
+      "type": "integer",
+      "format": "int32"
+    },
+    "metadata": {
+      "description": "Free-form metadata entries the provider chose to surface.",
+      "type": "array",
+      "items": true
+    },
+    "output": {
+      "description": "Concatenated final assistant output.",
+      "type": "string"
+    },
+    "session_id": {
+      "description": "Provider-issued session id. Stable for the life of the session;\nusable with `agent/resume` later.",
+      "type": "string"
+    },
+    "thinking": {
+      "description": "Visible reasoning traces (when the model produced any).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tokens_used": {
+      "description": "Token-accounting summary, if the provider tracks it.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TokenUsage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tool_calls": {
+      "description": "All tool invocations the agent made during the run.",
+      "type": "array",
+      "items": true
+    },
+    "tool_results": {
+      "description": "All tool results returned to the agent.",
+      "type": "array",
+      "items": true
+    }
+  },
+  "required": [
+    "session_id",
+    "exit_code",
+    "output",
+    "duration_ms",
+    "backend"
+  ],
+  "$defs": {
+    "TokenUsage": {
+      "description": "Token-accounting summary for an agent run.",
+      "type": "object",
+      "properties": {
+        "cache_writes": {
+          "description": "Tokens written to a prompt cache, if applicable.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cached": {
+          "description": "Tokens served from a prompt cache, if applicable.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "input": {
+          "description": "Input tokens consumed.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output": {
+          "description": "Output tokens generated.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ]
+    }
+  }
+}

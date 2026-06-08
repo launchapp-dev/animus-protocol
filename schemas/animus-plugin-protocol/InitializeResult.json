@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InitializeResult",
+  "description": "Plugin's response to `initialize`.\n\nThe host inspects `protocol_version` for compatibility and stores\n`capabilities` (the legacy method allowlist) and `kind_capabilities`\n(the typed per-kind capability map introduced in v1.1.0) for the\nlifetime of the plugin connection so it can avoid calling unsupported\nmethods.",
+  "type": "object",
+  "properties": {
+    "capabilities": {
+      "description": "Capabilities the plugin advertises.",
+      "$ref": "#/$defs/PluginCapabilities"
+    },
+    "kind_capabilities": {
+      "description": "Typed per-kind capability map introduced in protocol v1.1.0.\n\nKeyed by `PLUGIN_KIND_*` string. Each value declares the per-kind\nprotocol crate version the plugin was built against plus backend-\nspecific capability flags via [`KindCapability::extra`]. v1.0.0\nplugins leave this empty; v1.1.0+ plugins populate one entry per\nkind they implement (most plugins implement a single kind).\n\nDefaults to empty for back-compat with v1.0.0 plugins.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/KindCapability"
+      }
+    },
+    "plugin_info": {
+      "description": "Identity of the plugin.",
+      "$ref": "#/$defs/PluginInfo"
+    },
+    "protocol_version": {
+      "description": "Protocol version the plugin speaks. See [`PROTOCOL_VERSION`].",
+      "type": "string"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "plugin_info",
+    "capabilities"
+  ],
+  "$defs": {
+    "KindCapability": {
+      "description": "Typed per-kind capability declaration carried in\n[`InitializeResult::kind_capabilities`].\n\nEach new plugin-kind protocol crate (e.g.,\n`animus-workflow-runner-protocol`) defines a strongly-typed Capabilities\nstruct (e.g., `WorkflowRunnerCapabilities`) which serializes into the\n[`KindCapability::extra`] field.",
+      "type": "object",
+      "properties": {
+        "crate_version": {
+          "description": "Per-kind protocol crate semver the plugin was built against, e.g.\n`\"0.1.0\"`. Hosts use the major component for compatibility checks.",
+          "type": "string"
+        },
+        "extra": {
+          "description": "Backend-specific capability flags, typed by the per-kind protocol\ncrate. Opaque to `animus-plugin-protocol`."
+        }
+      },
+      "required": [
+        "crate_version"
+      ]
+    },
+    "McpTool": {
+      "description": "Description of an MCP tool exposed by a custom plugin.\n\nHosts that bridge MCP can re-expose these tools to MCP clients without\nthe plugin author writing MCP-specific code.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input_schema": {
+          "description": "JSON Schema describing the tool's input."
+        },
+        "name": {
+          "description": "MCP tool name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "PluginCapabilities": {
+      "description": "Capabilities the plugin advertises during the handshake.\n\n`methods` is the closed set of domain methods the plugin implements; the\nhost uses it to skip calls the plugin would reject anyway. `subject_kinds`\nand `mcp_tools` are supplemental hints for subject-backend and\ncustom-plugin kinds respectively.",
+      "type": "object",
+      "properties": {
+        "cancellation": {
+          "description": "Plugin honors `$/cancelRequest` notifications.",
+          "type": "boolean",
+          "default": false
+        },
+        "mcp_tools": {
+          "description": "MCP tools exposed by the plugin (custom plugins only).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/McpTool"
+          }
+        },
+        "methods": {
+          "description": "Concrete methods the plugin implements (e.g. `[\"subject/list\",\n\"subject/get\", \"subject/update\"]`).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "progress": {
+          "description": "Plugin honors `$/progress` notifications.",
+          "type": "boolean",
+          "default": false
+        },
+        "projections": {
+          "description": "Optional projection names the plugin can serve (subject backends\nonly). Hosts may request a projection by name in calls that opt into\nprojected views.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "streaming": {
+          "description": "Plugin emits server-streaming notifications.",
+          "type": "boolean",
+          "default": false
+        },
+        "subject_kinds": {
+          "description": "Subject kinds the plugin can produce (subject backends only).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PluginInfo": {
+      "description": "Identity of the plugin returned in the `initialize` response.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Plugin's published name (e.g. `\"animus-subject-linear\"`).",
+          "type": "string"
+        },
+        "plugin_kind": {
+          "description": "One of the `PLUGIN_KIND_*` constants. Prefer\n[`PluginInfo::plugin_kind`] to read this as a typed [`PluginKind`].",
+          "type": "string"
+        },
+        "version": {
+          "description": "Plugin's semver.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "plugin_kind"
+      ]
+    }
+  }
+}

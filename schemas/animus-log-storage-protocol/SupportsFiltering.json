@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SupportsFiltering",
+  "description": "Server-side filter support advertised by [`LogStorageSchema`].\n\nFields default to `false`; backends opt into each filter they can apply\nnatively. Filters the backend doesn't support are evaluated in-process\nby the daemon.",
+  "type": "object",
+  "properties": {
+    "by_glob": {
+      "description": "Backend evaluates [`LogQuery::target_glob`] with full glob semantics.\nImplies (but does not require) [`SupportsFiltering::by_target`].",
+      "type": "boolean",
+      "default": false
+    },
+    "by_level": {
+      "description": "Backend honors [`LogQuery::min_level`].",
+      "type": "boolean",
+      "default": false
+    },
+    "by_source": {
+      "description": "Backend honors [`LogQuery::source`].",
+      "type": "boolean",
+      "default": false
+    },
+    "by_target": {
+      "description": "Backend honors [`LogQuery::target_glob`] as an exact-target match\n(without the glob expansion).",
+      "type": "boolean",
+      "default": false
+    },
+    "by_time_range": {
+      "description": "Backend honors [`LogQuery::since`] and [`LogQuery::until`].",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

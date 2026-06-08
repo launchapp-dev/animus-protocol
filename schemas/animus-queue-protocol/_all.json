@@ -1,0 +1,554 @@
+{
+  "$defs": {
+    "QueueCapabilities": {
+      "description": "Capability flags for queue plugins.",
+      "properties": {
+        "max_lease_batch": {
+          "default": 0,
+          "description": "Maximum batch size accepted on [`METHOD_QUEUE_LEASE`]. Hosts clamp\nrequested `max` to this value.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "priority_weighted": {
+          "default": false,
+          "description": "`true` if the backend honors `priority` on `SubjectDispatch` (v0.5\nreference implementation is strict FIFO within Pending status; later\nbackends may weight by priority).",
+          "type": "boolean"
+        }
+      },
+      "title": "QueueCapabilities",
+      "type": "object"
+    },
+    "QueueCompletionRequest": {
+      "description": "Request for [`METHOD_QUEUE_COMPLETION`].",
+      "properties": {
+        "entry_id": {
+          "description": "Entry id whose workflow terminated.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Terminal status (from [`completion_status`]).",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "Workflow id that ran.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow_ref": {
+          "description": "Workflow ref that ran.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entry_id",
+        "status"
+      ],
+      "title": "QueueCompletionRequest",
+      "type": "object"
+    },
+    "QueueDropRequest": {
+      "description": "Request for [`METHOD_QUEUE_DROP`].",
+      "properties": {
+        "entry_id": {
+          "description": "Entry id to drop.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id"
+      ],
+      "title": "QueueDropRequest",
+      "type": "object"
+    },
+    "QueueEnqueueRequest": {
+      "description": "Request for [`METHOD_QUEUE_ENQUEUE`].",
+      "properties": {
+        "subject_dispatch": {
+          "$ref": "#/$defs/SubjectDispatch",
+          "description": "Full dispatch envelope to enqueue."
+        }
+      },
+      "required": [
+        "subject_dispatch"
+      ],
+      "title": "QueueEnqueueRequest",
+      "type": "object"
+    },
+    "QueueEnqueueResponse": {
+      "description": "Response for [`METHOD_QUEUE_ENQUEUE`].",
+      "properties": {
+        "enqueued": {
+          "description": "`true` if a new entry was created. `false` if the dispatch was\nrejected as a duplicate of an existing pending/assigned entry\n(idempotent enqueue).",
+          "type": "boolean"
+        },
+        "entry_id": {
+          "description": "Stable entry id assigned by the plugin. Used by all subsequent\nmutation calls.",
+          "type": "string"
+        },
+        "subject_id": {
+          "description": "Convenience: the subject id from the dispatch envelope.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "enqueued",
+        "entry_id",
+        "subject_id"
+      ],
+      "title": "QueueEnqueueResponse",
+      "type": "object"
+    },
+    "QueueEntry": {
+      "description": "A queue entry shape returned by list / lease.",
+      "properties": {
+        "assigned_at": {
+          "description": "RFC 3339 assignment timestamp.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enqueued_at": {
+          "description": "RFC 3339 enqueue timestamp.",
+          "type": "string"
+        },
+        "entry_id": {
+          "description": "Stable entry id (unique within the project queue). Mutation calls\ntarget this id.",
+          "type": "string"
+        },
+        "held_at": {
+          "description": "RFC 3339 hold timestamp.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Status value from [`status`].",
+          "type": "string"
+        },
+        "subject_dispatch": {
+          "$ref": "#/$defs/SubjectDispatch",
+          "description": "Full dispatch envelope — included so the daemon can lease an entry\nand start work without a second roundtrip."
+        },
+        "subject_id": {
+          "description": "Subject id from the dispatch envelope.",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Task id, if this entry's subject is a built-in task.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow_id": {
+          "description": "Workflow id attached to an Assigned entry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entry_id",
+        "subject_id",
+        "subject_dispatch",
+        "status",
+        "enqueued_at"
+      ],
+      "title": "QueueEntry",
+      "type": "object"
+    },
+    "QueueHoldRequest": {
+      "description": "Request for [`METHOD_QUEUE_HOLD`].",
+      "properties": {
+        "entry_id": {
+          "description": "Entry id to hold.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Optional audit reason.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entry_id"
+      ],
+      "title": "QueueHoldRequest",
+      "type": "object"
+    },
+    "QueueLeaseRequest": {
+      "description": "Request for [`METHOD_QUEUE_LEASE`].",
+      "properties": {
+        "exclude_subjects": {
+          "description": "Subjects to skip during lease selection.\n\nEntries whose `subject_dispatch.subject_key()` matches any id in\nthis list stay in Pending status and are not returned in the\nlease response. No state transition occurs for them. Hosts use\nthis to tell the queue \"this subject already has an in-flight\nworkflow\" so it advances past the head-of-line entry instead of\nreturning it for the daemon to immediately release back.\nBackward-compat: `None` / omitted is identical to today's behavior.",
+          "items": {
+            "$ref": "#/$defs/SubjectId"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "max": {
+          "description": "Maximum number of entries to lease in this call.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_ids": {
+          "description": "Optional daemon-provided workflow ids to attach to leased entries.\nIf set, length MUST be exactly `max` (plugin returns an error\notherwise). If `None`, the plugin generates synthetic UUIDs.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "max"
+      ],
+      "title": "QueueLeaseRequest",
+      "type": "object"
+    },
+    "QueueLeaseResponse": {
+      "description": "Response for [`METHOD_QUEUE_LEASE`].",
+      "properties": {
+        "leased": {
+          "description": "Leased entries (already transitioned to Assigned).",
+          "items": {
+            "$ref": "#/$defs/QueueEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "leased"
+      ],
+      "title": "QueueLeaseResponse",
+      "type": "object"
+    },
+    "QueueListRequest": {
+      "description": "Request for [`METHOD_QUEUE_LIST`].",
+      "properties": {
+        "limit": {
+          "description": "Pagination limit.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "description": "Pagination offset.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Filter by status (values from [`status`]). Empty means all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "QueueListRequest",
+      "type": "object"
+    },
+    "QueueListResponse": {
+      "description": "Response for [`METHOD_QUEUE_LIST`].",
+      "properties": {
+        "entries": {
+          "description": "Returned entries.",
+          "items": {
+            "$ref": "#/$defs/QueueEntry"
+          },
+          "type": "array"
+        },
+        "stats": {
+          "$ref": "#/$defs/QueueStats",
+          "description": "Aggregate stats."
+        },
+        "total": {
+          "description": "Total entries matching the filter.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entries",
+        "total",
+        "stats"
+      ],
+      "title": "QueueListResponse",
+      "type": "object"
+    },
+    "QueueMarkAssignedRequest": {
+      "description": "Request for [`METHOD_QUEUE_MARK_ASSIGNED`].",
+      "properties": {
+        "entry_id": {
+          "description": "Entry id to transition.",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "Workflow id to attach.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entry_id"
+      ],
+      "title": "QueueMarkAssignedRequest",
+      "type": "object"
+    },
+    "QueueMutationResponse": {
+      "description": "Generic mutation result used by hold / release / drop / mark_assigned /\ncompletion.",
+      "properties": {
+        "changed": {
+          "description": "`true` if the entry state changed. `false` if the entry was already\nin the requested state (idempotent no-op) or was not found.",
+          "type": "boolean"
+        },
+        "not_found": {
+          "default": false,
+          "description": "`true` if the entry was not found (idempotent on missing).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "changed"
+      ],
+      "title": "QueueMutationResponse",
+      "type": "object"
+    },
+    "QueueReleasePendingParams": {
+      "description": "Request for [`METHOD_QUEUE_RELEASE_PENDING`].",
+      "properties": {
+        "entry_id": {
+          "description": "Entry id to return to Pending.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Audit reason describing why the entry is being released back.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id",
+        "reason"
+      ],
+      "title": "QueueReleasePendingParams",
+      "type": "object"
+    },
+    "QueueReleasePendingResponse": {
+      "description": "Response for [`METHOD_QUEUE_RELEASE_PENDING`].",
+      "properties": {
+        "entry_id": {
+          "description": "Entry id whose status was changed.",
+          "type": "string"
+        },
+        "status": {
+          "description": "New status — always [`status::PENDING`] on success.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id",
+        "status"
+      ],
+      "title": "QueueReleasePendingResponse",
+      "type": "object"
+    },
+    "QueueReleaseRequest": {
+      "description": "Request for [`METHOD_QUEUE_RELEASE`].",
+      "properties": {
+        "entry_id": {
+          "description": "Entry id to release.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id"
+      ],
+      "title": "QueueReleaseRequest",
+      "type": "object"
+    },
+    "QueueReorderRequest": {
+      "description": "Request for [`METHOD_QUEUE_REORDER`].",
+      "properties": {
+        "entry_ids": {
+          "description": "New order (partial — entries not in this list keep their existing\nposition).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entry_ids"
+      ],
+      "title": "QueueReorderRequest",
+      "type": "object"
+    },
+    "QueueReorderResponse": {
+      "description": "Response for [`METHOD_QUEUE_REORDER`].",
+      "properties": {
+        "reordered_count": {
+          "description": "Count of entries whose position changed.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reordered_count"
+      ],
+      "title": "QueueReorderResponse",
+      "type": "object"
+    },
+    "QueueStats": {
+      "description": "Queue aggregate counts.",
+      "properties": {
+        "assigned": {
+          "description": "Assigned entries.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "held": {
+          "description": "Held entries.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pending": {
+          "description": "Pending entries.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "description": "Total entries.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "pending",
+        "assigned",
+        "held"
+      ],
+      "title": "QueueStats",
+      "type": "object"
+    },
+    "SubjectDispatch": {
+      "description": "Full dispatch envelope handed off from queue / scheduler / trigger to the\nworkflow runner.\n\nCarries the subject identity (`subject`), the workflow ref to run, and\noptional input + variables + priority + trigger source + requested-at\ntimestamp. The shape is wire-compatible with the previous home in\nao-cli's `protocol` crate.",
+      "properties": {
+        "input": {
+          "description": "Optional initial input JSON for workflow variables."
+        },
+        "priority": {
+          "description": "Optional priority hint (`\"low\"`, `\"medium\"`, `\"high\"`, `\"critical\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_at": {
+          "description": "When the dispatch was created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/SubjectRef",
+          "description": "The subject this dispatch targets."
+        },
+        "trigger_source": {
+          "description": "Tag identifying which subsystem produced this dispatch\n(e.g., `\"ready-queue\"`, `\"trigger:slack\"`, `\"schedule:nightly\"`).",
+          "type": "string"
+        },
+        "vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Workflow scalar variables.",
+          "type": "object"
+        },
+        "workflow_ref": {
+          "description": "Workflow YAML ref to execute (e.g., `\"standard\"`, `\"quick-fix\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "workflow_ref",
+        "trigger_source",
+        "requested_at"
+      ],
+      "type": "object"
+    },
+    "SubjectId": {
+      "description": "Backend-qualified identifier for a subject.\n\nConvention is `\"<backend>:<native_id>\"`, e.g. `\"linear:ENG-123\"`,\n`\"jira:PROJ-456\"`, `\"github:owner/repo#789\"`, `\"native:TASK-001\"`. The\ndaemon treats the value as opaque; only the originating backend\ninterprets the native portion.\n\nThe `backend:` prefix is reserved. Plugin authors should always emit\nprefixed ids so cross-backend collisions are impossible.",
+      "type": "string"
+    },
+    "SubjectRef": {
+      "description": "Backend-qualified subject reference with optional display metadata.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metadata": true,
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-queue-protocol"
+}

@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowExecuteResult",
+  "description": "Result of [`METHOD_WORKFLOW_EXECUTE`].",
+  "type": "object",
+  "properties": {
+    "execution_cwd": {
+      "description": "Working directory used for phases.",
+      "type": "string"
+    },
+    "phase_events": {
+      "description": "Phase events emitted during execution (replaces in-process callback).",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PhaseEvent"
+      }
+    },
+    "phase_results": {
+      "description": "Per-phase results.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PhaseResultSnapshot"
+      }
+    },
+    "phases_completed": {
+      "description": "Number of phases completed.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "phases_requested": {
+      "description": "Phase ids that were requested by this run.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "phases_total": {
+      "description": "Total phases in the workflow.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "post_success": {
+      "description": "Post-success action outcome (push, PR creation, merge, etc.)."
+    },
+    "subject_id": {
+      "description": "Subject id this run targeted.",
+      "type": "string"
+    },
+    "success": {
+      "description": "True iff `workflow_status == COMPLETED`.",
+      "type": "boolean"
+    },
+    "total_duration_secs": {
+      "description": "Total wall-clock duration.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "workflow_id": {
+      "description": "Unique workflow id (echoed on resume or freshly allocated on start).",
+      "type": "string"
+    },
+    "workflow_ref": {
+      "description": "Resolved workflow ref.",
+      "type": "string"
+    },
+    "workflow_status": {
+      "description": "Final status; one of [`workflow_status`] values.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "workflow_id",
+    "workflow_ref",
+    "workflow_status",
+    "subject_id",
+    "execution_cwd",
+    "phases_requested",
+    "phases_completed",
+    "phases_total",
+    "total_duration_secs",
+    "phase_results",
+    "post_success",
+    "success"
+  ],
+  "$defs": {
+    "PhaseEvent": {
+      "description": "Event emitted by the runner during a workflow. Daemon callers receive\nthe full vector in [`WorkflowExecuteResult::phase_events`]; real-time\nstreaming is deferred to v0.6.",
+      "oneOf": [
+        {
+          "description": "Phase started.",
+          "type": "object",
+          "properties": {
+            "attempt": {
+              "description": "Attempt number (0, 1, ...).",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "started"
+            },
+            "phase_id": {
+              "description": "Phase id.",
+              "type": "string"
+            },
+            "ts": {
+              "description": "RFC 3339 timestamp.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "phase_id",
+            "attempt",
+            "ts"
+          ]
+        },
+        {
+          "description": "Phase recorded a decision contract verdict.",
+          "type": "object",
+          "properties": {
+            "confidence": {
+              "description": "Optional confidence score, 0.0 – 1.0.",
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "kind": {
+              "type": "string",
+              "const": "decision"
+            },
+            "phase_id": {
+              "description": "Phase id.",
+              "type": "string"
+            },
+            "ts": {
+              "description": "RFC 3339 timestamp.",
+              "type": "string"
+            },
+            "verdict": {
+              "description": "`\"advance\"`, `\"rework\"`, `\"skip\"`, `\"fail\"`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "phase_id",
+            "verdict",
+            "ts"
+          ]
+        },
+        {
+          "description": "Phase finished with a final status.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "completed"
+            },
+            "phase_id": {
+              "description": "Phase id.",
+              "type": "string"
+            },
+            "status": {
+              "description": "Status; one of [`phase_status`] values.",
+              "type": "string"
+            },
+            "ts": {
+              "description": "RFC 3339 timestamp.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "phase_id",
+            "status",
+            "ts"
+          ]
+        }
+      ]
+    },
+    "PhaseResultSnapshot": {
+      "description": "A single phase's result snapshot returned in [`WorkflowExecuteResult`].",
+      "type": "object",
+      "properties": {
+        "close_reason": {
+          "description": "Close reason if verdict was a skip / close.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_secs": {
+          "description": "Duration of this phase in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "metadata": {
+          "description": "Backend-specific metadata payload."
+        },
+        "next_phase_id": {
+          "description": "Next phase id, if available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "description": "Backend-specific outcome payload."
+        },
+        "phase_id": {
+          "description": "Phase id (workflow-local).",
+          "type": "string"
+        },
+        "status": {
+          "description": "Status; one of [`phase_status`] values.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase_id",
+        "status",
+        "duration_secs",
+        "outcome",
+        "metadata"
+      ]
+    }
+  }
+}

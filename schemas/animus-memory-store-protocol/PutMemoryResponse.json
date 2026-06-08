@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PutMemoryResponse",
+  "description": "Response for [`METHOD_MEMORY_PUT`].",
+  "type": "object",
+  "properties": {
+    "ack": {
+      "description": "`true` if the value was accepted.",
+      "type": "boolean"
+    },
+    "indexed_immediately": {
+      "description": "`true` if the backend has fully indexed the value and `query` is\nexpected to find it immediately. `false` when ingestion is async\n(e.g., Zep). Callers needing read-after-write semantics must\nsurface this.",
+      "type": "boolean"
+    },
+    "record_id": {
+      "description": "Backend-issued identifier for the stored entry. Useful for\ndelete-by-id or audit. Empty string when the backend doesn't expose\nstable record ids.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ack",
+    "indexed_immediately"
+  ]
+}

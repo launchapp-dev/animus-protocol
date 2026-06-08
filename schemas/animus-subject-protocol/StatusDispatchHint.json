@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StatusDispatchHint",
+  "description": "A mapping from a backend-native status string to its normalized bucket\nand optional dispatch label.\n\nSee [`SubjectSchema::status_dispatch_hints`].",
+  "type": "object",
+  "properties": {
+    "description": {
+      "description": "Optional human-readable description of the semantics of this\nnative status.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dispatch_label": {
+      "description": "Optional workflow dispatch label. When set, workflow YAML can\ntrigger phases keyed on this label (e.g.\n`triggered_by_dispatch_label: code-review`) regardless of which\nbackend the subject came from.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "maps_to": {
+      "description": "The normalized [`SubjectStatus`] bucket this native value maps into.",
+      "$ref": "#/$defs/SubjectStatus"
+    },
+    "native_status": {
+      "description": "The backend's native status string, e.g. `\"In Review\"`, `\"Spec\"`,\n`\"Shipped\"`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "native_status",
+    "maps_to"
+  ],
+  "$defs": {
+    "SubjectStatus": {
+      "description": "Normalized cross-backend subject status.\n\nBackend-native states (`\"Backlog\"`, `\"In Review\"`, `\"Won't Fix\"`, ...) map\ninto one of these five via the `status_map` declared per-subject in\nworkflow YAML. The mapping lives in configuration, not code, so adding a\nnew backend never requires extending this enum.",
+      "oneOf": [
+        {
+          "description": "Eligible for dispatch.",
+          "type": "string",
+          "const": "ready"
+        },
+        {
+          "description": "Currently being worked by a workflow run (or by a human, in the\nupstream system).",
+          "type": "string",
+          "const": "in-progress"
+        },
+        {
+          "description": "Cannot proceed; awaiting unblock.",
+          "type": "string",
+          "const": "blocked"
+        },
+        {
+          "description": "Successfully completed.",
+          "type": "string",
+          "const": "done"
+        },
+        {
+          "description": "Abandoned without completion.",
+          "type": "string",
+          "const": "cancelled"
+        }
+      ]
+    }
+  }
+}

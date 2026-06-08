@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueReorderResponse",
+  "description": "Response for [`METHOD_QUEUE_REORDER`].",
+  "type": "object",
+  "properties": {
+    "reordered_count": {
+      "description": "Count of entries whose position changed.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "reordered_count"
+  ]
+}

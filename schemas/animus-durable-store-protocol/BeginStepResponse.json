@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BeginStepResponse",
+  "description": "Response for [`METHOD_DURABLE_BEGIN_STEP`].",
+  "type": "object",
+  "properties": {
+    "prior_error": {
+      "description": "Present when `status == PRIOR_ERROR`. Contains the previously\ncommitted error.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StepError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "prior_output": {
+      "description": "Present when `status == ALREADY_COMMITTED`. Contains the previously\ncommitted `output` so the caller can short-circuit the side effect."
+    },
+    "reservation_expires_at": {
+      "description": "Present when `status == IN_PROGRESS`. RFC 3339 timestamp of when\nthe existing reservation expires.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "description": "Value from [`step_status`].",
+      "type": "string"
+    },
+    "step_id": {
+      "description": "Plugin-issued step id (used as the handle for `commit_step` /\n`abandon_step`).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "step_id",
+    "status"
+  ],
+  "$defs": {
+    "StepError": {
+      "description": "Structured error payload returned with PRIOR_ERROR or carried by\n[`CommitStepRequest`].",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "Backend-specific error code.",
+          "type": "string"
+        },
+        "details": {
+          "description": "Backend-specific details."
+        },
+        "message": {
+          "description": "Human-readable message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    }
+  }
+}

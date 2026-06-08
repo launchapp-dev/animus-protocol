@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProviderCapabilities",
+  "description": "Provider capability flags.",
+  "type": "object",
+  "properties": {
+    "cancellation": {
+      "description": "Provider supports `agent/cancel`.",
+      "type": "boolean",
+      "default": false
+    },
+    "mcp": {
+      "description": "Provider supports MCP server bridging (i.e. accepts the\n`mcp_servers` field of [`AgentRunRequest`]).",
+      "type": "boolean",
+      "default": false
+    },
+    "resume": {
+      "description": "Provider supports `agent/resume` against prior session ids.",
+      "type": "boolean",
+      "default": false
+    },
+    "streaming": {
+      "description": "Provider emits `agent/output` deltas as the model produces them.",
+      "type": "boolean",
+      "default": false
+    },
+    "write_capable": {
+      "description": "Provider can edit files in the working directory (vs. read-only\nresearch providers).",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

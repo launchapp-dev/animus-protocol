@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StepError",
+  "description": "Structured error payload returned with PRIOR_ERROR or carried by\n[`CommitStepRequest`].",
+  "type": "object",
+  "properties": {
+    "code": {
+      "description": "Backend-specific error code.",
+      "type": "string"
+    },
+    "details": {
+      "description": "Backend-specific details."
+    },
+    "message": {
+      "description": "Human-readable message.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "code",
+    "message"
+  ]
+}

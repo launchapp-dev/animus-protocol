@@ -18,3 +18,11 @@ anyhow.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 futures-core.workspace = true
+schemars = { version = "1.0", features = ["chrono04"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "animus-log-storage-protocol-export-schema"
+path = "src/bin/export_schema.rs"

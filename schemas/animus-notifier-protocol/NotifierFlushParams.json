@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NotifierFlushParams",
+  "description": "Parameters for [`METHOD_NOTIFIER_FLUSH`].",
+  "type": "object",
+  "properties": {
+    "project_root": {
+      "description": "Optional project-root scoping. `None` means flush every project\nthe plugin tracks.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

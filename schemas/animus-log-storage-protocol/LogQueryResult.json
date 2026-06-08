@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogQueryResult",
+  "description": "One page of [`LogEntry`] records returned by\n[`LogStorageBackend::query`].\n\nBackends that paginate set `next_cursor` to an opaque string the caller\npasses back as [`LogQuery::cursor`]. Backends that return everything\nin one shot leave it `None`.",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "description": "Matched entries in chronological order (oldest first). Backends MAY\nreverse this for performance; if so, document it.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LogEntry"
+      }
+    },
+    "next_cursor": {
+      "description": "Opaque cursor for the next page, or `None` if exhausted.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "entries"
+  ],
+  "$defs": {
+    "LogEntry": {
+      "description": "One structured log record persisted by a log storage backend.\n\n`LogEntry` is the unit of work for `log_storage/*` methods — the daemon\nproduces them, the backend persists them, and operators query them. The\n`fields` value is opaque to the host and lets emitters attach structured\nkey/value context (`request_id`, `subject_id`, `workflow_id`, ...) without\nstretching the fixed schema.",
+      "type": "object",
+      "properties": {
+        "fields": {
+          "description": "Structured key/value context. Defaults to `null` (omitted on the\nwire) when the emitter has no structured context to attach."
+        },
+        "id": {
+          "description": "Backend-assigned unique id. UUID, ULID, monotonic timestamp,\n`(source, ts, hash(message))` — whatever the backend can dedupe on.",
+          "type": "string"
+        },
+        "level": {
+          "description": "Severity level. Used both for filtering and for surfacing in operator\nUIs.",
+          "$ref": "#/$defs/LogLevel"
+        },
+        "message": {
+          "description": "Human-readable log message. Multi-line content is allowed; emitters\nSHOULD avoid stuffing entire JSON blobs here and use `fields` instead.",
+          "type": "string"
+        },
+        "source": {
+          "description": "What produced this entry — the daemon process, a plugin, the CLI, or\nan in-flight workflow run.",
+          "$ref": "#/$defs/LogSource"
+        },
+        "source_name": {
+          "description": "Free-form name disambiguating multiple emitters within a [`LogSource`]:\nplugin name (`\"animus-subject-linear\"`), workflow id, CLI command,\netc. `None` is acceptable for source kinds with only one emitter.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "Hierarchical target identifier matching the\n[`tracing`](https://docs.rs/tracing) module convention, e.g.\n`\"plugin.animus-subject-linear.client\"`. Backends MAY index this for\nfaster glob matches.",
+          "type": "string"
+        },
+        "ts": {
+          "description": "When the upstream emitter produced the entry. Backends MUST preserve\nthe original timestamp rather than overwriting with arrival time.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ts",
+        "level",
+        "source",
+        "target",
+        "message"
+      ]
+    },
+    "LogLevel": {
+      "description": "Severity level for a [`LogEntry`].\n\nLevels follow the [`tracing`](https://docs.rs/tracing) convention.\nBackends MAY drop entries below a configured floor; the daemon does not\nrequire backends to persist every level.",
+      "oneOf": [
+        {
+          "description": "Highest-volume, lowest-priority. Used for fine-grained instrumentation.",
+          "type": "string",
+          "const": "trace"
+        },
+        {
+          "description": "Debug-level diagnostic detail. Off by default in production.",
+          "type": "string",
+          "const": "debug"
+        },
+        {
+          "description": "Routine informational messages.",
+          "type": "string",
+          "const": "info"
+        },
+        {
+          "description": "Recoverable problem the operator should know about.",
+          "type": "string",
+          "const": "warn"
+        },
+        {
+          "description": "Failure that prevented the requested work from completing.",
+          "type": "string",
+          "const": "error"
+        }
+      ]
+    },
+    "LogSource": {
+      "description": "What produced a [`LogEntry`].\n\nThe set is closed — every emitter in the Animus protocol maps to one of\nthese four buckets. Disambiguate finer-grained emitters via\n[`LogEntry::source_name`].",
+      "oneOf": [
+        {
+          "description": "The Animus daemon process itself.",
+          "type": "string",
+          "const": "daemon"
+        },
+        {
+          "description": "A plugin process (subject backend, provider, trigger, log storage, ...).\nUse [`LogEntry::source_name`] to name the specific plugin.",
+          "type": "string",
+          "const": "plugin"
+        },
+        {
+          "description": "A short-lived CLI invocation. Use [`LogEntry::source_name`] to name\nthe command (`\"queue list\"`, `\"workflow run\"`, ...).",
+          "type": "string",
+          "const": "cli"
+        },
+        {
+          "description": "An in-flight workflow run. Use [`LogEntry::source_name`] to carry the\nworkflow id.",
+          "type": "string",
+          "const": "workflow"
+        }
+      ]
+    }
+  }
+}

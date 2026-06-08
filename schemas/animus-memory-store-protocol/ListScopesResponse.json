@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ListScopesResponse",
+  "description": "Response for [`METHOD_MEMORY_LIST_SCOPES`].",
+  "type": "object",
+  "properties": {
+    "next_cursor": {
+      "description": "Cursor for the next page, or `None` if exhausted.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scopes": {
+      "description": "Returned scopes.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MemoryScope"
+      }
+    }
+  },
+  "required": [
+    "scopes"
+  ],
+  "$defs": {
+    "MemoryScope": {
+      "description": "Memory scope identifier. The scope id is derived by the plugin from\nthese fields as a flat namespace. Project-wide memory: `project_id`\nonly. Per-agent: `project_id` + `agent_id`. Per-task: `project_id` +\n`agent_id` + `task_id`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Optional agent identifier (per-agent or per-task scopes).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_id": {
+          "description": "Project identifier (required).",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Optional task identifier (per-task scopes only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    }
+  }
+}

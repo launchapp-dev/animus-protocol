@@ -33,6 +33,7 @@ use animus_plugin_protocol::{error_codes, HealthCheckResult, RpcError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures_core::Stream;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -71,7 +72,7 @@ pub const NOTIFICATION_TRIGGER_EVENT: &str = "trigger/event";
 /// Backend-specific payload data lives in [`TriggerEvent::payload`] and is
 /// addressable from workflow YAML via templating (e.g.
 /// `{{trigger.payload.user}}`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TriggerEvent {
     /// Stable identifier for this event. Used for deduplication if the
     /// daemon restarts and the backend redelivers from its journal, and as
@@ -120,7 +121,7 @@ pub struct TriggerEvent {
 /// example, to skip [`TriggerBackend::ack`] calls for fire-and-forget
 /// backends, or to expose the set of event kinds to workflow authors so
 /// they can match on `kind`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TriggerSchema {
     /// Event kinds this backend can emit. Examples:
     /// `["slack_mention", "slack_channel_message"]`,

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueryMemoryRequest",
+  "description": "Request for [`METHOD_MEMORY_QUERY`].",
+  "type": "object",
+  "properties": {
+    "query": {
+      "description": "Natural-language query.",
+      "type": "string"
+    },
+    "scope": {
+      "description": "Scope to search.",
+      "$ref": "#/$defs/MemoryScope"
+    },
+    "top_k": {
+      "description": "Maximum results to return. Backends MAY clamp to their declared\n`max_query_top_k` capability.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "scope",
+    "query",
+    "top_k"
+  ],
+  "$defs": {
+    "MemoryScope": {
+      "description": "Memory scope identifier. The scope id is derived by the plugin from\nthese fields as a flat namespace. Project-wide memory: `project_id`\nonly. Per-agent: `project_id` + `agent_id`. Per-task: `project_id` +\n`agent_id` + `task_id`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Optional agent identifier (per-agent or per-task scopes).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_id": {
+          "description": "Project identifier (required).",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Optional task identifier (per-task scopes only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    }
+  }
+}

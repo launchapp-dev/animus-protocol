@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BeginWorkflowRunRequest",
+  "description": "Request for [`METHOD_DURABLE_BEGIN_WORKFLOW_RUN`].",
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "description": "Opaque inputs payload."
+    },
+    "phase_id": {
+      "description": "Caller-supplied phase id (DBOS workflow IDs are keyed by\n`(run_id, phase_id)`; different phases are different workflows).",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "Caller-supplied workflow run id.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "phase_id"
+  ]
+}

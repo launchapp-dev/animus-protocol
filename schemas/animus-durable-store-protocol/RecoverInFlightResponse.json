@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RecoverInFlightResponse",
+  "description": "Response for [`METHOD_DURABLE_RECOVER_IN_FLIGHT`].",
+  "type": "object",
+  "properties": {
+    "in_flight": {
+      "description": "Workflow runs that have outstanding reservations or pending state.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InFlightRun"
+      }
+    }
+  },
+  "required": [
+    "in_flight"
+  ],
+  "$defs": {
+    "InFlightRun": {
+      "description": "A run that had outstanding reservations at recovery time.",
+      "type": "object",
+      "properties": {
+        "last_committed_step": {
+          "description": "Step name of the last committed step, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase_id": {
+          "description": "Phase id.",
+          "type": "string"
+        },
+        "replay_state": {
+          "description": "Backend-specific replay state (e.g., DBOS workflow status payload)."
+        },
+        "run_id": {
+          "description": "Run id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "phase_id"
+      ]
+    }
+  }
+}

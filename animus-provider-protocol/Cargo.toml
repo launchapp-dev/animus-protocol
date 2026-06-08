@@ -16,3 +16,11 @@ serde_json.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
+schemars = "1.0"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "animus-provider-protocol-export-schema"
+path = "src/bin/export_schema.rs"

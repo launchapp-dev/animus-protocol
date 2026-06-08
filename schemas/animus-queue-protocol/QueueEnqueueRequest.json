@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueEnqueueRequest",
+  "description": "Request for [`METHOD_QUEUE_ENQUEUE`].",
+  "type": "object",
+  "properties": {
+    "subject_dispatch": {
+      "description": "Full dispatch envelope to enqueue.",
+      "$ref": "#/$defs/SubjectDispatch"
+    }
+  },
+  "required": [
+    "subject_dispatch"
+  ],
+  "$defs": {
+    "SubjectDispatch": {
+      "description": "Full dispatch envelope handed off from queue / scheduler / trigger to the\nworkflow runner.\n\nCarries the subject identity (`subject`), the workflow ref to run, and\noptional input + variables + priority + trigger source + requested-at\ntimestamp. The shape is wire-compatible with the previous home in\nao-cli's `protocol` crate.",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "Optional initial input JSON for workflow variables."
+        },
+        "priority": {
+          "description": "Optional priority hint (`\"low\"`, `\"medium\"`, `\"high\"`, `\"critical\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_at": {
+          "description": "When the dispatch was created.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "subject": {
+          "description": "The subject this dispatch targets.",
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "trigger_source": {
+          "description": "Tag identifying which subsystem produced this dispatch\n(e.g., `\"ready-queue\"`, `\"trigger:slack\"`, `\"schedule:nightly\"`).",
+          "type": "string"
+        },
+        "vars": {
+          "description": "Workflow scalar variables.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "workflow_ref": {
+          "description": "Workflow YAML ref to execute (e.g., `\"standard\"`, `\"quick-fix\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "workflow_ref",
+        "trigger_source",
+        "requested_at"
+      ]
+    },
+    "SubjectRef": {
+      "description": "Backend-qualified subject reference with optional display metadata.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metadata": true,
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    }
+  }
+}

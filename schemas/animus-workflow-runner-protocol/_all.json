@@ -1,0 +1,665 @@
+{
+  "$defs": {
+    "PhaseEvent": {
+      "description": "Event emitted by the runner during a workflow. Daemon callers receive\nthe full vector in [`WorkflowExecuteResult::phase_events`]; real-time\nstreaming is deferred to v0.6.",
+      "oneOf": [
+        {
+          "description": "Phase started.",
+          "properties": {
+            "attempt": {
+              "description": "Attempt number (0, 1, ...).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "started",
+              "type": "string"
+            },
+            "phase_id": {
+              "description": "Phase id.",
+              "type": "string"
+            },
+            "ts": {
+              "description": "RFC 3339 timestamp.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "phase_id",
+            "attempt",
+            "ts"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Phase recorded a decision contract verdict.",
+          "properties": {
+            "confidence": {
+              "description": "Optional confidence score, 0.0 – 1.0.",
+              "format": "float",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "decision",
+              "type": "string"
+            },
+            "phase_id": {
+              "description": "Phase id.",
+              "type": "string"
+            },
+            "ts": {
+              "description": "RFC 3339 timestamp.",
+              "type": "string"
+            },
+            "verdict": {
+              "description": "`\"advance\"`, `\"rework\"`, `\"skip\"`, `\"fail\"`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "phase_id",
+            "verdict",
+            "ts"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Phase finished with a final status.",
+          "properties": {
+            "kind": {
+              "const": "completed",
+              "type": "string"
+            },
+            "phase_id": {
+              "description": "Phase id.",
+              "type": "string"
+            },
+            "status": {
+              "description": "Status; one of [`phase_status`] values.",
+              "type": "string"
+            },
+            "ts": {
+              "description": "RFC 3339 timestamp.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "phase_id",
+            "status",
+            "ts"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "PhaseEvent"
+    },
+    "PhaseResultSnapshot": {
+      "description": "A single phase's result snapshot returned in [`WorkflowExecuteResult`].",
+      "properties": {
+        "close_reason": {
+          "description": "Close reason if verdict was a skip / close.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_secs": {
+          "description": "Duration of this phase in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "metadata": {
+          "description": "Backend-specific metadata payload."
+        },
+        "next_phase_id": {
+          "description": "Next phase id, if available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "description": "Backend-specific outcome payload."
+        },
+        "phase_id": {
+          "description": "Phase id (workflow-local).",
+          "type": "string"
+        },
+        "status": {
+          "description": "Status; one of [`phase_status`] values.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase_id",
+        "status",
+        "duration_secs",
+        "outcome",
+        "metadata"
+      ],
+      "title": "PhaseResultSnapshot",
+      "type": "object"
+    },
+    "SubjectDispatch": {
+      "description": "Full dispatch envelope handed off from queue / scheduler / trigger to the\nworkflow runner.\n\nCarries the subject identity (`subject`), the workflow ref to run, and\noptional input + variables + priority + trigger source + requested-at\ntimestamp. The shape is wire-compatible with the previous home in\nao-cli's `protocol` crate.",
+      "properties": {
+        "input": {
+          "description": "Optional initial input JSON for workflow variables."
+        },
+        "priority": {
+          "description": "Optional priority hint (`\"low\"`, `\"medium\"`, `\"high\"`, `\"critical\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_at": {
+          "description": "When the dispatch was created.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/SubjectRef",
+          "description": "The subject this dispatch targets."
+        },
+        "trigger_source": {
+          "description": "Tag identifying which subsystem produced this dispatch\n(e.g., `\"ready-queue\"`, `\"trigger:slack\"`, `\"schedule:nightly\"`).",
+          "type": "string"
+        },
+        "vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Workflow scalar variables.",
+          "type": "object"
+        },
+        "workflow_ref": {
+          "description": "Workflow YAML ref to execute (e.g., `\"standard\"`, `\"quick-fix\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "workflow_ref",
+        "trigger_source",
+        "requested_at"
+      ],
+      "type": "object"
+    },
+    "SubjectRef": {
+      "description": "Backend-qualified subject reference with optional display metadata.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metadata": true,
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "WorkflowExecuteRequest": {
+      "description": "Parameters for [`METHOD_WORKFLOW_EXECUTE`].\n\nEither `subject_dispatch` must be set OR (`subject_ref` + one of\n`task_id` / `requirement_id` / (`title` + `description`)). Generic\nsubject backends MUST use `subject_dispatch`; task and requirement\nbackends MAY use the convenience fields.",
+      "properties": {
+        "description": {
+          "description": "For custom ad-hoc subjects.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": {
+          "description": "Initial input JSON for workflow variables."
+        },
+        "mcp_config": {
+          "description": "Opaque MCP runtime config."
+        },
+        "model": {
+          "description": "Force a specific model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase_filter": {
+          "description": "Single-phase filter: run only this phase id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase_routing": {
+          "description": "Opaque phase routing config (backend-specific)."
+        },
+        "phase_timeout_secs": {
+          "description": "Per-phase timeout in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "requirement_id": {
+          "description": "Requirement id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject_dispatch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectDispatch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Generic dispatch envelope (preferred for non-task/requirement subjects)."
+        },
+        "subject_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Identifies which subject to run when `subject_dispatch` is not set."
+        },
+        "task_id": {
+          "description": "Task id (used only when `subject_dispatch` is None and\n`subject_ref.kind == \"animus.task\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "For custom ad-hoc subjects without an existing `subject_ref`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "Force a specific tool (`\"claude\"`, `\"codex\"`, `\"gemini\"`, ...).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Workflow scalar variables.",
+          "type": "object"
+        },
+        "workflow_id": {
+          "description": "Existing workflow id to resume, or `None` to start a fresh run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow_ref": {
+          "description": "Workflow YAML ref (e.g., `\"standard\"`, `\"research-first\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "WorkflowExecuteRequest",
+      "type": "object"
+    },
+    "WorkflowExecuteResult": {
+      "description": "Result of [`METHOD_WORKFLOW_EXECUTE`].",
+      "properties": {
+        "execution_cwd": {
+          "description": "Working directory used for phases.",
+          "type": "string"
+        },
+        "phase_events": {
+          "default": [],
+          "description": "Phase events emitted during execution (replaces in-process callback).",
+          "items": {
+            "$ref": "#/$defs/PhaseEvent"
+          },
+          "type": "array"
+        },
+        "phase_results": {
+          "description": "Per-phase results.",
+          "items": {
+            "$ref": "#/$defs/PhaseResultSnapshot"
+          },
+          "type": "array"
+        },
+        "phases_completed": {
+          "description": "Number of phases completed.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phases_requested": {
+          "description": "Phase ids that were requested by this run.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "phases_total": {
+          "description": "Total phases in the workflow.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "post_success": {
+          "description": "Post-success action outcome (push, PR creation, merge, etc.)."
+        },
+        "subject_id": {
+          "description": "Subject id this run targeted.",
+          "type": "string"
+        },
+        "success": {
+          "description": "True iff `workflow_status == COMPLETED`.",
+          "type": "boolean"
+        },
+        "total_duration_secs": {
+          "description": "Total wall-clock duration.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_id": {
+          "description": "Unique workflow id (echoed on resume or freshly allocated on start).",
+          "type": "string"
+        },
+        "workflow_ref": {
+          "description": "Resolved workflow ref.",
+          "type": "string"
+        },
+        "workflow_status": {
+          "description": "Final status; one of [`workflow_status`] values.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workflow_id",
+        "workflow_ref",
+        "workflow_status",
+        "subject_id",
+        "execution_cwd",
+        "phases_requested",
+        "phases_completed",
+        "phases_total",
+        "total_duration_secs",
+        "phase_results",
+        "post_success",
+        "success"
+      ],
+      "title": "WorkflowExecuteResult",
+      "type": "object"
+    },
+    "WorkflowPhaseRunRequest": {
+      "description": "Parameters for [`METHOD_WORKFLOW_RUN_PHASE`].",
+      "properties": {
+        "dispatch_input": {
+          "description": "Dispatch input JSON (opaque).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution_cwd": {
+          "description": "Execution working directory for the phase.",
+          "type": "string"
+        },
+        "mcp_config": {
+          "description": "Opaque MCP runtime config — same shape as\n[`WorkflowExecuteRequest::mcp_config`]. Lets phase-level retries\npass MCP server config to the agent runner."
+        },
+        "model_override": {
+          "description": "Model override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase_attempt": {
+          "description": "Attempt counter (0, 1, 2, ...).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phase_id": {
+          "description": "Phase id to run.",
+          "type": "string"
+        },
+        "phase_routing": {
+          "description": "Phase routing config (opaque)."
+        },
+        "phase_timeout_secs": {
+          "description": "Optional timeout override (seconds).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pipeline_vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Pipeline variables.",
+          "type": "object"
+        },
+        "rework_context": {
+          "description": "Rework context from a prior phase's `rework` verdict.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schedule_input": {
+          "description": "Schedule input JSON (opaque).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject_description": {
+          "description": "Subject description for prompts.",
+          "type": "string"
+        },
+        "subject_id": {
+          "description": "Subject id.",
+          "type": "string"
+        },
+        "subject_title": {
+          "description": "Subject title for prompts.",
+          "type": "string"
+        },
+        "task_complexity": {
+          "description": "Task complexity hint: `\"minimal\" | \"low\" | \"medium\" | \"high\" | \"critical\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_override": {
+          "description": "Tool override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow_id": {
+          "description": "Workflow id.",
+          "type": "string"
+        },
+        "workflow_ref": {
+          "description": "Workflow ref.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_cwd",
+        "workflow_id",
+        "workflow_ref",
+        "subject_id",
+        "subject_title",
+        "subject_description",
+        "phase_id",
+        "phase_attempt"
+      ],
+      "title": "WorkflowPhaseRunRequest",
+      "type": "object"
+    },
+    "WorkflowPhaseRunResult": {
+      "description": "Result of [`METHOD_WORKFLOW_RUN_PHASE`].",
+      "properties": {
+        "duration_secs": {
+          "description": "Duration in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "metadata": {
+          "description": "Backend-specific metadata."
+        },
+        "model": {
+          "description": "Model used.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "description": "Backend-specific outcome."
+        },
+        "phase_status": {
+          "description": "One of `\"completed\"`, `\"manual_pending\"`, `\"failed\"`.",
+          "type": "string"
+        },
+        "signals": {
+          "default": [],
+          "description": "Execution signals emitted during the phase.",
+          "items": true,
+          "type": "array"
+        },
+        "tool": {
+          "description": "Tool used.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase_status",
+        "duration_secs",
+        "outcome",
+        "metadata"
+      ],
+      "title": "WorkflowPhaseRunResult",
+      "type": "object"
+    },
+    "WorkflowRunnerCapabilities": {
+      "description": "Backend-specific capability flags serialized into\n[`animus_plugin_protocol::KindCapability::extra`].",
+      "properties": {
+        "crash_recovery": {
+          "default": false,
+          "description": "Plugin replays persisted phase markers on restart.",
+          "type": "boolean"
+        },
+        "manual_pause_support": {
+          "default": false,
+          "description": "Plugin honors `manual_pending` phase statuses.",
+          "type": "boolean"
+        },
+        "phase_decision_parsing": {
+          "default": false,
+          "description": "Plugin parses agent text output to extract `PhaseDecision`.",
+          "type": "boolean"
+        },
+        "post_success_actions": {
+          "default": false,
+          "description": "Plugin executes post-success actions (push / merge / PR).",
+          "type": "boolean"
+        },
+        "rework_context_support": {
+          "default": false,
+          "description": "Plugin propagates `rework_context` to subsequent phases.",
+          "type": "boolean"
+        }
+      },
+      "title": "WorkflowRunnerCapabilities",
+      "type": "object"
+    },
+    "WorkflowRunnerManifest": {
+      "description": "Static manifest a workflow_runner plugin declares at install time.",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/WorkflowRunnerCapabilities",
+          "description": "Capability flags."
+        },
+        "description": {
+          "description": "Description.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Plugin name.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Plugin semver.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "description",
+        "capabilities"
+      ],
+      "title": "WorkflowRunnerManifest",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-workflow-runner-protocol"
+}

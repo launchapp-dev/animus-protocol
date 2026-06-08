@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueReleasePendingParams",
+  "description": "Request for [`METHOD_QUEUE_RELEASE_PENDING`].",
+  "type": "object",
+  "properties": {
+    "entry_id": {
+      "description": "Entry id to return to Pending.",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Audit reason describing why the entry is being released back.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "entry_id",
+    "reason"
+  ]
+}

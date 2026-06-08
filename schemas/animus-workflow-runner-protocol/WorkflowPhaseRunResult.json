@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowPhaseRunResult",
+  "description": "Result of [`METHOD_WORKFLOW_RUN_PHASE`].",
+  "type": "object",
+  "properties": {
+    "duration_secs": {
+      "description": "Duration in seconds.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "metadata": {
+      "description": "Backend-specific metadata."
+    },
+    "model": {
+      "description": "Model used.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "outcome": {
+      "description": "Backend-specific outcome."
+    },
+    "phase_status": {
+      "description": "One of `\"completed\"`, `\"manual_pending\"`, `\"failed\"`.",
+      "type": "string"
+    },
+    "signals": {
+      "description": "Execution signals emitted during the phase.",
+      "type": "array",
+      "default": [],
+      "items": true
+    },
+    "tool": {
+      "description": "Tool used.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "phase_status",
+    "duration_secs",
+    "outcome",
+    "metadata"
+  ]
+}

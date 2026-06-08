@@ -188,9 +188,10 @@ A plugin declares its kind in [`PluginInfo::plugin_kind`](#87-plugininfo) during
 | `log_storage_backend` | `log_storage/store`, `log_storage/query` (optional), `log_storage/tail` (optional), `log_storage/event` (notification), `log_storage/schema` |
 | `transport_backend` | `transport/start`, `transport/shutdown`, `transport/schema` |
 | `workflow_runner` (v1.1.0+) | `workflow/execute`, `workflow/run_phase` |
-| `queue` (v1.1.0+) | `queue/enqueue`, `queue/list`, `queue/lease`, `queue/stats`, `queue/hold`, `queue/release`, `queue/drop`, `queue/reorder`, `queue/mark_assigned`, `queue/completion` |
+| `queue` (v1.1.0+) | `queue/enqueue`, `queue/list`, `queue/lease`, `queue/stats`, `queue/hold`, `queue/release`, `queue/release_pending`, `queue/drop`, `queue/reorder`, `queue/mark_assigned`, `queue/completion` |
 | `durable_store` (v1.1.0+) | `durable/begin_workflow_run`, `durable/begin_step`, `durable/commit_step`, `durable/abandon_step`, `durable/recover_in_flight`, `durable/query_run` |
 | `memory_store` (v1.1.0+) | `memory/put`, `memory/get`, `memory/query`, `memory/list_scopes`, `memory/delete_scope` |
+| `notifier` (v1.1.0+) | `notifier/notify`, `notifier/flush` (optional), `notifier/schema` |
 | `custom` | none predefined; host treats domain methods opaquely and surfaces them via `animus.plugin.call` MCP |
 
 Hosts MUST NOT call domain methods for a kind other than the one declared.
@@ -486,6 +487,26 @@ Methods:
 - `memory/delete_scope` — delete a scope and all its entries.
 
 Project root bound at `initialize` time.
+
+### 7.9 Notifier methods (v1.1.0+)
+
+Notifiers are the outbound counterpart to triggers: a trigger plugin converts an external event into a daemon event; a notifier plugin takes a daemon event record and forwards it to an external system (HTTP webhook, Slack, email, PagerDuty, ...). The daemon publishes daemon events and hands each one to every installed notifier plugin. Defined in [`animus-notifier-protocol`](animus-notifier-protocol/src/lib.rs).
+
+Notifiers are advisory: the daemon does not block on them, and `notifier` is an optional role by default (the daemon only refuses to start without one when an operator explicitly wires that policy). Backends that need to retry MUST persist their own outbox internally.
+
+#### `notifier/notify`
+
+Hand one daemon event record to the plugin. The plugin SHOULD enqueue and best-effort flush. Params: [`NotifierNotifyParams`](#125-notifier-types) (`{ "event": DaemonEventRecord }`). Result: [`NotifierNotifyResult`](#125-notifier-types) — `accepted` reports whether at least one connector took ownership of the event; `delivered` is the count of synchronous deliveries (backends that only enqueue MUST set this to `0`); `lifecycle_events` carries best-effort delivery-lifecycle records the daemon can fan out into `events.jsonl`.
+
+#### `notifier/flush`
+
+Request that the plugin drain any pending deliveries from its internal outbox. Optional: backends without background retry MAY return `-32001` (`method_not_supported`). Params: [`NotifierFlushParams`](#125-notifier-types) (optional `project_root` scoping; omit to flush every project the plugin tracks). Result: [`NotifierFlushResult`](#125-notifier-types) (`lifecycle_events`).
+
+When [`NotifierSchema.supports_flush`](#125-notifier-types) is `true`, the daemon SHOULD call `notifier/flush` on its tick boundary; when `false`, the daemon skips flush.
+
+#### `notifier/schema`
+
+Returns a [`NotifierSchema`](#125-notifier-types) capability declaration (advertised `connector_kinds` plus the `supports_flush` flag). SHOULD be cheap (constant or one-shot at startup).
 
 ## 8. Plugin protocol types
 
@@ -922,6 +943,71 @@ Backends honor the subset of filters they advertise via [`LogStorageSchema.suppo
 - `retention_hint`: typical retention period (in **milliseconds**) after which entries are evicted. Surfaced to operators so they understand how far back queries can reach.
 
 Durations are encoded as signed millisecond integers because JSON has no native duration type and `chrono::Duration` does not serialize directly.
+
+### 12.5 Notifier types
+
+Wire shapes for the [notifier methods](#79-notifier-methods-v110) (`notifier/notify`, `notifier/flush`, `notifier/schema`). Defined in [`animus-notifier-protocol`](animus-notifier-protocol/src/lib.rs).
+
+`DaemonEventRecord` — one daemon event record forwarded to notifiers. Mirrors the daemon's native event record so it can be handed over the wire without translation:
+
+```json
+{
+  "schema": "animus.daemon-event.v1",
+  "id": "evt-1",
+  "seq": 7,
+  "timestamp": "2026-05-31T00:00:00Z",
+  "event_type": "workflow_completed",
+  "project_root": "/repo",
+  "data": { "workflow_id": "wf-1" }
+}
+```
+
+- `schema` is the schema URI for the event payload. `id` is a globally-unique event id.
+- `seq` is the monotonic sequence number the daemon assigned for the run (defaults to `0`).
+- `timestamp` is the RFC 3339 timestamp the daemon stamped at emission. `event_type` is the event kind (e.g. `"workflow_completed"`, `"task-state-change"`).
+- `project_root` is the optional project root the event is about (omitted when null). `data` is the free-form event payload.
+
+`NotifierNotifyParams` is `{ "event": DaemonEventRecord }`. `NotifierNotifyResult`:
+
+```json
+{
+  "accepted": true,
+  "delivered": 0,
+  "lifecycle_events": []
+}
+```
+
+- `accepted` (required) is `true` iff at least one connector accepted the event for delivery.
+- `delivered` is the number of deliveries completed synchronously (defaults to `0`; enqueue-only backends MUST report `0`).
+- `lifecycle_events` is a list of `NotifierLifecycleEvent` records (defaults to empty).
+
+`NotifierLifecycleEvent` is the record the daemon mirrors into operator-visible logs:
+
+```json
+{
+  "event_type": "notification-delivery-enqueued",
+  "project_root": "/repo",
+  "data": {}
+}
+```
+
+- `event_type` (required) is the lifecycle label (e.g. `"notification-delivery-enqueued"`, sent / failed / dead-lettered).
+- `project_root` is the project root the underlying event belonged to, if known (omitted when null).
+- `data` (required) is a free-form payload mirrored verbatim into `DaemonEventRecord.data`.
+
+`NotifierFlushParams` is `{ "project_root": "/repo" | null }` (omit to flush every project). `NotifierFlushResult` is `{ "lifecycle_events": [] }` — same `NotifierLifecycleEvent` shape as the notify result.
+
+`NotifierSchema`:
+
+```json
+{
+  "connector_kinds": ["webhook", "slack_webhook"],
+  "supports_flush": true
+}
+```
+
+- `connector_kinds` (required) lists the free-form connector kinds the plugin can route to. Workflows may use this to surface which transports are available.
+- `supports_flush` (required) declares whether the plugin maintains its own outbox + background retry loop. When `true`, the daemon SHOULD call `notifier/flush` on its tick boundary; when `false`, it skips flush.
 
 ## 13. Transport types
 

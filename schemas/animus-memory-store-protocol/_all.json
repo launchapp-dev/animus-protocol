@@ -1,0 +1,303 @@
+{
+  "$defs": {
+    "DeleteScopeRequest": {
+      "description": "Request for [`METHOD_MEMORY_DELETE_SCOPE`].",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/MemoryScope",
+          "description": "Scope to delete."
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "DeleteScopeRequest",
+      "type": "object"
+    },
+    "DeleteScopeResponse": {
+      "description": "Response for [`METHOD_MEMORY_DELETE_SCOPE`].",
+      "properties": {
+        "ack": {
+          "description": "`true` if the scope was deleted (or didn't exist; idempotent).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ack"
+      ],
+      "title": "DeleteScopeResponse",
+      "type": "object"
+    },
+    "GetMemoryRequest": {
+      "description": "Request for [`METHOD_MEMORY_GET`].",
+      "properties": {
+        "key": {
+          "description": "Exact key to look up.",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/MemoryScope",
+          "description": "Scope to read from."
+        }
+      },
+      "required": [
+        "scope",
+        "key"
+      ],
+      "title": "GetMemoryRequest",
+      "type": "object"
+    },
+    "GetMemoryResponse": {
+      "description": "Response for [`METHOD_MEMORY_GET`].",
+      "properties": {
+        "found": {
+          "description": "`true` iff the key was found.",
+          "type": "boolean"
+        },
+        "value": {
+          "description": "The stored value, if found."
+        }
+      },
+      "required": [
+        "found"
+      ],
+      "title": "GetMemoryResponse",
+      "type": "object"
+    },
+    "ListScopesRequest": {
+      "description": "Request for [`METHOD_MEMORY_LIST_SCOPES`].",
+      "properties": {
+        "cursor": {
+          "description": "Cursor-based pagination. `None` for the first page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page_size": {
+          "description": "Page size. Backends MAY clamp to their declared per-backend\nmaximum. Defaults to 100 if unset.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "project_id": {
+          "description": "If set, only return scopes under this project. Else return all\nscopes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "ListScopesRequest",
+      "type": "object"
+    },
+    "ListScopesResponse": {
+      "description": "Response for [`METHOD_MEMORY_LIST_SCOPES`].",
+      "properties": {
+        "next_cursor": {
+          "description": "Cursor for the next page, or `None` if exhausted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scopes": {
+          "description": "Returned scopes.",
+          "items": {
+            "$ref": "#/$defs/MemoryScope"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "scopes"
+      ],
+      "title": "ListScopesResponse",
+      "type": "object"
+    },
+    "MemoryQueryResult": {
+      "description": "A single semantic query hit.",
+      "properties": {
+        "key": {
+          "description": "The key the value was stored under.",
+          "type": "string"
+        },
+        "score": {
+          "description": "Relevance score (backend-specific; higher is more relevant).",
+          "format": "float",
+          "type": "number"
+        },
+        "value": {
+          "description": "The stored value."
+        }
+      },
+      "required": [
+        "key",
+        "value",
+        "score"
+      ],
+      "title": "MemoryQueryResult",
+      "type": "object"
+    },
+    "MemoryScope": {
+      "description": "Memory scope identifier. The scope id is derived by the plugin from\nthese fields as a flat namespace. Project-wide memory: `project_id`\nonly. Per-agent: `project_id` + `agent_id`. Per-task: `project_id` +\n`agent_id` + `task_id`.",
+      "properties": {
+        "agent_id": {
+          "description": "Optional agent identifier (per-agent or per-task scopes).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_id": {
+          "description": "Project identifier (required).",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Optional task identifier (per-task scopes only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "project_id"
+      ],
+      "title": "MemoryScope",
+      "type": "object"
+    },
+    "MemoryStoreCapabilities": {
+      "description": "Capability flags for memory_store plugins.",
+      "properties": {
+        "max_query_top_k": {
+          "default": 0,
+          "description": "Maximum `top_k` allowed on a query.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "native_key_get": {
+          "default": false,
+          "description": "`true` if `memory/get` is O(1) exact-key. Zep: `false`\n(search-based fallback).",
+          "type": "boolean"
+        },
+        "native_ttl": {
+          "default": false,
+          "description": "`true` if the backend natively honors `ttl_secs`. Zep: `false`.\nSQLite-backed: `true`.",
+          "type": "boolean"
+        },
+        "strong_consistency": {
+          "default": false,
+          "description": "`true` if put → query is immediately consistent. Zep: `false`.",
+          "type": "boolean"
+        }
+      },
+      "title": "MemoryStoreCapabilities",
+      "type": "object"
+    },
+    "PutMemoryRequest": {
+      "description": "Request for [`METHOD_MEMORY_PUT`].",
+      "properties": {
+        "key": {
+          "description": "Key under which to store the value.",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/MemoryScope",
+          "description": "Target scope."
+        },
+        "ttl_secs": {
+          "description": "Optional hint; backends MAY ignore. Backends MUST declare\n`native_ttl` in their capabilities; when false, the TTL is recorded\nin metadata only and the caller is responsible for eviction.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Value to store (JSON)."
+        }
+      },
+      "required": [
+        "scope",
+        "key",
+        "value"
+      ],
+      "title": "PutMemoryRequest",
+      "type": "object"
+    },
+    "PutMemoryResponse": {
+      "description": "Response for [`METHOD_MEMORY_PUT`].",
+      "properties": {
+        "ack": {
+          "description": "`true` if the value was accepted.",
+          "type": "boolean"
+        },
+        "indexed_immediately": {
+          "description": "`true` if the backend has fully indexed the value and `query` is\nexpected to find it immediately. `false` when ingestion is async\n(e.g., Zep). Callers needing read-after-write semantics must\nsurface this.",
+          "type": "boolean"
+        },
+        "record_id": {
+          "description": "Backend-issued identifier for the stored entry. Useful for\ndelete-by-id or audit. Empty string when the backend doesn't expose\nstable record ids.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ack",
+        "indexed_immediately"
+      ],
+      "title": "PutMemoryResponse",
+      "type": "object"
+    },
+    "QueryMemoryRequest": {
+      "description": "Request for [`METHOD_MEMORY_QUERY`].",
+      "properties": {
+        "query": {
+          "description": "Natural-language query.",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/MemoryScope",
+          "description": "Scope to search."
+        },
+        "top_k": {
+          "description": "Maximum results to return. Backends MAY clamp to their declared\n`max_query_top_k` capability.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "query",
+        "top_k"
+      ],
+      "title": "QueryMemoryRequest",
+      "type": "object"
+    },
+    "QueryMemoryResponse": {
+      "description": "Response for [`METHOD_MEMORY_QUERY`].",
+      "properties": {
+        "results": {
+          "description": "Top-k semantic matches in descending relevance.",
+          "items": {
+            "$ref": "#/$defs/MemoryQueryResult"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "results"
+      ],
+      "title": "QueryMemoryResponse",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-memory-store-protocol"
+}

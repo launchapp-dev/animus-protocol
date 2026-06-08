@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueEnqueueResponse",
+  "description": "Response for [`METHOD_QUEUE_ENQUEUE`].",
+  "type": "object",
+  "properties": {
+    "enqueued": {
+      "description": "`true` if a new entry was created. `false` if the dispatch was\nrejected as a duplicate of an existing pending/assigned entry\n(idempotent enqueue).",
+      "type": "boolean"
+    },
+    "entry_id": {
+      "description": "Stable entry id assigned by the plugin. Used by all subsequent\nmutation calls.",
+      "type": "string"
+    },
+    "subject_id": {
+      "description": "Convenience: the subject id from the dispatch envelope.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "enqueued",
+    "entry_id",
+    "subject_id"
+  ]
+}

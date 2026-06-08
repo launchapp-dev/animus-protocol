@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommitStepRequest",
+  "description": "Request for [`METHOD_DURABLE_COMMIT_STEP`].",
+  "type": "object",
+  "properties": {
+    "error": {
+      "description": "Optional error payload.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StepError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "outcome": {
+      "description": "Required: `\"success\"` or `\"error\"`. Use [`commit_outcome`] constants.\nThis is the authoritative dedupe signal for replay — `output` and\n`error` payloads MAY be null (no-payload commits are valid in both\ndirections), so the outcome cannot be inferred from payload presence.",
+      "type": "string"
+    },
+    "output": {
+      "description": "Optional success payload."
+    },
+    "step_id": {
+      "description": "Step id from [`BeginStepResponse`].",
+      "type": "string"
+    }
+  },
+  "required": [
+    "step_id",
+    "outcome"
+  ],
+  "$defs": {
+    "StepError": {
+      "description": "Structured error payload returned with PRIOR_ERROR or carried by\n[`CommitStepRequest`].",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "Backend-specific error code.",
+          "type": "string"
+        },
+        "details": {
+          "description": "Backend-specific details."
+        },
+        "message": {
+          "description": "Human-readable message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    }
+  }
+}

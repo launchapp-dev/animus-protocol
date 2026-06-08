@@ -1,0 +1,449 @@
+{
+  "$defs": {
+    "AgentCancelRequest": {
+      "description": "Parameters for an `agent/cancel` call.",
+      "properties": {
+        "session_id": {
+          "description": "Session id to cancel.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "AgentCancelRequest",
+      "type": "object"
+    },
+    "AgentNotification": {
+      "description": "A streaming notification a provider may emit mid-run.\n\nThe runtime in [`animus-plugin-runtime`] wraps these into JSON-RPC\nnotifications using the wire-method constants ([`NOTIFICATION_AGENT_OUTPUT`],\n[`NOTIFICATION_AGENT_THINKING`], [`NOTIFICATION_AGENT_TOOL_CALL`],\n[`NOTIFICATION_AGENT_TOOL_RESULT`], [`NOTIFICATION_AGENT_ERROR`]) and\nforwards them to the host on the same channel as the eventual\n[`AgentRunResponse`] reply. Providers only construct the variants — they\ndon't need to touch JSON-RPC themselves.\n\n`session_id` is filled in by the provider once known. All variants are\nsafe to emit before [`AgentRunResponse`] is returned; emissions after the\nresponse are ignored by the runtime.",
+      "oneOf": [
+        {
+          "description": "Incremental text the model has produced. Maps to\n[`NOTIFICATION_AGENT_OUTPUT`].",
+          "properties": {
+            "is_final": {
+              "default": false,
+              "description": "`true` when this is the final aggregated text for the turn.",
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "output",
+              "type": "string"
+            },
+            "session_id": {
+              "description": "Stable session id this delta belongs to.",
+              "type": "string"
+            },
+            "text": {
+              "description": "Text delta.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "session_id",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Visible reasoning from the model. Maps to\n[`NOTIFICATION_AGENT_THINKING`].",
+          "properties": {
+            "kind": {
+              "const": "thinking",
+              "type": "string"
+            },
+            "session_id": {
+              "description": "Stable session id.",
+              "type": "string"
+            },
+            "text": {
+              "description": "Reasoning text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "session_id",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Agent invoked a tool. Maps to [`NOTIFICATION_AGENT_TOOL_CALL`].",
+          "properties": {
+            "arguments": {
+              "description": "Tool arguments."
+            },
+            "kind": {
+              "const": "toolCall",
+              "type": "string"
+            },
+            "name": {
+              "description": "Tool name.",
+              "type": "string"
+            },
+            "server": {
+              "description": "MCP server that hosts the tool, if known.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "session_id": {
+              "description": "Stable session id.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "session_id",
+            "name",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tool returned a result. Maps to [`NOTIFICATION_AGENT_TOOL_RESULT`].",
+          "properties": {
+            "kind": {
+              "const": "toolResult",
+              "type": "string"
+            },
+            "name": {
+              "description": "Tool name.",
+              "type": "string"
+            },
+            "output": {
+              "description": "Tool output."
+            },
+            "session_id": {
+              "description": "Stable session id.",
+              "type": "string"
+            },
+            "success": {
+              "description": "True if the tool reported success.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "session_id",
+            "name",
+            "output",
+            "success"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Error encountered mid-run. Maps to [`NOTIFICATION_AGENT_ERROR`].",
+          "properties": {
+            "kind": {
+              "const": "error",
+              "type": "string"
+            },
+            "message": {
+              "description": "Error message.",
+              "type": "string"
+            },
+            "recoverable": {
+              "description": "True if the run continues after this error.",
+              "type": "boolean"
+            },
+            "session_id": {
+              "description": "Stable session id.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "session_id",
+            "message",
+            "recoverable"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "AgentNotification"
+    },
+    "AgentRunRequest": {
+      "additionalProperties": true,
+      "description": "Parameters for an `agent/run` (or `agent/resume`) call.\n\nThe same struct is reused for both methods; resume calls additionally\ncarry the prior `session_id` so the provider knows which transcript to\ncontinue. The shape is intentionally tolerant of provider-specific\nextensions via [`AgentRunRequest::extras`].",
+      "properties": {
+        "cwd": {
+          "description": "Working directory the agent should operate from. The provider\npasses this through to the wrapped CLI (e.g. `cwd` for `claude`).",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables to inject into the spawned child.",
+          "type": "object"
+        },
+        "mcp_servers": {
+          "description": "MCP server descriptors for the provider to bridge."
+        },
+        "model": {
+          "description": "Concrete model identifier. Must appear in\n[`ProviderManifest::supported_models`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "description": "Permission mode (`\"safe\"`, `\"acceptEdits\"`, `\"bypassPermissions\"`,\n...). Provider-specific; consult the provider's manifest.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_root": {
+          "description": "Project root, if distinct from `cwd` (e.g. running from a subdir).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "description": "User prompt (latest turn).",
+          "type": "string"
+        },
+        "response_schema": {
+          "description": "Optional response schema (JSON Schema) the provider should constrain\nthe model to."
+        },
+        "runtime_contract": {
+          "description": "Runtime contract envelope (workflow-runner-supplied metadata)."
+        },
+        "session_id": {
+          "description": "Existing session id when resuming. `None` for fresh runs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system_prompt": {
+          "description": "Optional system prompt. Many providers prefer this be set once at\nsession start and ignored on subsequent turns; the provider decides.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout_secs": {
+          "description": "Hard timeout in seconds. The runtime will issue `agent/cancel` if\nthis elapses.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tools": {
+          "description": "Tool allow/deny config. Provider-specific shape."
+        }
+      },
+      "required": [
+        "prompt",
+        "cwd"
+      ],
+      "title": "AgentRunRequest",
+      "type": "object"
+    },
+    "AgentRunResponse": {
+      "description": "Final response to `agent/run` or `agent/resume`.\n\nStreaming notifications are sent during the run; this is the aggregated\nterminal payload. Hosts may persist it as the canonical run record.",
+      "properties": {
+        "backend": {
+          "description": "Provider-specific backend label (e.g. `\"claude-code:1.0.0\"`).",
+          "type": "string"
+        },
+        "decision_verdict": {
+          "description": "Optional verdict for review/QA agents that produce pass/fail\ndecisions. Free-form so review providers can shape their own\nenvelopes."
+        },
+        "duration_ms": {
+          "description": "Total wall-clock duration of the run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "errors": {
+          "description": "Errors emitted during the run (recoverable or terminal).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "exit_code": {
+          "description": "Process exit code from the wrapped CLI, if any.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "metadata": {
+          "description": "Free-form metadata entries the provider chose to surface.",
+          "items": true,
+          "type": "array"
+        },
+        "output": {
+          "description": "Concatenated final assistant output.",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "Provider-issued session id. Stable for the life of the session;\nusable with `agent/resume` later.",
+          "type": "string"
+        },
+        "thinking": {
+          "description": "Visible reasoning traces (when the model produced any).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokens_used": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Token-accounting summary, if the provider tracks it."
+        },
+        "tool_calls": {
+          "description": "All tool invocations the agent made during the run.",
+          "items": true,
+          "type": "array"
+        },
+        "tool_results": {
+          "description": "All tool results returned to the agent.",
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "session_id",
+        "exit_code",
+        "output",
+        "duration_ms",
+        "backend"
+      ],
+      "title": "AgentRunResponse",
+      "type": "object"
+    },
+    "ProviderCapabilities": {
+      "description": "Provider capability flags.",
+      "properties": {
+        "cancellation": {
+          "default": false,
+          "description": "Provider supports `agent/cancel`.",
+          "type": "boolean"
+        },
+        "mcp": {
+          "default": false,
+          "description": "Provider supports MCP server bridging (i.e. accepts the\n`mcp_servers` field of [`AgentRunRequest`]).",
+          "type": "boolean"
+        },
+        "resume": {
+          "default": false,
+          "description": "Provider supports `agent/resume` against prior session ids.",
+          "type": "boolean"
+        },
+        "streaming": {
+          "default": false,
+          "description": "Provider emits `agent/output` deltas as the model produces them.",
+          "type": "boolean"
+        },
+        "write_capable": {
+          "default": false,
+          "description": "Provider can edit files in the working directory (vs. read-only\nresearch providers).",
+          "type": "boolean"
+        }
+      },
+      "title": "ProviderCapabilities",
+      "type": "object"
+    },
+    "ProviderManifest": {
+      "description": "Static manifest describing what a provider plugin supports.\n\nReturned by both the one-shot `--manifest` CLI mode and the `initialize`\nJSON-RPC handshake. The fields here are the provider-specific overlay on\ntop of [`animus_plugin_protocol::PluginManifest`].",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/ProviderCapabilities",
+          "description": "Capability flags."
+        },
+        "description": {
+          "description": "Human-readable description.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Plugin name (e.g. `\"animus-provider-claude\"`).",
+          "type": "string"
+        },
+        "supported_models": {
+          "description": "Concrete model identifiers this provider can route to.\n\nExamples: `[\"claude-sonnet-4-6\", \"claude-opus-4-7\"]`,\n`[\"gpt-5\", \"gpt-5-mini\"]`. Hosts use this to validate the `model`\nfield of an [`AgentRunRequest`] before dispatching.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tool": {
+          "description": "Tool name passed through to the wrapped CLI (`\"claude\"`, `\"codex\"`,\n`\"gemini\"`, ...). Custom HTTP providers may set this to their plugin\nname.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Plugin semver.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "description",
+        "supported_models",
+        "tool",
+        "capabilities"
+      ],
+      "title": "ProviderManifest",
+      "type": "object"
+    },
+    "TokenUsage": {
+      "description": "Token-accounting summary for an agent run.",
+      "properties": {
+        "cache_writes": {
+          "description": "Tokens written to a prompt cache, if applicable.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cached": {
+          "description": "Tokens served from a prompt cache, if applicable.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "input": {
+          "description": "Input tokens consumed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output": {
+          "description": "Output tokens generated.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "title": "TokenUsage",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-provider-protocol"
+}
