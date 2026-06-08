@@ -120,6 +120,15 @@ impl CodexParser {
             "agent_message" | "message" => parse_codex_message_item(item),
             "function_call" => self.finalize_function_call(item),
             "function_call_output" | "tool_result" => parse_codex_function_call_output(item),
+            // Codex's native sandbox shell runs surface as `command_execution`
+            // items (not `function_call`), carrying the command, the
+            // aggregated stdout/stderr, and an exit code. Without this arm the
+            // command and its output never reach the SessionEvent stream and a
+            // chat client sees only the final assistant message — so the agent
+            // looks like it answered without showing its work. Emit a ToolCall
+            // (the command) paired with a ToolResult (the output) so codex
+            // streams its steps with the same fidelity as a function_call tool.
+            "command_execution" => parse_codex_command_execution(item),
             _ => Vec::new(),
         }
     }
@@ -182,6 +191,44 @@ fn parse_codex_turn_completed(value: &Value) -> Vec<SessionEvent> {
             "usage": usage,
         }),
     }]
+}
+
+/// Translate a completed `command_execution` item into a ToolCall (the shell
+/// command) followed by a ToolResult (its aggregated output + exit status).
+/// Codex runs sandbox shell commands as these items rather than as
+/// `function_call`s, so this is how codex's command steps reach the stream.
+fn parse_codex_command_execution(item: &Value) -> Vec<SessionEvent> {
+    let command = item
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let output = item
+        .get("aggregated_output")
+        .cloned()
+        .or_else(|| item.get("output").cloned())
+        .unwrap_or(Value::Null);
+    // Absent exit_code means the run was still in progress when reported;
+    // treat a missing code as success so an interrupted stream doesn't read
+    // as a failure. A present non-zero code is a failure.
+    let success = item
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .map(|code| code == 0)
+        .unwrap_or(true);
+
+    vec![
+        SessionEvent::ToolCall {
+            tool_name: "shell".to_string(),
+            arguments: json!({ "command": command }),
+            server: None,
+        },
+        SessionEvent::ToolResult {
+            tool_name: "shell".to_string(),
+            output,
+            success,
+        },
+    ]
 }
 
 fn parse_codex_function_call_output(item: &Value) -> Vec<SessionEvent> {
@@ -283,6 +330,55 @@ mod tests {
             } => {
                 assert_eq!(output, &json!("file_a\nfile_b\n"));
                 assert!(*success);
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn codex_parser_emits_tool_call_and_result_for_command_execution_item() {
+        // The real shape codex emits for a sandbox shell run (captured from
+        // `codex exec --json --full-auto`).
+        let line = r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo hi'","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}"#;
+        let events = parse(&[line]);
+        assert_eq!(
+            events.len(),
+            2,
+            "command_execution should yield a ToolCall + ToolResult"
+        );
+        match &events[0] {
+            SessionEvent::ToolCall {
+                tool_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tool_name, "shell");
+                assert_eq!(arguments, &json!({"command": "/bin/zsh -lc 'echo hi'"}));
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+        match &events[1] {
+            SessionEvent::ToolResult {
+                tool_name,
+                output,
+                success,
+            } => {
+                assert_eq!(tool_name, "shell");
+                assert_eq!(output, &json!("hi\n"));
+                assert!(*success);
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn codex_parser_command_execution_nonzero_exit_is_failure() {
+        let line = r#"{"type":"item.completed","item":{"type":"command_execution","command":"false","aggregated_output":"","exit_code":1,"status":"completed"}}"#;
+        let events = parse(&[line]);
+        assert_eq!(events.len(), 2);
+        match &events[1] {
+            SessionEvent::ToolResult { success, .. } => {
+                assert!(!*success, "exit_code 1 must be a failure")
             }
             other => panic!("expected ToolResult, got {other:?}"),
         }
