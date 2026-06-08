@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BlockDelta",
+  "description": "An incremental update to an open content block.\n\nSerializes with a `type` discriminator matching Anthropic deltas:\n`text_delta` / `input_json_delta` / `thinking_delta` / `signature_delta`.",
+  "oneOf": [
+    {
+      "description": "Append text to a text block.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "description": "Text fragment.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "text_delta"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ]
+    },
+    {
+      "description": "Append a fragment of the tool-use `input` JSON. Fragments are\nconcatenated and parsed once when the block stops — an individual\nfragment is **not** valid JSON on its own.",
+      "type": "object",
+      "properties": {
+        "partial_json": {
+          "description": "Partial JSON string fragment.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "input_json_delta"
+        }
+      },
+      "required": [
+        "type",
+        "partial_json"
+      ]
+    },
+    {
+      "description": "Append text to a thinking block.",
+      "type": "object",
+      "properties": {
+        "thinking": {
+          "description": "Thinking fragment.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "thinking_delta"
+        }
+      },
+      "required": [
+        "type",
+        "thinking"
+      ]
+    },
+    {
+      "description": "Append to a thinking block's signature.",
+      "type": "object",
+      "properties": {
+        "signature": {
+          "description": "Signature fragment.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "signature_delta"
+        }
+      },
+      "required": [
+        "type",
+        "signature"
+      ]
+    }
+  ]
+}

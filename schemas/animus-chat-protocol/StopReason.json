@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StopReason",
+  "description": "Stop reason. snake_case string; unknown values round-trip via Other.",
+  "type": "string"
+}

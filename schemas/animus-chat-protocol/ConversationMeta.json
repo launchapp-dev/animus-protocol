@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationMeta",
+  "description": "Conversation metadata — the `meta.json` of a conversation subject.\n\nSchema id: [`CONVERSATION_SCHEMA`] (`\"animus.chat.conversation.v1\"`). The\nmessage log lives alongside in `messages.jsonl` as [`ChatMessage`] lines.",
+  "type": "object",
+  "properties": {
+    "agent_profile": {
+      "description": "The agent profile (persona) bound to this conversation; `None` for ad-hoc.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "RFC3339 creation timestamp.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Conversation id (ULID, e.g. `\"conv_01H...\"`).",
+      "type": "string"
+    },
+    "message_count": {
+      "description": "Number of messages persisted in `messages.jsonl`.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "model": {
+      "description": "Default model id for this conversation.",
+      "type": "string"
+    },
+    "principal_id": {
+      "description": "RBAC principal that owns the conversation; `None` when unattributed.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema": {
+      "description": "Schema discriminator. Always [`CONVERSATION_SCHEMA`].",
+      "type": "string"
+    },
+    "title": {
+      "description": "Optional human-readable title.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "description": "RFC3339 timestamp of the most recent append.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "model",
+    "created_at",
+    "updated_at",
+    "message_count"
+  ]
+}

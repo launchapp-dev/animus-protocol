@@ -156,6 +156,14 @@ pub const PLUGIN_KIND_MEMORY_STORE: &str = "memory_store";
 /// `agent_runner/agent_status`, etc.).
 pub const PLUGIN_KIND_AGENT_RUNNER: &str = "agent_runner";
 
+/// Plugin kind for chat provider plugins (v0.6).
+///
+/// Chat providers speak streaming chat against an upstream API (Anthropic
+/// Messages, OpenAI Responses, local Ollama) — distinct from the CLI-wrapping
+/// [`PluginKind::Provider`] role. See `animus-chat-protocol` for the typed RPC
+/// surface (`chat/stream`, `chat/models`, `chat/count_tokens`).
+pub const PLUGIN_KIND_CHAT_PROVIDER: &str = "chat_provider";
+
 /// Strongly typed enumeration of plugin roles.
 ///
 /// The set of well-known kinds is captured here so callers can pattern-match
@@ -200,6 +208,8 @@ pub enum PluginKind {
     MemoryStore,
     /// Agent-runner sidecar plugin (v0.5). See [`PLUGIN_KIND_AGENT_RUNNER`].
     AgentRunner,
+    /// Chat provider plugin (v0.6). See [`PLUGIN_KIND_CHAT_PROVIDER`].
+    ChatProvider,
     /// Any kind not understood by this crate version. Preserves the wire
     /// string so unknown roles round-trip and so hosts that recognize the
     /// role can still dispatch on the string.
@@ -223,6 +233,7 @@ impl PluginKind {
             PluginKind::DurableStore => PLUGIN_KIND_DURABLE_STORE,
             PluginKind::MemoryStore => PLUGIN_KIND_MEMORY_STORE,
             PluginKind::AgentRunner => PLUGIN_KIND_AGENT_RUNNER,
+            PluginKind::ChatProvider => PLUGIN_KIND_CHAT_PROVIDER,
             PluginKind::Other(value) => value.as_str(),
         }
     }
@@ -259,6 +270,7 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_DURABLE_STORE => PluginKind::DurableStore,
             PLUGIN_KIND_MEMORY_STORE => PluginKind::MemoryStore,
             PLUGIN_KIND_AGENT_RUNNER => PluginKind::AgentRunner,
+            PLUGIN_KIND_CHAT_PROVIDER => PluginKind::ChatProvider,
             _ => PluginKind::Other(value),
         }
     }

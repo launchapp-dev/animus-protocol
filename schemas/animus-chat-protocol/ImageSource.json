@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ImageSource",
+  "description": "Source of an [`ContentBlock::Image`] block.\n\nSerializes with a `type` discriminator: `{\"type\":\"base64\",...}` or\n`{\"type\":\"url\",...}`. Vision is deferred in v0.6, but the schema carries\nimages so it is complete and downstream impls agree on the shape.",
+  "oneOf": [
+    {
+      "description": "Inline base64-encoded image bytes.",
+      "type": "object",
+      "properties": {
+        "data": {
+          "description": "Base64-encoded image data (no data-URL prefix).",
+          "type": "string"
+        },
+        "media_type": {
+          "description": "MIME media type, e.g. `\"image/png\"`.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "base64"
+        }
+      },
+      "required": [
+        "type",
+        "media_type",
+        "data"
+      ]
+    },
+    {
+      "description": "A fetchable image URL.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "url"
+        },
+        "url": {
+          "description": "Absolute URL of the image.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "url"
+      ]
+    }
+  ]
+}

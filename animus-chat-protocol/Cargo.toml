@@ -1,0 +1,22 @@
+[package]
+name = "animus-chat-protocol"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Launchapp.dev"]
+homepage = "https://github.com/launchapp-dev/animus-cli"
+repository = "https://github.com/launchapp-dev/animus-protocol"
+description = "Chat conversation message schema + chat_provider streaming RPC protocol types for Animus v0.6 (Anthropic-native content blocks, append-only JSONL conversations)."
+
+[dependencies]
+animus-plugin-protocol = { path = "../animus-plugin-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.0" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "animus-chat-protocol-export-schema"
+path = "src/bin/export_schema.rs"

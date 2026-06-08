@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Usage",
+  "description": "Token accounting for a model turn.\n\nEvery counter defaults to zero so a conversation's cost is a simple sum over\nits assistant messages — no separate ledger. Each field is `#[serde(default)]`\nso providers and non-Rust clients may omit zero-valued counters (Anthropic's\n`message_start` usage, for instance, often omits the cache fields).",
+  "type": "object",
+  "properties": {
+    "cache_creation_input_tokens": {
+      "description": "Tokens written into the prompt cache (billed at the cache-write rate).",
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    },
+    "cache_read_input_tokens": {
+      "description": "Tokens served from the prompt cache (billed at the cache-read rate).",
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    },
+    "input_tokens": {
+      "description": "Input (prompt) tokens billed for this turn.",
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    },
+    "output_tokens": {
+      "description": "Output (completion) tokens generated this turn.",
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    }
+  }
+}

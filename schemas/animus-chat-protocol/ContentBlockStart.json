@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ContentBlockStart",
+  "description": "The shell of a content block as it opens in a stream, before any deltas.\n\nMirrors Anthropic `content_block_start.content_block`. Serializes with a\n`type` discriminator: `text` / `tool_use` / `thinking`.",
+  "oneOf": [
+    {
+      "description": "A text block opens (text accumulates via [`BlockDelta::TextDelta`]).",
+      "type": "object",
+      "properties": {
+        "text": {
+          "description": "Initial text (usually empty).",
+          "type": "string",
+          "default": ""
+        },
+        "type": {
+          "type": "string",
+          "const": "text"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "A tool-use block opens. `input` arrives later as\n[`BlockDelta::InputJsonDelta`] fragments.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Provider-issued tool-call id.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Tool name.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_use"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name"
+      ]
+    },
+    {
+      "description": "A thinking block opens (accumulates via [`BlockDelta::ThinkingDelta`]\nand [`BlockDelta::SignatureDelta`]).",
+      "type": "object",
+      "properties": {
+        "thinking": {
+          "description": "Initial thinking text (usually empty).",
+          "type": "string",
+          "default": ""
+        },
+        "type": {
+          "type": "string",
+          "const": "thinking"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    }
+  ]
+}

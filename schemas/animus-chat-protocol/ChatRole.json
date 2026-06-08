@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatRole",
+  "description": "The role of a [`ChatMessage`]'s author.\n\nSerializes lowercase: `\"user\"`, `\"assistant\"`, `\"system\"`, `\"tool\"`.",
+  "oneOf": [
+    {
+      "description": "A human (or external client) turn.",
+      "type": "string",
+      "const": "user"
+    },
+    {
+      "description": "A model-authored turn.",
+      "type": "string",
+      "const": "assistant"
+    },
+    {
+      "description": "A system prompt / instruction turn.",
+      "type": "string",
+      "const": "system"
+    },
+    {
+      "description": "A tool-result-bearing turn.",
+      "type": "string",
+      "const": "tool"
+    }
+  ]
+}

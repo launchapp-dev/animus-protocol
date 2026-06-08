@@ -1,0 +1,353 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatStreamEvent",
+  "description": "One frame of the [`METHOD_CHAT_STREAM`] notification stream.\n\nThe sequence mirrors the verified Anthropic event order:\n[`Self::MessageStart`] → (`[`Self::ContentBlockStart`] →\n`[`Self::ContentBlockDelta`]`* → `[`Self::ContentBlockStop`]`)* →\n[`Self::MessageDelta`] → [`Self::MessageStop`].\n\nSerializes with a `type` discriminator: `message_start`,\n`content_block_start`, `content_block_delta`, `content_block_stop`,\n`message_delta`, `message_stop`.",
+  "oneOf": [
+    {
+      "description": "The assistant message opens. Carries the new message id, its role, and\nthe initial (input-side) usage.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "description": "New assistant message id.",
+          "type": "string"
+        },
+        "role": {
+          "description": "Author role (always [`ChatRole::Assistant`] in practice).",
+          "$ref": "#/$defs/ChatRole"
+        },
+        "type": {
+          "type": "string",
+          "const": "message_start"
+        },
+        "usage": {
+          "description": "Usage known at message start (input/cache tokens).",
+          "$ref": "#/$defs/Usage"
+        }
+      },
+      "required": [
+        "type",
+        "message_id",
+        "role",
+        "usage"
+      ]
+    },
+    {
+      "description": "A content block opens at `index`.",
+      "type": "object",
+      "properties": {
+        "block": {
+          "description": "The opening block shell.",
+          "$ref": "#/$defs/ContentBlockStart"
+        },
+        "index": {
+          "description": "Block position within the message.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
+          "const": "content_block_start"
+        }
+      },
+      "required": [
+        "type",
+        "index",
+        "block"
+      ]
+    },
+    {
+      "description": "An incremental update to the block at `index`.",
+      "type": "object",
+      "properties": {
+        "delta": {
+          "description": "The delta to apply.",
+          "$ref": "#/$defs/BlockDelta"
+        },
+        "index": {
+          "description": "Block position within the message.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
+          "const": "content_block_delta"
+        }
+      },
+      "required": [
+        "type",
+        "index",
+        "delta"
+      ]
+    },
+    {
+      "description": "The block at `index` is complete (accumulated `input_json` should be\nparsed now).",
+      "type": "object",
+      "properties": {
+        "index": {
+          "description": "Block position within the message.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
+          "const": "content_block_stop"
+        }
+      },
+      "required": [
+        "type",
+        "index"
+      ]
+    },
+    {
+      "description": "Top-level message metadata update — the final stop reason and the\ncumulative output usage.",
+      "type": "object",
+      "properties": {
+        "stop_reason": {
+          "description": "Why the message stopped; `None` until known.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "const": "message_delta"
+        },
+        "usage": {
+          "description": "Cumulative usage (notably `output_tokens`).",
+          "$ref": "#/$defs/Usage"
+        }
+      },
+      "required": [
+        "type",
+        "usage"
+      ]
+    },
+    {
+      "description": "The stream is finished.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "message_stop"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    }
+  ],
+  "$defs": {
+    "BlockDelta": {
+      "description": "An incremental update to an open content block.\n\nSerializes with a `type` discriminator matching Anthropic deltas:\n`text_delta` / `input_json_delta` / `thinking_delta` / `signature_delta`.",
+      "oneOf": [
+        {
+          "description": "Append text to a text block.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "Text fragment.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text_delta"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Append a fragment of the tool-use `input` JSON. Fragments are\nconcatenated and parsed once when the block stops — an individual\nfragment is **not** valid JSON on its own.",
+          "type": "object",
+          "properties": {
+            "partial_json": {
+              "description": "Partial JSON string fragment.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "input_json_delta"
+            }
+          },
+          "required": [
+            "type",
+            "partial_json"
+          ]
+        },
+        {
+          "description": "Append text to a thinking block.",
+          "type": "object",
+          "properties": {
+            "thinking": {
+              "description": "Thinking fragment.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "thinking_delta"
+            }
+          },
+          "required": [
+            "type",
+            "thinking"
+          ]
+        },
+        {
+          "description": "Append to a thinking block's signature.",
+          "type": "object",
+          "properties": {
+            "signature": {
+              "description": "Signature fragment.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "signature_delta"
+            }
+          },
+          "required": [
+            "type",
+            "signature"
+          ]
+        }
+      ]
+    },
+    "ChatRole": {
+      "description": "The role of a [`ChatMessage`]'s author.\n\nSerializes lowercase: `\"user\"`, `\"assistant\"`, `\"system\"`, `\"tool\"`.",
+      "oneOf": [
+        {
+          "description": "A human (or external client) turn.",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "A model-authored turn.",
+          "type": "string",
+          "const": "assistant"
+        },
+        {
+          "description": "A system prompt / instruction turn.",
+          "type": "string",
+          "const": "system"
+        },
+        {
+          "description": "A tool-result-bearing turn.",
+          "type": "string",
+          "const": "tool"
+        }
+      ]
+    },
+    "ContentBlockStart": {
+      "description": "The shell of a content block as it opens in a stream, before any deltas.\n\nMirrors Anthropic `content_block_start.content_block`. Serializes with a\n`type` discriminator: `text` / `tool_use` / `thinking`.",
+      "oneOf": [
+        {
+          "description": "A text block opens (text accumulates via [`BlockDelta::TextDelta`]).",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "Initial text (usually empty).",
+              "type": "string",
+              "default": ""
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A tool-use block opens. `input` arrives later as\n[`BlockDelta::InputJsonDelta`] fragments.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "Provider-issued tool-call id.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Tool name.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_use"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "name"
+          ]
+        },
+        {
+          "description": "A thinking block opens (accumulates via [`BlockDelta::ThinkingDelta`]\nand [`BlockDelta::SignatureDelta`]).",
+          "type": "object",
+          "properties": {
+            "thinking": {
+              "description": "Initial thinking text (usually empty).",
+              "type": "string",
+              "default": ""
+            },
+            "type": {
+              "type": "string",
+              "const": "thinking"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "StopReason": {
+      "description": "Stop reason. snake_case string; unknown values round-trip via Other.",
+      "type": "string"
+    },
+    "Usage": {
+      "description": "Token accounting for a model turn.\n\nEvery counter defaults to zero so a conversation's cost is a simple sum over\nits assistant messages — no separate ledger. Each field is `#[serde(default)]`\nso providers and non-Rust clients may omit zero-valued counters (Anthropic's\n`message_start` usage, for instance, often omits the cache fields).",
+      "type": "object",
+      "properties": {
+        "cache_creation_input_tokens": {
+          "description": "Tokens written into the prompt cache (billed at the cache-write rate).",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "cache_read_input_tokens": {
+          "description": "Tokens served from the prompt cache (billed at the cache-read rate).",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "input_tokens": {
+          "description": "Input (prompt) tokens billed for this turn.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "output_tokens": {
+          "description": "Output (completion) tokens generated this turn.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

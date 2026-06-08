@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ToolSchema",
+  "description": "A tool the model may call, advertised on a [`ChatStreamRequest`].\n\nMirrors the Anthropic tool shape: name, description, and a JSON Schema for\nthe input object.",
+  "type": "object",
+  "properties": {
+    "description": {
+      "description": "Human-readable description shown to the model.",
+      "type": "string"
+    },
+    "input_schema": {
+      "description": "JSON Schema for the tool's input object."
+    },
+    "name": {
+      "description": "Tool name (e.g. `\"animus.subject.list\"`).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "description",
+    "input_schema"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatModelInfo",
+  "description": "One entry of the [`METHOD_CHAT_MODELS`] response.",
+  "type": "object",
+  "properties": {
+    "context_window": {
+      "description": "Maximum context window in tokens.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "id": {
+      "description": "Model id (e.g. `\"claude-opus-4-8\"`).",
+      "type": "string"
+    },
+    "supports_tools": {
+      "description": "Whether the model supports tool/function calling.",
+      "type": "boolean"
+    },
+    "supports_vision": {
+      "description": "Whether the model supports image input.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "id",
+    "context_window",
+    "supports_tools",
+    "supports_vision"
+  ]
+}

@@ -15,6 +15,7 @@ members = [
     "animus-memory-store-protocol",
     "animus-notifier-protocol",
     "animus-agent-runner-protocol",
+    "animus-chat-protocol",
 ]
 resolver = "2"
 

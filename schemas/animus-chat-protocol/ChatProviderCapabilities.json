@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatProviderCapabilities",
+  "description": "Capability flags a `chat_provider` plugin advertises (mirrors the\n`[capabilities]` block in its `plugin.toml`).",
+  "type": "object",
+  "properties": {
+    "prompt_caching": {
+      "description": "Supports prompt caching.",
+      "type": "boolean",
+      "default": false
+    },
+    "streaming": {
+      "description": "Streams responses token-by-token (always `true` for chat providers).",
+      "type": "boolean",
+      "default": false
+    },
+    "tool_use": {
+      "description": "Supports tool/function calling.",
+      "type": "boolean",
+      "default": false
+    },
+    "vision": {
+      "description": "Supports image input.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

@@ -1,0 +1,837 @@
+{
+  "$defs": {
+    "BlockDelta": {
+      "description": "An incremental update to an open content block.\n\nSerializes with a `type` discriminator matching Anthropic deltas:\n`text_delta` / `input_json_delta` / `thinking_delta` / `signature_delta`.",
+      "oneOf": [
+        {
+          "description": "Append text to a text block.",
+          "properties": {
+            "text": {
+              "description": "Text fragment.",
+              "type": "string"
+            },
+            "type": {
+              "const": "text_delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Append a fragment of the tool-use `input` JSON. Fragments are\nconcatenated and parsed once when the block stops — an individual\nfragment is **not** valid JSON on its own.",
+          "properties": {
+            "partial_json": {
+              "description": "Partial JSON string fragment.",
+              "type": "string"
+            },
+            "type": {
+              "const": "input_json_delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "partial_json"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Append text to a thinking block.",
+          "properties": {
+            "thinking": {
+              "description": "Thinking fragment.",
+              "type": "string"
+            },
+            "type": {
+              "const": "thinking_delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "thinking"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Append to a thinking block's signature.",
+          "properties": {
+            "signature": {
+              "description": "Signature fragment.",
+              "type": "string"
+            },
+            "type": {
+              "const": "signature_delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "signature"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "BlockDelta"
+    },
+    "ChatMessage": {
+      "description": "A single conversation message — one line of `messages.jsonl`.\n\nSchema id: [`MESSAGE_SCHEMA`] (`\"animus.chat.message.v1\"`).",
+      "properties": {
+        "content": {
+          "description": "Ordered content blocks.",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          },
+          "type": "array"
+        },
+        "conversation_id": {
+          "description": "Owning conversation id.",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "RFC3339 creation timestamp.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Message id (ULID, monotonic within a conversation).",
+          "type": "string"
+        },
+        "model": {
+          "description": "Model id that produced an assistant turn; `None` for user/system/tool.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "principal_id": {
+          "description": "RBAC principal that authored this turn; `None` when unattributed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/ChatRole",
+          "description": "Author role."
+        },
+        "schema": {
+          "description": "Schema discriminator. Always [`MESSAGE_SCHEMA`].",
+          "type": "string"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why generation stopped; `None` for non-assistant turns or in-progress."
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Token accounting; `None` for non-assistant turns."
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "conversation_id",
+        "role",
+        "content",
+        "created_at"
+      ],
+      "title": "ChatMessage",
+      "type": "object"
+    },
+    "ChatModelInfo": {
+      "description": "One entry of the [`METHOD_CHAT_MODELS`] response.",
+      "properties": {
+        "context_window": {
+          "description": "Maximum context window in tokens.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "description": "Model id (e.g. `\"claude-opus-4-8\"`).",
+          "type": "string"
+        },
+        "supports_tools": {
+          "description": "Whether the model supports tool/function calling.",
+          "type": "boolean"
+        },
+        "supports_vision": {
+          "description": "Whether the model supports image input.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "context_window",
+        "supports_tools",
+        "supports_vision"
+      ],
+      "title": "ChatModelInfo",
+      "type": "object"
+    },
+    "ChatProviderCapabilities": {
+      "description": "Capability flags a `chat_provider` plugin advertises (mirrors the\n`[capabilities]` block in its `plugin.toml`).",
+      "properties": {
+        "prompt_caching": {
+          "default": false,
+          "description": "Supports prompt caching.",
+          "type": "boolean"
+        },
+        "streaming": {
+          "default": false,
+          "description": "Streams responses token-by-token (always `true` for chat providers).",
+          "type": "boolean"
+        },
+        "tool_use": {
+          "default": false,
+          "description": "Supports tool/function calling.",
+          "type": "boolean"
+        },
+        "vision": {
+          "default": false,
+          "description": "Supports image input.",
+          "type": "boolean"
+        }
+      },
+      "title": "ChatProviderCapabilities",
+      "type": "object"
+    },
+    "ChatRole": {
+      "description": "The role of a [`ChatMessage`]'s author.\n\nSerializes lowercase: `\"user\"`, `\"assistant\"`, `\"system\"`, `\"tool\"`.",
+      "oneOf": [
+        {
+          "const": "user",
+          "description": "A human (or external client) turn.",
+          "type": "string"
+        },
+        {
+          "const": "assistant",
+          "description": "A model-authored turn.",
+          "type": "string"
+        },
+        {
+          "const": "system",
+          "description": "A system prompt / instruction turn.",
+          "type": "string"
+        },
+        {
+          "const": "tool",
+          "description": "A tool-result-bearing turn.",
+          "type": "string"
+        }
+      ],
+      "title": "ChatRole"
+    },
+    "ChatStreamEvent": {
+      "description": "One frame of the [`METHOD_CHAT_STREAM`] notification stream.\n\nThe sequence mirrors the verified Anthropic event order:\n[`Self::MessageStart`] → (`[`Self::ContentBlockStart`] →\n`[`Self::ContentBlockDelta`]`* → `[`Self::ContentBlockStop`]`)* →\n[`Self::MessageDelta`] → [`Self::MessageStop`].\n\nSerializes with a `type` discriminator: `message_start`,\n`content_block_start`, `content_block_delta`, `content_block_stop`,\n`message_delta`, `message_stop`.",
+      "oneOf": [
+        {
+          "description": "The assistant message opens. Carries the new message id, its role, and\nthe initial (input-side) usage.",
+          "properties": {
+            "message_id": {
+              "description": "New assistant message id.",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/ChatRole",
+              "description": "Author role (always [`ChatRole::Assistant`] in practice)."
+            },
+            "type": {
+              "const": "message_start",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/$defs/Usage",
+              "description": "Usage known at message start (input/cache tokens)."
+            }
+          },
+          "required": [
+            "type",
+            "message_id",
+            "role",
+            "usage"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A content block opens at `index`.",
+          "properties": {
+            "block": {
+              "$ref": "#/$defs/ContentBlockStart",
+              "description": "The opening block shell."
+            },
+            "index": {
+              "description": "Block position within the message.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "content_block_start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "block"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An incremental update to the block at `index`.",
+          "properties": {
+            "delta": {
+              "$ref": "#/$defs/BlockDelta",
+              "description": "The delta to apply."
+            },
+            "index": {
+              "description": "Block position within the message.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "content_block_delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "delta"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The block at `index` is complete (accumulated `input_json` should be\nparsed now).",
+          "properties": {
+            "index": {
+              "description": "Block position within the message.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "content_block_stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Top-level message metadata update — the final stop reason and the\ncumulative output usage.",
+          "properties": {
+            "stop_reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StopReason"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Why the message stopped; `None` until known."
+            },
+            "type": {
+              "const": "message_delta",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/$defs/Usage",
+              "description": "Cumulative usage (notably `output_tokens`)."
+            }
+          },
+          "required": [
+            "type",
+            "usage"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The stream is finished.",
+          "properties": {
+            "type": {
+              "const": "message_stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ChatStreamEvent"
+    },
+    "ChatStreamNotification": {
+      "description": "The `params` of a [`NOTIFICATION_CHAT_DELTA`] frame.\n\nThe plugin-host server-streaming contract requires every notification fanned\nout from one request to echo that request's id (see\n`animus_plugin_protocol::RpcNotification`). Because several `chat/stream`\nrequests may be in flight on a single plugin connection at once, the host\ndemultiplexes deltas and matches [`ChatStreamEvent::MessageStop`] to its\nrequest by this [`id`](Self::id). Providers that build notification frames\ndirectly should serialize this type as the notification `params` rather than\na bare [`ChatStreamEvent`], so the correlation id is never dropped.",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/ChatStreamEvent",
+          "description": "The streamed event."
+        },
+        "id": {
+          "description": "The originating [`METHOD_CHAT_STREAM`] request id this frame belongs to."
+        }
+      },
+      "required": [
+        "id",
+        "event"
+      ],
+      "title": "ChatStreamNotification",
+      "type": "object"
+    },
+    "ChatStreamRequest": {
+      "description": "Request params for [`METHOD_CHAT_STREAM`].\n\nCarries the full message history (providers are stateless — the daemon\nresends history each turn), the system prompt, the available tools, and the\nsampling parameters.",
+      "properties": {
+        "max_tokens": {
+          "description": "Maximum output tokens to generate.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages": {
+          "description": "Full conversation history to send to the model.",
+          "items": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "type": "array"
+        },
+        "model": {
+          "description": "Model id to run against.",
+          "type": "string"
+        },
+        "system": {
+          "description": "System prompt; `None` when no system turn applies.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temperature": {
+          "description": "Sampling temperature; `None` lets the provider use its default.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "tools": {
+          "description": "Tools the model may call this turn.",
+          "items": {
+            "$ref": "#/$defs/ToolSchema"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "messages",
+        "model",
+        "max_tokens"
+      ],
+      "title": "ChatStreamRequest",
+      "type": "object"
+    },
+    "ContentBlock": {
+      "description": "A single content block within a [`ChatMessage`].\n\nSerializes with a `type` discriminator matching Anthropic content blocks\nexactly: `{\"type\":\"text\",\"text\":\"...\"}`,\n`{\"type\":\"tool_use\",\"id\":\"...\",\"name\":\"...\",\"input\":{...}}`,\n`{\"type\":\"tool_result\",\"tool_use_id\":\"...\",\"is_error\":false,\"content\":[...]}`,\n`{\"type\":\"thinking\",\"thinking\":\"...\",\"signature\":\"...\"}`,\n`{\"type\":\"image\",\"source\":{...}}`.",
+      "oneOf": [
+        {
+          "description": "Plain text.",
+          "properties": {
+            "text": {
+              "description": "The text content.",
+              "type": "string"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A model request to invoke a tool. The `input` is the tool's arguments\nobject (accumulated from `input_json_delta` fragments on the wire and\nparsed once on block stop).",
+          "properties": {
+            "id": {
+              "description": "Provider-issued id correlating this call to its result (e.g.\n`\"toolu_01A...\"`).",
+              "type": "string"
+            },
+            "input": {
+              "description": "Tool arguments as a JSON object."
+            },
+            "name": {
+              "description": "Tool name (e.g. `\"animus.subject.list\"`).",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_use",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "name",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The result of executing a tool, fed back to the model. References the\noriginating [`ContentBlock::ToolUse`] by id. The result body is itself a\nlist of blocks (usually a single text block).",
+          "properties": {
+            "content": {
+              "description": "The tool's output as content blocks.",
+              "items": {
+                "$ref": "#/$defs/ContentBlock"
+              },
+              "type": "array"
+            },
+            "is_error": {
+              "description": "`true` if the tool errored (including RBAC denials) — the model sees\nthe error and can recover; it does not crash the conversation.",
+              "type": "boolean"
+            },
+            "tool_use_id": {
+              "description": "The `id` of the [`ContentBlock::ToolUse`] this answers.",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool_use_id",
+            "is_error",
+            "content"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Extended-thinking reasoning. The `signature` MUST round-trip verbatim\nacross turns for multi-turn integrity.",
+          "properties": {
+            "signature": {
+              "description": "Opaque provider signature authenticating the thinking block.",
+              "type": "string"
+            },
+            "thinking": {
+              "description": "The model's reasoning text.",
+              "type": "string"
+            },
+            "type": {
+              "const": "thinking",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "thinking",
+            "signature"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An image (vision deferred in v0.6; present for schema completeness).",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/ImageSource",
+              "description": "Where the image bytes come from."
+            },
+            "type": {
+              "const": "image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ContentBlock"
+    },
+    "ContentBlockStart": {
+      "description": "The shell of a content block as it opens in a stream, before any deltas.\n\nMirrors Anthropic `content_block_start.content_block`. Serializes with a\n`type` discriminator: `text` / `tool_use` / `thinking`.",
+      "oneOf": [
+        {
+          "description": "A text block opens (text accumulates via [`BlockDelta::TextDelta`]).",
+          "properties": {
+            "text": {
+              "default": "",
+              "description": "Initial text (usually empty).",
+              "type": "string"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A tool-use block opens. `input` arrives later as\n[`BlockDelta::InputJsonDelta`] fragments.",
+          "properties": {
+            "id": {
+              "description": "Provider-issued tool-call id.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Tool name.",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_use",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A thinking block opens (accumulates via [`BlockDelta::ThinkingDelta`]\nand [`BlockDelta::SignatureDelta`]).",
+          "properties": {
+            "thinking": {
+              "default": "",
+              "description": "Initial thinking text (usually empty).",
+              "type": "string"
+            },
+            "type": {
+              "const": "thinking",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ContentBlockStart"
+    },
+    "ConversationMeta": {
+      "description": "Conversation metadata — the `meta.json` of a conversation subject.\n\nSchema id: [`CONVERSATION_SCHEMA`] (`\"animus.chat.conversation.v1\"`). The\nmessage log lives alongside in `messages.jsonl` as [`ChatMessage`] lines.",
+      "properties": {
+        "agent_profile": {
+          "description": "The agent profile (persona) bound to this conversation; `None` for ad-hoc.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "description": "RFC3339 creation timestamp.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Conversation id (ULID, e.g. `\"conv_01H...\"`).",
+          "type": "string"
+        },
+        "message_count": {
+          "description": "Number of messages persisted in `messages.jsonl`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "Default model id for this conversation.",
+          "type": "string"
+        },
+        "principal_id": {
+          "description": "RBAC principal that owns the conversation; `None` when unattributed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "description": "Schema discriminator. Always [`CONVERSATION_SCHEMA`].",
+          "type": "string"
+        },
+        "title": {
+          "description": "Optional human-readable title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "RFC3339 timestamp of the most recent append.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "model",
+        "created_at",
+        "updated_at",
+        "message_count"
+      ],
+      "title": "ConversationMeta",
+      "type": "object"
+    },
+    "CountTokensResponse": {
+      "description": "Response for [`METHOD_CHAT_COUNT_TOKENS`].",
+      "properties": {
+        "input_tokens": {
+          "description": "Number of input tokens the request would consume.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens"
+      ],
+      "title": "CountTokensResponse",
+      "type": "object"
+    },
+    "ImageSource": {
+      "description": "Source of an [`ContentBlock::Image`] block.\n\nSerializes with a `type` discriminator: `{\"type\":\"base64\",...}` or\n`{\"type\":\"url\",...}`. Vision is deferred in v0.6, but the schema carries\nimages so it is complete and downstream impls agree on the shape.",
+      "oneOf": [
+        {
+          "description": "Inline base64-encoded image bytes.",
+          "properties": {
+            "data": {
+              "description": "Base64-encoded image data (no data-URL prefix).",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "MIME media type, e.g. `\"image/png\"`.",
+              "type": "string"
+            },
+            "type": {
+              "const": "base64",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A fetchable image URL.",
+          "properties": {
+            "type": {
+              "const": "url",
+              "type": "string"
+            },
+            "url": {
+              "description": "Absolute URL of the image.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ImageSource"
+    },
+    "StopReason": {
+      "description": "Stop reason. snake_case string; unknown values round-trip via Other.",
+      "title": "StopReason",
+      "type": "string"
+    },
+    "ToolSchema": {
+      "description": "A tool the model may call, advertised on a [`ChatStreamRequest`].\n\nMirrors the Anthropic tool shape: name, description, and a JSON Schema for\nthe input object.",
+      "properties": {
+        "description": {
+          "description": "Human-readable description shown to the model.",
+          "type": "string"
+        },
+        "input_schema": {
+          "description": "JSON Schema for the tool's input object."
+        },
+        "name": {
+          "description": "Tool name (e.g. `\"animus.subject.list\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema"
+      ],
+      "title": "ToolSchema",
+      "type": "object"
+    },
+    "Usage": {
+      "description": "Token accounting for a model turn.\n\nEvery counter defaults to zero so a conversation's cost is a simple sum over\nits assistant messages — no separate ledger. Each field is `#[serde(default)]`\nso providers and non-Rust clients may omit zero-valued counters (Anthropic's\n`message_start` usage, for instance, often omits the cache fields).",
+      "properties": {
+        "cache_creation_input_tokens": {
+          "default": 0,
+          "description": "Tokens written into the prompt cache (billed at the cache-write rate).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_read_input_tokens": {
+          "default": 0,
+          "description": "Tokens served from the prompt cache (billed at the cache-read rate).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "default": 0,
+          "description": "Input (prompt) tokens billed for this turn.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
+          "description": "Output (completion) tokens generated this turn.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "title": "Usage",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-chat-protocol"
+}

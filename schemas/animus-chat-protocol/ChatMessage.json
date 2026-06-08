@@ -1,0 +1,312 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatMessage",
+  "description": "A single conversation message — one line of `messages.jsonl`.\n\nSchema id: [`MESSAGE_SCHEMA`] (`\"animus.chat.message.v1\"`).",
+  "type": "object",
+  "properties": {
+    "content": {
+      "description": "Ordered content blocks.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ContentBlock"
+      }
+    },
+    "conversation_id": {
+      "description": "Owning conversation id.",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "RFC3339 creation timestamp.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Message id (ULID, monotonic within a conversation).",
+      "type": "string"
+    },
+    "model": {
+      "description": "Model id that produced an assistant turn; `None` for user/system/tool.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "principal_id": {
+      "description": "RBAC principal that authored this turn; `None` when unattributed.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "role": {
+      "description": "Author role.",
+      "$ref": "#/$defs/ChatRole"
+    },
+    "schema": {
+      "description": "Schema discriminator. Always [`MESSAGE_SCHEMA`].",
+      "type": "string"
+    },
+    "stop_reason": {
+      "description": "Why generation stopped; `None` for non-assistant turns or in-progress.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StopReason"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "usage": {
+      "description": "Token accounting; `None` for non-assistant turns.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Usage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "conversation_id",
+    "role",
+    "content",
+    "created_at"
+  ],
+  "$defs": {
+    "ChatRole": {
+      "description": "The role of a [`ChatMessage`]'s author.\n\nSerializes lowercase: `\"user\"`, `\"assistant\"`, `\"system\"`, `\"tool\"`.",
+      "oneOf": [
+        {
+          "description": "A human (or external client) turn.",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "A model-authored turn.",
+          "type": "string",
+          "const": "assistant"
+        },
+        {
+          "description": "A system prompt / instruction turn.",
+          "type": "string",
+          "const": "system"
+        },
+        {
+          "description": "A tool-result-bearing turn.",
+          "type": "string",
+          "const": "tool"
+        }
+      ]
+    },
+    "ContentBlock": {
+      "description": "A single content block within a [`ChatMessage`].\n\nSerializes with a `type` discriminator matching Anthropic content blocks\nexactly: `{\"type\":\"text\",\"text\":\"...\"}`,\n`{\"type\":\"tool_use\",\"id\":\"...\",\"name\":\"...\",\"input\":{...}}`,\n`{\"type\":\"tool_result\",\"tool_use_id\":\"...\",\"is_error\":false,\"content\":[...]}`,\n`{\"type\":\"thinking\",\"thinking\":\"...\",\"signature\":\"...\"}`,\n`{\"type\":\"image\",\"source\":{...}}`.",
+      "oneOf": [
+        {
+          "description": "Plain text.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "The text content.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "A model request to invoke a tool. The `input` is the tool's arguments\nobject (accumulated from `input_json_delta` fragments on the wire and\nparsed once on block stop).",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "Provider-issued id correlating this call to its result (e.g.\n`\"toolu_01A...\"`).",
+              "type": "string"
+            },
+            "input": {
+              "description": "Tool arguments as a JSON object."
+            },
+            "name": {
+              "description": "Tool name (e.g. `\"animus.subject.list\"`).",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_use"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "name",
+            "input"
+          ]
+        },
+        {
+          "description": "The result of executing a tool, fed back to the model. References the\noriginating [`ContentBlock::ToolUse`] by id. The result body is itself a\nlist of blocks (usually a single text block).",
+          "type": "object",
+          "properties": {
+            "content": {
+              "description": "The tool's output as content blocks.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ContentBlock"
+              }
+            },
+            "is_error": {
+              "description": "`true` if the tool errored (including RBAC denials) — the model sees\nthe error and can recover; it does not crash the conversation.",
+              "type": "boolean"
+            },
+            "tool_use_id": {
+              "description": "The `id` of the [`ContentBlock::ToolUse`] this answers.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            }
+          },
+          "required": [
+            "type",
+            "tool_use_id",
+            "is_error",
+            "content"
+          ]
+        },
+        {
+          "description": "Extended-thinking reasoning. The `signature` MUST round-trip verbatim\nacross turns for multi-turn integrity.",
+          "type": "object",
+          "properties": {
+            "signature": {
+              "description": "Opaque provider signature authenticating the thinking block.",
+              "type": "string"
+            },
+            "thinking": {
+              "description": "The model's reasoning text.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "thinking"
+            }
+          },
+          "required": [
+            "type",
+            "thinking",
+            "signature"
+          ]
+        },
+        {
+          "description": "An image (vision deferred in v0.6; present for schema completeness).",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "Where the image bytes come from.",
+              "$ref": "#/$defs/ImageSource"
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "type",
+            "source"
+          ]
+        }
+      ]
+    },
+    "ImageSource": {
+      "description": "Source of an [`ContentBlock::Image`] block.\n\nSerializes with a `type` discriminator: `{\"type\":\"base64\",...}` or\n`{\"type\":\"url\",...}`. Vision is deferred in v0.6, but the schema carries\nimages so it is complete and downstream impls agree on the shape.",
+      "oneOf": [
+        {
+          "description": "Inline base64-encoded image bytes.",
+          "type": "object",
+          "properties": {
+            "data": {
+              "description": "Base64-encoded image data (no data-URL prefix).",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "MIME media type, e.g. `\"image/png\"`.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "base64"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "data"
+          ]
+        },
+        {
+          "description": "A fetchable image URL.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "url"
+            },
+            "url": {
+              "description": "Absolute URL of the image.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        }
+      ]
+    },
+    "StopReason": {
+      "description": "Stop reason. snake_case string; unknown values round-trip via Other.",
+      "type": "string"
+    },
+    "Usage": {
+      "description": "Token accounting for a model turn.\n\nEvery counter defaults to zero so a conversation's cost is a simple sum over\nits assistant messages — no separate ledger. Each field is `#[serde(default)]`\nso providers and non-Rust clients may omit zero-valued counters (Anthropic's\n`message_start` usage, for instance, often omits the cache fields).",
+      "type": "object",
+      "properties": {
+        "cache_creation_input_tokens": {
+          "description": "Tokens written into the prompt cache (billed at the cache-write rate).",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "cache_read_input_tokens": {
+          "description": "Tokens served from the prompt cache (billed at the cache-read rate).",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "input_tokens": {
+          "description": "Input (prompt) tokens billed for this turn.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "output_tokens": {
+          "description": "Output (completion) tokens generated this turn.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
