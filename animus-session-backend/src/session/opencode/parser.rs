@@ -16,6 +16,15 @@ pub(crate) fn parse_opencode_json_line(line: &str) -> Vec<SessionEvent> {
 
     let kind = value.get("type").and_then(Value::as_str);
 
+    // opencode v1.2+ wraps every frame as `{type, timestamp, sessionID, part}`
+    // where the payload lives in `part`. A `tool` part carries the call AND
+    // its result together (part.tool + part.state.{input,output,status}). Older
+    // opencode builds used flat `{type:"tool_use", tool_use:{...}}` frames; the
+    // fallbacks below keep those working.
+    if let Some(part) = value.get("part") {
+        return parse_opencode_part(kind, part);
+    }
+
     match kind {
         Some("text") => {
             if let Some(text) = value.get("text").and_then(Value::as_str) {
@@ -42,6 +51,60 @@ pub(crate) fn parse_opencode_json_line(line: &str) -> Vec<SessionEvent> {
     }
 
     Vec::new()
+}
+
+/// Parse a v1.2+ opencode `part` payload. Text parts become a TextDelta; a
+/// completed/errored tool part becomes a ToolCall (name + input) paired with a
+/// ToolResult (output + exit status), so opencode streams its steps with the
+/// same fidelity as the other providers. Non-terminal tool states are skipped —
+/// the terminal frame carries the input too, so emitting on it alone avoids a
+/// duplicate ToolCall.
+fn parse_opencode_part(_kind: Option<&str>, part: &Value) -> Vec<SessionEvent> {
+    match part.get("type").and_then(Value::as_str) {
+        Some("text") => part
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| {
+                vec![SessionEvent::TextDelta {
+                    text: text.to_string(),
+                }]
+            })
+            .unwrap_or_default(),
+        Some("tool") => {
+            let tool_name = part
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown_tool")
+                .to_string();
+            let state = part.get("state").cloned().unwrap_or(Value::Null);
+            let status = state.get("status").and_then(Value::as_str).unwrap_or("");
+            if status != "completed" && status != "error" {
+                return Vec::new();
+            }
+            let arguments = state.get("input").cloned().unwrap_or_else(|| json!({}));
+            let output = state.get("output").cloned().unwrap_or(Value::Null);
+            let success = status == "completed"
+                && state
+                    .get("metadata")
+                    .and_then(|m| m.get("exit"))
+                    .and_then(Value::as_i64)
+                    .map(|exit| exit == 0)
+                    .unwrap_or(true);
+            vec![
+                SessionEvent::ToolCall {
+                    tool_name: tool_name.clone(),
+                    arguments,
+                    server: None,
+                },
+                SessionEvent::ToolResult {
+                    tool_name,
+                    output,
+                    success,
+                },
+            ]
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn tool_use_to_event(body: &Value) -> SessionEvent {
@@ -89,6 +152,53 @@ fn tool_result_to_event(body: &Value) -> SessionEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_v12_tool_part_emits_call_and_result() {
+        // Real opencode v1.2.x frame: payload nested under `part`, a `tool`
+        // part carrying both the input and the completed output.
+        let line = r#"{"type":"tool_use","sessionID":"ses_1","part":{"type":"tool","callID":"call_1","tool":"bash","state":{"status":"completed","input":{"command":"echo hi"},"output":"hi\n","metadata":{"exit":0}}}}"#;
+        let events = parse_opencode_json_line(line);
+        assert_eq!(
+            events.len(),
+            2,
+            "completed tool part -> ToolCall + ToolResult"
+        );
+        match &events[0] {
+            SessionEvent::ToolCall {
+                tool_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tool_name, "bash");
+                assert_eq!(arguments, &json!({"command": "echo hi"}));
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+        match &events[1] {
+            SessionEvent::ToolResult {
+                tool_name,
+                output,
+                success,
+            } => {
+                assert_eq!(tool_name, "bash");
+                assert_eq!(output, &json!("hi\n"));
+                assert!(*success);
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn opencode_v12_text_part_emits_text_delta() {
+        let line = r#"{"type":"text","part":{"type":"text","text":"hello-oc"}}"#;
+        let events = parse_opencode_json_line(line);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SessionEvent::TextDelta { text } => assert_eq!(text, "hello-oc"),
+            other => panic!("expected TextDelta, got {other:?}"),
+        }
+    }
 
     #[test]
     fn opencode_parser_emits_tool_call_for_tool_use_event() {

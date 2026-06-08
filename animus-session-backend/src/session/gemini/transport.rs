@@ -139,6 +139,13 @@ async fn run_gemini_session(
         .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN")
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        // Gemini CLI refuses to run in an "untrusted" directory in headless
+        // mode (exit 55) unless the workspace is trusted. Animus always
+        // launches gemini against the caller's own project root in an
+        // automated context, so opt into trust here — the documented
+        // headless escape hatch — rather than requiring every operator to
+        // pre-trust each directory interactively.
+        .env("GEMINI_CLI_TRUST_WORKSPACE", "true")
         .envs(request.env_vars.iter().cloned())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
