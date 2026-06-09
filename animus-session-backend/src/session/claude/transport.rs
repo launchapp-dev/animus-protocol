@@ -79,6 +79,47 @@ pub(crate) async fn terminate_claude_session(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Normalize a `reasoning_effort` extras value to a Claude CLI `--effort`
+/// level. The Claude CLI accepts `low`, `medium`, `high`, `xhigh`, and
+/// `max`; Animus exposes `low`/`medium`/`high`, which map through
+/// unchanged. Unrecognized or empty values yield `None` so the flag is
+/// omitted and the CLI uses its own default effort.
+fn reasoning_effort_to_claude(level: &str) -> Option<&'static str> {
+    match level.trim().to_ascii_lowercase().as_str() {
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        _ => None,
+    }
+}
+
+/// Apply `extras.reasoning_effort` to a Claude argv as `--effort <level>`.
+///
+/// The flag pair is inserted at the FRONT of the argv (the options region),
+/// not next to the trailing token. `claude [options] [prompt]` accepts
+/// options ahead of the positional prompt, and a runtime-contract launch may
+/// send the prompt via stdin — leaving a flag value (e.g. `stream-json`)
+/// last — so prompt-relative insertion could split a flag pair.
+///
+/// A caller-supplied `--effort` (e.g. inside a runtime-contract launch
+/// block) wins: this only inserts the level when no `--effort` flag is
+/// already present.
+fn apply_claude_reasoning_effort(args: &mut Vec<String>, request: &SessionRequest) {
+    let Some(level) = request
+        .extras
+        .get("reasoning_effort")
+        .and_then(serde_json::Value::as_str)
+        .and_then(reasoning_effort_to_claude)
+    else {
+        return;
+    };
+    if args.iter().any(|arg| arg == "--effort") {
+        return;
+    }
+    args.insert(0, "--effort".to_string());
+    args.insert(1, level.to_string());
+}
+
 pub(crate) fn claude_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
@@ -86,6 +127,7 @@ pub(crate) fn claude_invocation_for_request(
     if let Some(mut invocation) =
         parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
     {
+        apply_claude_reasoning_effort(&mut invocation.args, request);
         if !invocation.env.contains_key("ANTHROPIC_BASE_URL") {
             if let Some((base_url, api_key)) = resolve_anthropic_compatible_provider(&request.model)
             {
@@ -169,6 +211,7 @@ pub(crate) fn claude_invocation_for_request(
         args.push(resolved_model);
     }
     args.push(request.prompt.clone());
+    apply_claude_reasoning_effort(&mut args, request);
     let mut invocation = LaunchInvocation {
         command: "claude".to_string(),
         args,
@@ -384,4 +427,129 @@ fn configured_claude_session_id(request: &SessionRequest) -> Option<String> {
     }
 
     Some(Uuid::new_v4().to_string())
+}
+
+#[cfg(test)]
+mod reasoning_effort_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
+        SessionRequest {
+            tool: "claude".into(),
+            model: "claude-sonnet-4-6".into(),
+            prompt: "say hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras,
+        }
+    }
+
+    fn effort_value(args: &[String]) -> Option<String> {
+        args.iter()
+            .position(|arg| arg == "--effort")
+            .and_then(|index| args.get(index + 1).cloned())
+    }
+
+    #[test]
+    fn bare_args_inject_effort_flag() {
+        let request = request_with_extras(json!({ "reasoning_effort": "high" }));
+        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(effort_value(&invocation.args), Some("high".to_string()));
+        assert_eq!(invocation.args.last().map(String::as_str), Some("say hi"));
+    }
+
+    #[test]
+    fn absent_reasoning_effort_omits_flag() {
+        let request = request_with_extras(json!({}));
+        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        assert!(effort_value(&invocation.args).is_none());
+    }
+
+    #[test]
+    fn unknown_level_is_ignored() {
+        let request = request_with_extras(json!({ "reasoning_effort": "ludicrous" }));
+        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        assert!(effort_value(&invocation.args).is_none());
+    }
+
+    #[test]
+    fn runtime_contract_effort_not_duplicated() {
+        let request = request_with_extras(json!({
+            "reasoning_effort": "low",
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": [
+                            "--print", "--verbose", "--output-format", "stream-json",
+                            "--effort", "max", "say hi"
+                        ]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let count = invocation
+            .args
+            .iter()
+            .filter(|arg| *arg == "--effort")
+            .count();
+        assert_eq!(count, 1, "caller-supplied --effort must not be duplicated");
+        assert_eq!(effort_value(&invocation.args), Some("max".to_string()));
+    }
+
+    #[test]
+    fn runtime_contract_path_gets_effort_when_absent() {
+        let request = request_with_extras(json!({
+            "reasoning_effort": "medium",
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "say hi"]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(effort_value(&invocation.args), Some("medium".to_string()));
+    }
+
+    #[test]
+    fn stdin_contract_does_not_split_trailing_flag_pair() {
+        // prompt_via_stdin => the argv ends with a flag VALUE (`stream-json`).
+        // The `--effort` pair must go to the front, never between
+        // `--output-format` and its value.
+        let request = request_with_extras(json!({
+            "reasoning_effort": "high",
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "--output-format", "stream-json"],
+                        "prompt_via_stdin": true
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let fmt_pos = invocation
+            .args
+            .iter()
+            .position(|a| a == "--output-format")
+            .expect("--output-format present");
+        assert_eq!(
+            invocation.args.get(fmt_pos + 1).map(String::as_str),
+            Some("stream-json"),
+            "--output-format must stay adjacent to its value; got args: {:?}",
+            invocation.args
+        );
+        assert_eq!(effort_value(&invocation.args), Some("high".to_string()));
+    }
 }

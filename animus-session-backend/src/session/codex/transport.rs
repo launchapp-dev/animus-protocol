@@ -79,13 +79,76 @@ pub(crate) async fn terminate_codex_session(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Normalize a `reasoning_effort` extras value to the Codex
+/// `model_reasoning_effort` level. Codex accepts `low`, `medium`, and
+/// `high`; anything else (including an empty string) yields `None` so the
+/// flag is omitted and Codex falls back to its own default.
+fn reasoning_effort_to_codex(level: &str) -> Option<&'static str> {
+    match level.trim().to_ascii_lowercase().as_str() {
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        _ => None,
+    }
+}
+
+/// Apply `extras.reasoning_effort` to a Codex argv as a
+/// `-c model_reasoning_effort="<level>"` override.
+///
+/// The `-c` pair is inserted into the options region (immediately after the
+/// `exec` subcommand, or at the front when absent) rather than next to the
+/// trailing argv token. The trailing token is not guaranteed to be the
+/// prompt — a runtime-contract launch may send the prompt via stdin, leaving
+/// a flag value (e.g. `--model gpt-5`) last — so prompt-relative insertion
+/// could split a flag pair.
+///
+/// A user-supplied override (an existing `-c model_reasoning_effort=...`
+/// token, e.g. from a `--context-json` runtime contract) wins: this only
+/// inserts the level when no such override is already present.
+fn apply_codex_reasoning_effort(args: &mut Vec<String>, request: &SessionRequest) {
+    let Some(level) = request
+        .extras
+        .get("reasoning_effort")
+        .and_then(serde_json::Value::as_str)
+        .and_then(reasoning_effort_to_codex)
+    else {
+        return;
+    };
+    if codex_reasoning_effort_already_set(args) {
+        return;
+    }
+    let insert_at = args
+        .iter()
+        .position(|token| token == "exec")
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    args.insert(insert_at, "-c".to_string());
+    args.insert(insert_at + 1, format!("model_reasoning_effort=\"{level}\""));
+}
+
+/// True when the argv already carries a `-c model_reasoning_effort=...`
+/// override (so a caller-provided value is never clobbered).
+fn codex_reasoning_effort_already_set(args: &[String]) -> bool {
+    let mut index = 0usize;
+    while index + 1 < args.len() {
+        if matches!(args[index].as_str(), "-c" | "--config")
+            && args[index + 1].starts_with("model_reasoning_effort=")
+        {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
 pub(crate) fn codex_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
 ) -> Result<LaunchInvocation> {
-    if let Some(invocation) =
+    if let Some(mut invocation) =
         parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
     {
+        apply_codex_reasoning_effort(&mut invocation.args, request);
         return Ok(invocation);
     }
 
@@ -125,6 +188,8 @@ pub(crate) fn codex_invocation_for_request(
     }
 
     args.push(request.prompt.clone());
+
+    apply_codex_reasoning_effort(&mut args, request);
 
     let mut invocation = LaunchInvocation {
         command: "codex".to_string(),
@@ -288,4 +353,147 @@ fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
         .lock()
         .ok()
         .and_then(|mut registry| registry.remove(session_id))
+}
+
+#[cfg(test)]
+mod reasoning_effort_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
+        SessionRequest {
+            tool: "codex".into(),
+            model: "gpt-5-codex".into(),
+            prompt: "say hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras,
+        }
+    }
+
+    fn override_value(args: &[String], key: &str) -> Option<String> {
+        let prefix = format!("{key}=");
+        let mut index = 0usize;
+        while index + 1 < args.len() {
+            if matches!(args[index].as_str(), "-c" | "--config")
+                && args[index + 1].starts_with(&prefix)
+            {
+                return Some(args[index + 1][prefix.len()..].to_string());
+            }
+            index += 1;
+        }
+        None
+    }
+
+    #[test]
+    fn bare_args_inject_reasoning_effort_override() {
+        let request = request_with_extras(json!({ "reasoning_effort": "high" }));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            override_value(&invocation.args, "model_reasoning_effort"),
+            Some("\"high\"".to_string()),
+        );
+        // Prompt stays the final argv token.
+        assert_eq!(invocation.args.last().map(String::as_str), Some("say hi"));
+    }
+
+    #[test]
+    fn absent_reasoning_effort_leaves_args_unchanged() {
+        let request = request_with_extras(json!({}));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert!(override_value(&invocation.args, "model_reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn unknown_level_is_ignored() {
+        let request = request_with_extras(json!({ "reasoning_effort": "turbo" }));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert!(override_value(&invocation.args, "model_reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn user_supplied_override_is_not_clobbered() {
+        let request = request_with_extras(json!({
+            "reasoning_effort": "low",
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "codex",
+                        "args": [
+                            "exec",
+                            "-c",
+                            "model_reasoning_effort=\"high\"",
+                            "say hi"
+                        ]
+                    }
+                }
+            }
+        }));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            override_value(&invocation.args, "model_reasoning_effort"),
+            Some("\"high\"".to_string()),
+            "caller-supplied override must win over extras.reasoning_effort"
+        );
+    }
+
+    #[test]
+    fn runtime_contract_path_gets_effort_when_absent() {
+        let request = request_with_extras(json!({
+            "reasoning_effort": "medium",
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "codex",
+                        "args": ["exec", "say hi"]
+                    }
+                }
+            }
+        }));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            override_value(&invocation.args, "model_reasoning_effort"),
+            Some("\"medium\"".to_string()),
+        );
+    }
+
+    #[test]
+    fn stdin_contract_does_not_split_trailing_flag_pair() {
+        // prompt_via_stdin => the argv ends with a flag VALUE (`gpt-5`), not a
+        // prompt. The `-c` pair must land in the options region after `exec`,
+        // never between `--model` and its value.
+        let request = request_with_extras(json!({
+            "reasoning_effort": "high",
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "codex",
+                        "args": ["exec", "--model", "gpt-5"],
+                        "prompt_via_stdin": true
+                    }
+                }
+            }
+        }));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        let model_pos = invocation
+            .args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("--model present");
+        assert_eq!(
+            invocation.args.get(model_pos + 1).map(String::as_str),
+            Some("gpt-5"),
+            "--model must stay adjacent to its value; got args: {:?}",
+            invocation.args
+        );
+        assert_eq!(
+            override_value(&invocation.args, "model_reasoning_effort"),
+            Some("\"high\"".to_string()),
+        );
+    }
 }
