@@ -96,7 +96,7 @@ use animus_trigger_protocol::{
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Stdout};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, Stdout};
 use tokio::sync::Mutex;
 
 // =====================================================================
@@ -1289,7 +1289,10 @@ fn install_log_forwarder(stdout: Arc<Mutex<Stdout>>) {
     });
 }
 
-pub(crate) async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<Stdout>>, frame: &T) {
+pub(crate) async fn write_frame<T: serde::Serialize, W: AsyncWrite + Unpin>(
+    stdout: &Arc<Mutex<W>>,
+    frame: &T,
+) {
     if let Ok(mut payload) = serde_json::to_string(frame) {
         payload.push('\n');
         let mut guard = stdout.lock().await;
