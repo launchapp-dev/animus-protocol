@@ -25,22 +25,26 @@
 //! - [`transport_backend_main`] for transport backends (HTTP, GraphQL, gRPC,
 //!   WebSocket, MQTT, ...) that expose external surfaces and translate
 //!   inbound requests into control RPCs against the daemon.
+//! - [`run_provider`] (in [`session_provider`]) for provider plugins that
+//!   wrap an [`animus_session_backend::SessionBackend`] CLI wrapper instead
+//!   of implementing the provider trait directly.
 //!
 //! Each entrypoint runs the stdio loop indefinitely: it reads
 //! newline-delimited JSON-RPC frames from stdin, dispatches to the trait, and
 //! writes responses to stdout. The loop returns cleanly on stdin EOF and
 //! bubbles fatal errors up via [`anyhow::Result`].
 //!
-//! # Scope (v0.1.0)
+//! # Scope
 //!
-//! This crate intentionally has a small surface — the wire loop and the
-//! lifecycle helpers. It does **not** ship session-management helpers (e.g.
-//! event channels, `SessionRequest` builders, child-process plumbing). Those
-//! belong to a separate `animus-session-backend` crate that providers may
-//! depend on in the future. For v0.1.0, provider implementations handle their
-//! own session lifecycle inside
+//! This crate has a small surface — the wire loop and the lifecycle helpers.
+//! Provider implementations that own their session lifecycle handle it inside
 //! [`ProviderBackend::run_agent`](animus_provider_protocol::ProviderBackend::run_agent)
 //! and return the aggregated [`AgentRunResponse`] when the run completes.
+//! Providers that wrap an `animus-session-backend` CLI wrapper can instead
+//! use the [`session_provider`] module, which drives the wrapped
+//! [`SessionEvent`](animus_session_backend::SessionEvent) stream and handles
+//! streaming notifications, exit-code aggregation, and host control-id
+//! cancel translation on their behalf.
 //!
 //! # See also
 //!
@@ -56,6 +60,9 @@
 #![warn(missing_docs)]
 
 pub mod log;
+pub mod session_provider;
+
+pub use session_provider::{run_provider, ProviderInfo, SessionBackendProvider};
 
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
@@ -89,7 +96,7 @@ use animus_trigger_protocol::{
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Stdout};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, Stdout};
 use tokio::sync::Mutex;
 
 // =====================================================================
@@ -1282,7 +1289,10 @@ fn install_log_forwarder(stdout: Arc<Mutex<Stdout>>) {
     });
 }
 
-async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<Stdout>>, frame: &T) {
+pub(crate) async fn write_frame<T: serde::Serialize, W: AsyncWrite + Unpin>(
+    stdout: &Arc<Mutex<W>>,
+    frame: &T,
+) {
     if let Ok(mut payload) = serde_json::to_string(frame) {
         payload.push('\n');
         let mut guard = stdout.lock().await;
@@ -1319,7 +1329,7 @@ pub(crate) fn print_manifest_and_exit(info: &PluginInfo, capabilities: &PluginCa
     std::process::exit(0);
 }
 
-fn refuse_terminal_stdin(plugin_name: &str) {
+pub(crate) fn refuse_terminal_stdin(plugin_name: &str) {
     if io::stdin().is_terminal() {
         eprintln!("{plugin_name} is a STDIO plugin; pipe JSON-RPC on stdin or pass --manifest");
         std::process::exit(2);

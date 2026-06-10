@@ -16,9 +16,10 @@ animus-provider-protocol = { path = "../animus-provider-protocol", version = "0.
 animus-trigger-protocol = { path = "../animus-trigger-protocol", version = "0.1.12" }
 animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.12" }
 animus-transport-protocol = { path = "../animus-transport-protocol", version = "0.1.12" }
+animus-session-backend = { path = "../animus-session-backend", version = "0.1.13" }
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["time"] }
 anyhow.workspace = true
 async-trait.workspace = true
 futures-core.workspace = true
