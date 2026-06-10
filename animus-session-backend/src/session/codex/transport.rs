@@ -141,6 +141,160 @@ fn codex_reasoning_effort_already_set(args: &[String]) -> bool {
     false
 }
 
+/// Encode a string as a TOML basic string (double-quoted, with `\`, `"`,
+/// and control characters escaped) for use inside a Codex `-c` override
+/// value, which Codex parses as TOML.
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\u{c}' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            ch if (ch as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", ch as u32)),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Encode a TOML key, quoting it when it is not a bare key
+/// (`A-Za-z0-9_-`).
+fn toml_key(name: &str) -> String {
+    let bare = !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+    if bare {
+        name.to_string()
+    } else {
+        toml_string(name)
+    }
+}
+
+/// Encode a JSON object of string values as a TOML inline table
+/// (`{KEY="v", K2="v2"}`). Non-string values are skipped.
+fn toml_inline_table(map: &serde_json::Map<String, serde_json::Value>) -> String {
+    let entries: Vec<String> = map
+        .iter()
+        .filter_map(|(key, value)| {
+            value
+                .as_str()
+                .map(|text| format!("{}={}", toml_key(key), toml_string(text)))
+        })
+        .collect();
+    format!("{{{}}}", entries.join(", "))
+}
+
+/// Encode a JSON array of strings as a TOML array (`["a", "b"]`).
+/// Non-string elements are skipped.
+fn toml_string_array(values: &[serde_json::Value]) -> String {
+    let entries: Vec<String> = values
+        .iter()
+        .filter_map(|value| value.as_str().map(toml_string))
+        .collect();
+    format!("[{}]", entries.join(", "))
+}
+
+/// Build the `-c` override values for one canonical `mcp_servers` entry.
+/// Remote entries (`url`) become `mcp_servers.<name>.url` plus
+/// `http_headers`; stdio entries become `command`/`args`/`env`. Entries
+/// with neither `url` nor `command` yield nothing.
+fn codex_mcp_overrides_for_server(name: &str, entry: &serde_json::Value) -> Vec<String> {
+    let key = toml_key(name);
+    let mut overrides = Vec::new();
+    if let Some(url) = entry.get("url").and_then(serde_json::Value::as_str) {
+        overrides.push(format!("mcp_servers.{key}.url={}", toml_string(url)));
+        if let Some(headers) = entry
+            .get("headers")
+            .and_then(serde_json::Value::as_object)
+            .filter(|headers| !headers.is_empty())
+        {
+            overrides.push(format!(
+                "mcp_servers.{key}.http_headers={}",
+                toml_inline_table(headers)
+            ));
+        }
+        return overrides;
+    }
+    let Some(command) = entry.get("command").and_then(serde_json::Value::as_str) else {
+        return overrides;
+    };
+    overrides.push(format!("mcp_servers.{key}.command={}", toml_string(command)));
+    if let Some(args) = entry
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .filter(|args| !args.is_empty())
+    {
+        overrides.push(format!(
+            "mcp_servers.{key}.args={}",
+            toml_string_array(args)
+        ));
+    }
+    if let Some(env) = entry
+        .get("env")
+        .and_then(serde_json::Value::as_object)
+        .filter(|env| !env.is_empty())
+    {
+        overrides.push(format!(
+            "mcp_servers.{key}.env={}",
+            toml_inline_table(env)
+        ));
+    }
+    overrides
+}
+
+/// Apply `mcp_servers` to a Codex argv as per-server
+/// `-c mcp_servers.<name>.*=<toml>` overrides, inserted into the options
+/// region (after `exec`, or at the front when absent) for the same reason
+/// as the reasoning-effort override. Servers are emitted in name order so
+/// the argv is deterministic. A caller-supplied `mcp_servers.*` override
+/// (e.g. from a runtime contract) suppresses injection entirely, and an
+/// absent or empty `mcp_servers` object leaves the argv untouched.
+fn apply_codex_mcp_servers(args: &mut Vec<String>, request: &SessionRequest) {
+    let Some(servers) = request.mcp_servers_object() else {
+        return;
+    };
+    if codex_mcp_servers_already_set(args) {
+        return;
+    }
+    let mut names: Vec<&String> = servers.keys().collect();
+    names.sort();
+    let mut insert_at = args
+        .iter()
+        .position(|token| token == "exec")
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    for name in names {
+        for override_value in codex_mcp_overrides_for_server(name, &servers[name]) {
+            args.insert(insert_at, "-c".to_string());
+            args.insert(insert_at + 1, override_value);
+            insert_at += 2;
+        }
+    }
+}
+
+/// True when the argv already carries a `-c mcp_servers.*` override (so a
+/// caller-provided MCP configuration is never clobbered).
+fn codex_mcp_servers_already_set(args: &[String]) -> bool {
+    let mut index = 0usize;
+    while index + 1 < args.len() {
+        if matches!(args[index].as_str(), "-c" | "--config")
+            && args[index + 1].starts_with("mcp_servers.")
+        {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
 pub(crate) fn codex_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
@@ -149,6 +303,7 @@ pub(crate) fn codex_invocation_for_request(
         parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
     {
         apply_codex_reasoning_effort(&mut invocation.args, request);
+        apply_codex_mcp_servers(&mut invocation.args, request);
         return Ok(invocation);
     }
 
@@ -190,6 +345,7 @@ pub(crate) fn codex_invocation_for_request(
     args.push(request.prompt.clone());
 
     apply_codex_reasoning_effort(&mut args, request);
+    apply_codex_mcp_servers(&mut args, request);
 
     let mut invocation = LaunchInvocation {
         command: "codex".to_string(),
@@ -361,7 +517,7 @@ mod reasoning_effort_tests {
     use serde_json::json;
     use std::path::PathBuf;
 
-    fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
+    pub(super) fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
         SessionRequest {
             tool: "codex".into(),
             model: "gpt-5-codex".into(),
@@ -369,6 +525,7 @@ mod reasoning_effort_tests {
             cwd: PathBuf::from("."),
             project_root: None,
             mcp_endpoint: None,
+            mcp_servers: None,
             permission_mode: None,
             timeout_secs: None,
             env_vars: Vec::new(),
@@ -494,6 +651,153 @@ mod reasoning_effort_tests {
         assert_eq!(
             override_value(&invocation.args, "model_reasoning_effort"),
             Some("\"high\"".to_string()),
+        );
+    }
+}
+
+#[cfg(test)]
+mod mcp_servers_tests {
+    use super::*;
+    use serde_json::json;
+
+    use super::reasoning_effort_tests::request_with_extras;
+
+    fn request_with_mcp_servers(mcp_servers: Option<serde_json::Value>) -> SessionRequest {
+        let mut request = request_with_extras(json!({}));
+        request.mcp_servers = mcp_servers;
+        request
+    }
+
+    fn config_overrides(args: &[String]) -> Vec<String> {
+        let mut overrides = Vec::new();
+        let mut index = 0usize;
+        while index + 1 < args.len() {
+            if matches!(args[index].as_str(), "-c" | "--config")
+                && args[index + 1].starts_with("mcp_servers.")
+            {
+                overrides.push(args[index + 1].clone());
+            }
+            index += 1;
+        }
+        overrides
+    }
+
+    #[test]
+    fn stdio_server_emits_command_args_and_env_overrides() {
+        let request = request_with_mcp_servers(Some(json!({
+            "docs": {
+                "command": "npx",
+                "args": ["-y", "docs-mcp"],
+                "env": { "TOKEN": "t" }
+            }
+        })));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            config_overrides(&invocation.args),
+            vec![
+                "mcp_servers.docs.command=\"npx\"".to_string(),
+                "mcp_servers.docs.args=[\"-y\", \"docs-mcp\"]".to_string(),
+                "mcp_servers.docs.env={TOKEN=\"t\"}".to_string(),
+            ],
+        );
+        assert_eq!(invocation.args.first().map(String::as_str), Some("exec"));
+        assert_eq!(invocation.args.get(1).map(String::as_str), Some("-c"));
+        assert_eq!(invocation.args.last().map(String::as_str), Some("say hi"));
+    }
+
+    #[test]
+    fn remote_server_emits_url_and_http_headers_overrides() {
+        let request = request_with_mcp_servers(Some(json!({
+            "linear": {
+                "type": "http",
+                "url": "https://mcp.linear.app/mcp",
+                "headers": { "Authorization": "Bearer x" }
+            }
+        })));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            config_overrides(&invocation.args),
+            vec![
+                "mcp_servers.linear.url=\"https://mcp.linear.app/mcp\"".to_string(),
+                "mcp_servers.linear.http_headers={Authorization=\"Bearer x\"}".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn servers_are_emitted_in_name_order_with_toml_escaping() {
+        let request = request_with_mcp_servers(Some(json!({
+            "b server": { "command": "run \"it\"\\now" },
+            "a": { "command": "tool" }
+        })));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            config_overrides(&invocation.args),
+            vec![
+                "mcp_servers.a.command=\"tool\"".to_string(),
+                "mcp_servers.\"b server\".command=\"run \\\"it\\\"\\\\now\"".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn absent_servers_leave_argv_byte_identical() {
+        let baseline =
+            codex_invocation_for_request(&request_with_mcp_servers(None), None).expect("invocation");
+        assert!(config_overrides(&baseline.args).is_empty());
+    }
+
+    #[test]
+    fn empty_servers_object_leaves_argv_byte_identical() {
+        let baseline =
+            codex_invocation_for_request(&request_with_mcp_servers(None), None).expect("invocation");
+        let empty = codex_invocation_for_request(&request_with_mcp_servers(Some(json!({}))), None)
+            .expect("invocation");
+        assert_eq!(baseline.args, empty.args);
+    }
+
+    #[test]
+    fn caller_supplied_mcp_override_suppresses_injection() {
+        let mut request = request_with_extras(json!({
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "codex",
+                        "args": [
+                            "exec",
+                            "-c",
+                            "mcp_servers.docs.command=\"custom\"",
+                            "say hi"
+                        ]
+                    }
+                }
+            }
+        }));
+        request.mcp_servers = Some(json!({ "docs": { "command": "npx" } }));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            config_overrides(&invocation.args),
+            vec!["mcp_servers.docs.command=\"custom\"".to_string()],
+        );
+    }
+
+    #[test]
+    fn runtime_contract_path_gets_overrides_when_absent() {
+        let mut request = request_with_extras(json!({
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "codex",
+                        "args": ["exec", "say hi"]
+                    }
+                }
+            }
+        }));
+        request.mcp_servers = Some(json!({ "docs": { "command": "npx" } }));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            config_overrides(&invocation.args),
+            vec!["mcp_servers.docs.command=\"npx\"".to_string()],
         );
     }
 }

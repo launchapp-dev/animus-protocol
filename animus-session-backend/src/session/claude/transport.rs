@@ -120,6 +120,29 @@ fn apply_claude_reasoning_effort(args: &mut Vec<String>, request: &SessionReques
     args.insert(1, level.to_string());
 }
 
+/// Apply `mcp_servers` to a Claude argv as `--mcp-config <json>` plus
+/// `--strict-mcp-config`. The Claude CLI accepts inline JSON strings for
+/// `--mcp-config`; the payload is the canonical `.mcp.json` document
+/// (`{"mcpServers": {...}}`) passed as a single argv element.
+///
+/// The flag triple is inserted at the FRONT of the argv (the options
+/// region) for the same reason as `--effort`: the trailing token is not
+/// guaranteed to be the prompt. A caller-supplied `--mcp-config` (e.g.
+/// inside a runtime-contract launch block) wins, and an absent or empty
+/// `mcp_servers` object leaves the argv untouched.
+fn apply_claude_mcp_config(args: &mut Vec<String>, request: &SessionRequest) {
+    let Some(servers) = request.mcp_servers_object() else {
+        return;
+    };
+    if args.iter().any(|arg| arg == "--mcp-config") {
+        return;
+    }
+    let config = serde_json::json!({ "mcpServers": servers });
+    args.insert(0, "--mcp-config".to_string());
+    args.insert(1, config.to_string());
+    args.insert(2, "--strict-mcp-config".to_string());
+}
+
 pub(crate) fn claude_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
@@ -128,6 +151,7 @@ pub(crate) fn claude_invocation_for_request(
         parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
     {
         apply_claude_reasoning_effort(&mut invocation.args, request);
+        apply_claude_mcp_config(&mut invocation.args, request);
         if !invocation.env.contains_key("ANTHROPIC_BASE_URL") {
             if let Some((base_url, api_key)) = resolve_anthropic_compatible_provider(&request.model)
             {
@@ -212,6 +236,7 @@ pub(crate) fn claude_invocation_for_request(
     }
     args.push(request.prompt.clone());
     apply_claude_reasoning_effort(&mut args, request);
+    apply_claude_mcp_config(&mut args, request);
     let mut invocation = LaunchInvocation {
         command: "claude".to_string(),
         args,
@@ -435,7 +460,7 @@ mod reasoning_effort_tests {
     use serde_json::json;
     use std::path::PathBuf;
 
-    fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
+    pub(super) fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
         SessionRequest {
             tool: "claude".into(),
             model: "claude-sonnet-4-6".into(),
@@ -443,6 +468,7 @@ mod reasoning_effort_tests {
             cwd: PathBuf::from("."),
             project_root: None,
             mcp_endpoint: None,
+            mcp_servers: None,
             permission_mode: None,
             timeout_secs: None,
             env_vars: Vec::new(),
@@ -551,5 +577,109 @@ mod reasoning_effort_tests {
             invocation.args
         );
         assert_eq!(effort_value(&invocation.args), Some("high".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod mcp_config_tests {
+    use super::*;
+    use serde_json::json;
+
+    use super::reasoning_effort_tests::request_with_extras;
+
+    fn request_with_mcp_servers(mcp_servers: Option<serde_json::Value>) -> SessionRequest {
+        let mut request = request_with_extras(json!({}));
+        request.mcp_servers = mcp_servers;
+        request
+    }
+
+    fn mcp_config_value(args: &[String]) -> Option<serde_json::Value> {
+        args.iter()
+            .position(|arg| arg == "--mcp-config")
+            .and_then(|index| args.get(index + 1))
+            .map(|raw| serde_json::from_str(raw).expect("inline --mcp-config JSON"))
+    }
+
+    #[test]
+    fn present_servers_inject_inline_mcp_config_and_strict_flag() {
+        let servers = json!({
+            "docs": {
+                "command": "npx",
+                "args": ["-y", "docs-mcp"],
+                "env": { "TOKEN": "t" }
+            },
+            "linear": { "type": "sse", "url": "https://mcp.linear.app/sse" }
+        });
+        let request = request_with_mcp_servers(Some(servers.clone()));
+        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+
+        assert_eq!(invocation.args[0], "--mcp-config");
+        assert_eq!(invocation.args[2], "--strict-mcp-config");
+        assert_eq!(
+            mcp_config_value(&invocation.args),
+            Some(json!({ "mcpServers": servers })),
+        );
+        assert_eq!(invocation.args.last().map(String::as_str), Some("say hi"));
+    }
+
+    #[test]
+    fn absent_servers_leave_argv_byte_identical() {
+        let baseline = claude_invocation_for_request(&request_with_mcp_servers(None), None)
+            .expect("invocation");
+        assert!(!baseline.args.iter().any(|arg| arg == "--mcp-config"));
+        assert!(!baseline.args.iter().any(|arg| arg == "--strict-mcp-config"));
+    }
+
+    #[test]
+    fn empty_servers_object_leaves_argv_byte_identical() {
+        let baseline = claude_invocation_for_request(&request_with_mcp_servers(None), None)
+            .expect("invocation");
+        let empty = claude_invocation_for_request(&request_with_mcp_servers(Some(json!({}))), None)
+            .expect("invocation");
+        assert_eq!(baseline.args, empty.args);
+    }
+
+    #[test]
+    fn runtime_contract_mcp_config_is_not_duplicated() {
+        let mut request = request_with_extras(json!({
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "--mcp-config", "{\"mcpServers\":{}}", "say hi"]
+                    }
+                }
+            }
+        }));
+        request.mcp_servers = Some(json!({ "docs": { "command": "npx" } }));
+        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let count = invocation
+            .args
+            .iter()
+            .filter(|arg| *arg == "--mcp-config")
+            .count();
+        assert_eq!(count, 1, "caller-supplied --mcp-config must win");
+    }
+
+    #[test]
+    fn runtime_contract_path_gets_mcp_config_when_absent() {
+        let mut request = request_with_extras(json!({
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "say hi"]
+                    }
+                }
+            }
+        }));
+        let servers = json!({ "docs": { "command": "npx" } });
+        request.mcp_servers = Some(servers.clone());
+        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            mcp_config_value(&invocation.args),
+            Some(json!({ "mcpServers": servers })),
+        );
+        assert!(invocation.args.iter().any(|a| a == "--strict-mcp-config"));
     }
 }

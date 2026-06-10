@@ -41,6 +41,18 @@ pub(crate) fn parse_opencode_json_line(line: &str) -> Vec<SessionEvent> {
             let body = value.get("tool_result").unwrap_or(&value);
             return vec![tool_result_to_event(body)];
         }
+        Some("error") => {
+            let message = value
+                .pointer("/error/data/message")
+                .and_then(Value::as_str)
+                .or_else(|| value.pointer("/error/name").and_then(Value::as_str))
+                .unwrap_or("opencode reported an error")
+                .to_string();
+            return vec![SessionEvent::Error {
+                message,
+                recoverable: false,
+            }];
+        }
         _ => {}
     }
 
@@ -245,5 +257,22 @@ mod tests {
         let events = parse_opencode_json_line(line);
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], SessionEvent::TextDelta { .. }));
+    }
+
+    #[test]
+    fn opencode_parser_emits_error_for_error_frame() {
+        let line = r#"{"type":"error","timestamp":1781030806746,"sessionID":"ses_1","error":{"name":"UnknownError","data":{"message":"Model not found: gpt-5.2/."}}}"#;
+        let events = parse_opencode_json_line(line);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SessionEvent::Error {
+                message,
+                recoverable,
+            } => {
+                assert_eq!(message, "Model not found: gpt-5.2/.");
+                assert!(!recoverable);
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 }

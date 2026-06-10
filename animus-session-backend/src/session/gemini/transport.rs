@@ -100,6 +100,18 @@ pub(crate) fn gemini_invocation_for_request(
         args.push(session_id);
     }
 
+    if let Some(permission_mode) = request
+        .permission_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--approval-mode".to_string());
+        args.push(permission_mode.to_string());
+    } else {
+        args.push("--yolo".to_string());
+    }
+
     if !request.model.trim().is_empty() {
         args.push("--model".to_string());
         args.push(request.model.clone());
@@ -122,6 +134,76 @@ pub(crate) fn gemini_invocation_for_request(
     Ok(invocation)
 }
 
+/// Build the settings JSON injected via `GEMINI_CLI_SYSTEM_SETTINGS_PATH`
+/// when the request carries MCP servers, or `None` when `mcp_servers` is
+/// absent or empty. The Gemini CLI settings `mcpServers` schema accepts
+/// the canonical entries unchanged (`command`/`args`/`env` for stdio,
+/// `type` + `url` + `headers` for remote), so they pass through as-is.
+/// `existing` is the current system settings document (if any); its keys
+/// are preserved, with the per-run servers shallow-merged into
+/// `mcpServers` (per-run entries win on name conflicts).
+fn gemini_settings_with_mcp_servers(
+    request: &SessionRequest,
+    existing: Option<&str>,
+) -> Option<String> {
+    let servers = request.mcp_servers_object()?;
+    let mut settings = existing
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut merged = settings
+        .get("mcpServers")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (name, entry) in servers {
+        merged.insert(name.clone(), entry.clone());
+    }
+    settings.insert(
+        "mcpServers".to_string(),
+        serde_json::Value::Object(merged),
+    );
+    Some(serde_json::Value::Object(settings).to_string())
+}
+
+/// Resolve the system settings file the Gemini CLI would load for this
+/// run: an explicit `GEMINI_CLI_SYSTEM_SETTINGS_PATH` from the request's
+/// env vars or the parent environment, falling back to the CLI's
+/// platform default.
+fn gemini_system_settings_path(request: &SessionRequest) -> std::path::PathBuf {
+    if let Some((_, value)) = request
+        .env_vars
+        .iter()
+        .find(|(key, _)| key == "GEMINI_CLI_SYSTEM_SETTINGS_PATH")
+    {
+        return std::path::PathBuf::from(value);
+    }
+    if let Ok(value) = std::env::var("GEMINI_CLI_SYSTEM_SETTINGS_PATH") {
+        return std::path::PathBuf::from(value);
+    }
+    if cfg!(target_os = "macos") {
+        std::path::PathBuf::from("/Library/Application Support/GeminiCli/settings.json")
+    } else if cfg!(windows) {
+        std::path::PathBuf::from("C:\\ProgramData\\gemini-cli\\settings.json")
+    } else {
+        std::path::PathBuf::from("/etc/gemini-cli/settings.json")
+    }
+}
+
+/// Write the per-run settings file carrying `mcp_servers` (merged with any
+/// existing system settings) into the OS temp dir and return its path, or
+/// `None` when the request carries no MCP servers. The file is removed
+/// once the session finishes.
+fn write_gemini_mcp_settings(request: &SessionRequest) -> Result<Option<std::path::PathBuf>> {
+    let existing = std::fs::read_to_string(gemini_system_settings_path(request)).ok();
+    let Some(settings) = gemini_settings_with_mcp_servers(request, existing.as_deref()) else {
+        return Ok(None);
+    };
+    let path = std::env::temp_dir().join(format!("animus-gemini-settings-{}.json", Uuid::new_v4()));
+    std::fs::write(&path, settings)?;
+    Ok(Some(path))
+}
+
 async fn run_gemini_session(
     request: SessionRequest,
     invocation: LaunchInvocation,
@@ -131,6 +213,7 @@ async fn run_gemini_session(
     backend: String,
     session_id: Option<String>,
 ) -> Result<()> {
+    let mcp_settings_path = write_gemini_mcp_settings(&request)?;
     let mut command = Command::new(&invocation.command);
     command
         .args(&invocation.args)
@@ -150,6 +233,9 @@ async fn run_gemini_session(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(path) = &mcp_settings_path {
+        command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", path);
+    }
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn()?;
@@ -236,10 +322,16 @@ async fn run_gemini_session(
         }
     });
 
-    let exit_code = wait_for_gemini_child(&mut child, request.timeout_secs, &mut cancel_rx).await?;
+    let exit_result = wait_for_gemini_child(&mut child, request.timeout_secs, &mut cancel_rx).await;
 
     let _ = stdout_task.await;
     let _ = stderr_task.await;
+
+    if let Some(path) = &mcp_settings_path {
+        let _ = std::fs::remove_file(path);
+    }
+
+    let exit_code = exit_result?;
 
     let _ = event_tx.send(SessionEvent::Finished { exit_code }).await;
 
@@ -330,4 +422,92 @@ fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
         .lock()
         .ok()
         .and_then(|mut registry| registry.remove(session_id))
+}
+
+#[cfg(test)]
+mod mcp_settings_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn request_with_mcp_servers(mcp_servers: Option<serde_json::Value>) -> SessionRequest {
+        SessionRequest {
+            tool: "gemini".into(),
+            model: "gemini-2.5-pro".into(),
+            prompt: "say hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({}),
+        }
+    }
+
+    #[test]
+    fn present_servers_produce_settings_document() {
+        let servers = json!({
+            "docs": {
+                "command": "npx",
+                "args": ["-y", "docs-mcp"],
+                "env": { "TOKEN": "t" }
+            },
+            "linear": { "type": "http", "url": "https://mcp.linear.app/mcp" }
+        });
+        let request = request_with_mcp_servers(Some(servers.clone()));
+        let settings = gemini_settings_with_mcp_servers(&request, None).expect("settings");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&settings).expect("json"),
+            json!({ "mcpServers": servers }),
+        );
+    }
+
+    #[test]
+    fn existing_system_settings_are_preserved_and_merged() {
+        let request = request_with_mcp_servers(Some(json!({
+            "docs": { "command": "npx" }
+        })));
+        let existing = r#"{"tools":{"sandbox":false},"mcpServers":{"corp":{"url":"https://corp.example/mcp"}}}"#;
+        let settings =
+            gemini_settings_with_mcp_servers(&request, Some(existing)).expect("settings");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&settings).expect("json"),
+            json!({
+                "tools": { "sandbox": false },
+                "mcpServers": {
+                    "corp": { "url": "https://corp.example/mcp" },
+                    "docs": { "command": "npx" }
+                }
+            }),
+        );
+    }
+
+    #[test]
+    fn absent_servers_produce_no_settings() {
+        let request = request_with_mcp_servers(None);
+        assert!(gemini_settings_with_mcp_servers(&request, None).is_none());
+        assert!(write_gemini_mcp_settings(&request)
+            .expect("no settings write")
+            .is_none());
+    }
+
+    #[test]
+    fn empty_servers_object_produces_no_settings() {
+        let request = request_with_mcp_servers(Some(json!({})));
+        assert!(gemini_settings_with_mcp_servers(&request, None).is_none());
+    }
+
+    #[test]
+    fn argv_is_unchanged_by_mcp_servers() {
+        let baseline = gemini_invocation_for_request(&request_with_mcp_servers(None), None)
+            .expect("invocation");
+        let with_servers = gemini_invocation_for_request(
+            &request_with_mcp_servers(Some(json!({ "docs": { "command": "npx" } }))),
+            None,
+        )
+        .expect("invocation");
+        assert_eq!(baseline.args, with_servers.args);
+    }
 }
