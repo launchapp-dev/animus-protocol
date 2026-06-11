@@ -57,6 +57,22 @@ pub enum SessionEvent {
         /// Metadata payload.
         metadata: Value,
     },
+    /// Agent requested a human-in-the-loop interaction (approval or
+    /// question) and is waiting on a decision. Added in v0.1.13.5.
+    InteractionRequested {
+        /// Interaction id in the kernel interactions store.
+        id: String,
+        /// Interaction kind: `"approval"` or `"question"`.
+        kind: String,
+    },
+    /// A previously requested interaction was resolved. Added in v0.1.13.5.
+    InteractionResolved {
+        /// Interaction id in the kernel interactions store.
+        id: String,
+        /// Resolution: `"allow"` / `"deny"` for approvals, or a short
+        /// answer summary for questions.
+        decision: String,
+    },
     /// Error encountered mid-run.
     Error {
         /// Error message.

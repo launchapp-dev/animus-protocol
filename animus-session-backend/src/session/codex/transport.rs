@@ -19,9 +19,12 @@ use crate::session::{
 use super::parser::CodexParser;
 
 pub(crate) async fn start_codex_session(
-    request: SessionRequest,
+    mut request: SessionRequest,
     resume_session_id: Option<&str>,
 ) -> Result<SessionRun> {
+    // Codex has no exec-mode approval hook, so approvals ride a voluntary
+    // prompt preamble directing the agent to the Animus MCP tools.
+    crate::session::apply_approvals_prompt_preamble(&mut request);
     let invocation = codex_invocation_for_request(&request, resume_session_id)?;
     let control_session_id = Uuid::new_v4().to_string();
     let control_session_id_for_run = control_session_id.clone();
@@ -749,6 +752,37 @@ mod reasoning_effort_tests {
             override_value(&invocation.args, "model_reasoning_effort"),
             Some("\"high\"".to_string()),
         );
+    }
+}
+
+#[cfg(test)]
+mod approvals_preamble_tests {
+    use super::*;
+    use serde_json::json;
+
+    use super::reasoning_effort_tests::request_with_extras;
+
+    #[test]
+    fn approvals_preamble_reaches_argv_prompt() {
+        let mut request = request_with_extras(json!({ "approvals": true }));
+        crate::session::apply_approvals_prompt_preamble(&mut request);
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        let prompt = invocation.args.last().expect("prompt token");
+        assert!(
+            prompt.starts_with(crate::session::APPROVALS_PROMPT_PREAMBLE),
+            "the preamble must lead the prompt; got: {prompt}"
+        );
+        assert!(prompt.ends_with("say hi"));
+    }
+
+    #[test]
+    fn absent_approvals_leaves_invocation_byte_identical() {
+        let mut request = request_with_extras(json!({}));
+        crate::session::apply_approvals_prompt_preamble(&mut request);
+        let baseline = codex_invocation_for_request(&request_with_extras(json!({})), None)
+            .expect("invocation");
+        let unchanged = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(baseline.args, unchanged.args);
     }
 }
 

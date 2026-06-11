@@ -77,8 +77,9 @@ use animus_plugin_protocol::{
     PluginManifest, RpcError, RpcNotification, RpcRequest, RpcResponse, PROTOCOL_VERSION,
 };
 use animus_provider_protocol::{
-    AgentCancelRequest, AgentNotification, AgentResumeRequest, AgentRunRequest, NotificationSink,
-    ProviderBackend, METHOD_AGENT_CANCEL, METHOD_AGENT_RESUME, METHOD_AGENT_RUN,
+    AgentCancelRequest, AgentNotification, AgentRespondParams, AgentResumeRequest, AgentRunRequest,
+    NotificationSink, ProviderBackend, METHOD_AGENT_CANCEL, METHOD_AGENT_RESPOND,
+    METHOD_AGENT_RESUME, METHOD_AGENT_RUN,
 };
 use animus_subject_protocol::{
     BackendError as SubjectBackendError, SubjectBackend, SubjectFilter, SubjectId, SubjectPatch,
@@ -840,6 +841,22 @@ async fn handle_provider_request<P: ProviderBackend + 'static>(
                     id,
                     json!({ "session_id": params.session_id, "cancelled": true }),
                 ),
+                Err(error) => RpcResponse::err(id, error.into()),
+            })
+        }
+        METHOD_AGENT_RESPOND => {
+            let params = match deserialize_params::<AgentRespondParams>(request.params, false) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_response(&stdout, &RpcResponse::err(id, error)).await;
+                    return;
+                }
+            };
+            Some(match backend.respond_interaction(params).await {
+                Ok(reply) => match serde_json::to_value(reply) {
+                    Ok(value) => RpcResponse::ok(id, value),
+                    Err(error) => RpcResponse::err(id, encoding_error("agent/respond", error)),
+                },
                 Err(error) => RpcResponse::err(id, error.into()),
             })
         }

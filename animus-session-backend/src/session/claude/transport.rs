@@ -126,6 +126,54 @@ fn apply_claude_reasoning_effort(args: &mut Vec<String>, request: &SessionReques
     args.insert(1, level.to_string());
 }
 
+/// The flattened MCP tool name the Claude CLI uses for the kernel's
+/// `animus.agent.request_approval` tool, passed to
+/// `--permission-prompt-tool` when approvals are enabled.
+///
+/// Claude Code exposes tools from an `--mcp-config` server as
+/// `mcp__<server>__<tool>`, sanitizing each segment by replacing every
+/// character outside `[a-zA-Z0-9_-]` with `_` (and trimming leading or
+/// trailing `_`); its permission-rule grammar only accepts
+/// `mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+`, so dots can never survive.
+/// The kernel injects the server under the name `animus` with tool id
+/// `animus.agent.request_approval`, which therefore flattens to this
+/// value (dot -> underscore). Verified against the claude CLI 2.1.172
+/// binary; if a future CLI changes the mangling, this constant is the
+/// single place to fix.
+pub const CLAUDE_PERMISSION_PROMPT_TOOL: &str = "mcp__animus__animus_agent_request_approval";
+
+/// Apply the approvals hook to a Claude argv as
+/// `--permission-prompt-tool mcp__animus__animus_agent_request_approval`
+/// when the request carries `extras.approvals == true`.
+///
+/// Approvals also strip any `--dangerously-skip-permissions` token from
+/// the argv: that flag bypasses Claude's permission checks entirely, so
+/// leaving it alongside the hook would make approvals silently
+/// ineffective (the tool would never be consulted). The default argv
+/// builder adds it whenever no `permission_mode` is set, and a
+/// runtime-contract launch block may carry it too — approvals are
+/// "enforced, not voluntary", so they win over both.
+///
+/// The flag pair is inserted at the FRONT of the argv (the options
+/// region) for the same reason as `--effort`: the trailing token is not
+/// guaranteed to be the prompt. A caller-supplied
+/// `--permission-prompt-tool` (e.g. inside a runtime-contract launch
+/// block) wins, and a request without approvals leaves the argv
+/// byte-identical. Claude is the only transport with this native hook —
+/// it does NOT additionally receive the voluntary prompt preamble used
+/// by codex/gemini/opencode, to avoid double-prompting.
+fn apply_claude_permission_prompt_tool(args: &mut Vec<String>, request: &SessionRequest) {
+    if !crate::session::approvals_enabled(request) {
+        return;
+    }
+    args.retain(|arg| arg != "--dangerously-skip-permissions");
+    if args.iter().any(|arg| arg == "--permission-prompt-tool") {
+        return;
+    }
+    args.insert(0, "--permission-prompt-tool".to_string());
+    args.insert(1, CLAUDE_PERMISSION_PROMPT_TOOL.to_string());
+}
+
 /// Write the per-run `--mcp-config` document (`{"mcpServers": {...}}`)
 /// into a user-only (`0600`) temp file and return its path, or `None`
 /// when the request carries no MCP servers. The config goes through a
@@ -176,6 +224,7 @@ pub(crate) fn claude_invocation_for_request(
     {
         apply_claude_reasoning_effort(&mut invocation.args, request);
         apply_claude_mcp_config(&mut invocation.args, mcp_config_path);
+        apply_claude_permission_prompt_tool(&mut invocation.args, request);
         if !invocation.env.contains_key("ANTHROPIC_BASE_URL") {
             if let Some((base_url, api_key)) = resolve_anthropic_compatible_provider(&request.model)
             {
@@ -261,6 +310,7 @@ pub(crate) fn claude_invocation_for_request(
     args.push(request.prompt.clone());
     apply_claude_reasoning_effort(&mut args, request);
     apply_claude_mcp_config(&mut args, mcp_config_path);
+    apply_claude_permission_prompt_tool(&mut args, request);
     let mut invocation = LaunchInvocation {
         command: "claude".to_string(),
         args,
@@ -601,6 +651,189 @@ mod reasoning_effort_tests {
             invocation.args
         );
         assert_eq!(effort_value(&invocation.args), Some("high".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod approvals_hook_tests {
+    use super::*;
+    use serde_json::json;
+
+    use super::reasoning_effort_tests::request_with_extras;
+
+    fn permission_prompt_tool(args: &[String]) -> Option<String> {
+        args.iter()
+            .position(|arg| arg == "--permission-prompt-tool")
+            .and_then(|index| args.get(index + 1).cloned())
+    }
+
+    #[test]
+    fn approvals_true_injects_permission_prompt_tool_flag() {
+        let request = request_with_extras(json!({ "approvals": true }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some(CLAUDE_PERMISSION_PROMPT_TOOL.to_string()),
+        );
+        assert_eq!(
+            invocation.args.last().map(String::as_str),
+            Some("say hi"),
+            "the prompt must stay the final argv token"
+        );
+        assert!(
+            !invocation
+                .args
+                .iter()
+                .any(|arg| arg.contains("Human-in-the-loop")),
+            "claude gets the native hook only — never the voluntary prompt preamble"
+        );
+        assert!(
+            !invocation
+                .args
+                .iter()
+                .any(|arg| arg == "--dangerously-skip-permissions"),
+            "approvals must strip --dangerously-skip-permissions or the hook is never consulted"
+        );
+    }
+
+    #[test]
+    fn absent_approvals_keeps_default_skip_permissions_flag() {
+        let invocation = claude_invocation_for_request(&request_with_extras(json!({})), None, None)
+            .expect("invocation");
+        assert!(
+            invocation
+                .args
+                .iter()
+                .any(|arg| arg == "--dangerously-skip-permissions"),
+            "without approvals the default headless argv keeps its skip-permissions behavior"
+        );
+    }
+
+    #[test]
+    fn approvals_strip_contract_supplied_skip_permissions() {
+        let request = request_with_extras(json!({
+            "approvals": true,
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": [
+                            "--print",
+                            "--dangerously-skip-permissions",
+                            "say hi"
+                        ]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert!(
+            !invocation
+                .args
+                .iter()
+                .any(|arg| arg == "--dangerously-skip-permissions"),
+            "approvals are enforced — a contract-supplied skip flag must not defeat the hook"
+        );
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some(CLAUDE_PERMISSION_PROMPT_TOOL.to_string()),
+        );
+    }
+
+    #[test]
+    fn absent_approvals_leaves_argv_byte_identical() {
+        let baseline = claude_invocation_for_request(&request_with_extras(json!({})), None, None)
+            .expect("invocation");
+        let disabled = claude_invocation_for_request(
+            &request_with_extras(json!({ "approvals": false })),
+            None,
+            None,
+        )
+        .expect("invocation");
+        assert_eq!(baseline.args, disabled.args);
+        assert!(permission_prompt_tool(&baseline.args).is_none());
+    }
+
+    #[test]
+    fn caller_supplied_permission_prompt_tool_is_not_clobbered() {
+        let request = request_with_extras(json!({
+            "approvals": true,
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": [
+                            "--print",
+                            "--permission-prompt-tool", "mcp__custom__gate",
+                            "say hi"
+                        ]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        let count = invocation
+            .args
+            .iter()
+            .filter(|arg| *arg == "--permission-prompt-tool")
+            .count();
+        assert_eq!(count, 1, "caller-supplied hook must win");
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some("mcp__custom__gate".to_string()),
+        );
+    }
+
+    #[test]
+    fn runtime_contract_path_gets_hook_when_absent() {
+        let request = request_with_extras(json!({
+            "approvals": true,
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "say hi"]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some(CLAUDE_PERMISSION_PROMPT_TOOL.to_string()),
+        );
+    }
+
+    #[test]
+    fn stdin_contract_does_not_split_trailing_flag_pair() {
+        let request = request_with_extras(json!({
+            "approvals": true,
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "--output-format", "stream-json"],
+                        "prompt_via_stdin": true
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        let fmt_pos = invocation
+            .args
+            .iter()
+            .position(|a| a == "--output-format")
+            .expect("--output-format present");
+        assert_eq!(
+            invocation.args.get(fmt_pos + 1).map(String::as_str),
+            Some("stream-json"),
+            "--output-format must stay adjacent to its value; got args: {:?}",
+            invocation.args
+        );
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some(CLAUDE_PERMISSION_PROMPT_TOOL.to_string()),
+        );
     }
 }
 

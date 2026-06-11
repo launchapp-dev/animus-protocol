@@ -17,9 +17,12 @@ use crate::session::{
 use super::parser::parse_opencode_json_line;
 
 pub(crate) async fn start_opencode_session(
-    request: SessionRequest,
+    mut request: SessionRequest,
     resume_session_id: Option<String>,
 ) -> Result<SessionRun> {
+    // opencode has no headless approval hook, so approvals ride a voluntary
+    // prompt preamble directing the agent to the Animus MCP tools.
+    crate::session::apply_approvals_prompt_preamble(&mut request);
     let invocation = opencode_invocation_for_request(&request, resume_session_id.as_deref())?;
     let control_session_id = Uuid::new_v4().to_string();
     let control_session_id_for_run = control_session_id.clone();
@@ -339,6 +342,52 @@ fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
         .lock()
         .ok()
         .and_then(|mut registry| registry.remove(session_id))
+}
+
+#[cfg(test)]
+mod approvals_preamble_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
+        SessionRequest {
+            tool: "opencode".into(),
+            model: "anthropic/claude-sonnet-4-5".into(),
+            prompt: "say hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras,
+        }
+    }
+
+    #[test]
+    fn approvals_preamble_reaches_argv_prompt() {
+        let mut request = request_with_extras(json!({ "approvals": true }));
+        crate::session::apply_approvals_prompt_preamble(&mut request);
+        let invocation = opencode_invocation_for_request(&request, None).expect("invocation");
+        let prompt = invocation.args.last().expect("prompt token");
+        assert!(
+            prompt.starts_with(crate::session::APPROVALS_PROMPT_PREAMBLE),
+            "the preamble must lead the prompt; got: {prompt}"
+        );
+        assert!(prompt.ends_with("say hi"));
+    }
+
+    #[test]
+    fn absent_approvals_leaves_invocation_byte_identical() {
+        let mut request = request_with_extras(json!({}));
+        crate::session::apply_approvals_prompt_preamble(&mut request);
+        let baseline = opencode_invocation_for_request(&request_with_extras(json!({})), None)
+            .expect("invocation");
+        let unchanged = opencode_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(baseline.args, unchanged.args);
+    }
 }
 
 #[cfg(test)]

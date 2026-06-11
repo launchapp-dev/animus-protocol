@@ -12,7 +12,8 @@
 //!
 //! - JSON-RPC stdin/stdout loop and lifecycle (initialize, $/ping, shutdown, exit)
 //! - `--manifest` and `--help` CLI shortcuts
-//! - `agent/run`, `agent/resume`, `agent/cancel`, `health/check` dispatch
+//! - `agent/run`, `agent/resume`, `agent/cancel`, `agent/respond`,
+//!   `health/check` dispatch
 //! - Streaming `agent/output`, `agent/thinking`, `agent/toolCall`,
 //!   `agent/toolResult`, `agent/error` notifications back to the host as the
 //!   wrapped `SessionBackend` emits events
@@ -63,23 +64,29 @@ pub struct ProviderInfo {
 }
 
 impl ProviderInfo {
-    fn manifest(&self) -> PluginManifest {
+    fn manifest(&self, extra_capabilities: &[String]) -> PluginManifest {
+        let mut capabilities = vec![
+            "agent/run".to_string(),
+            "agent/cancel".to_string(),
+            "agent/resume".to_string(),
+            "health/check".to_string(),
+        ];
+        for capability in extra_capabilities {
+            if !capabilities.contains(capability) {
+                capabilities.push(capability.clone());
+            }
+        }
         PluginManifest {
             name: self.plugin_name.to_string(),
             version: self.plugin_version.to_string(),
             plugin_kind: animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
             description: self.description.to_string(),
             protocol_version: PROTOCOL_VERSION.to_string(),
-            capabilities: vec![
-                "agent/run".to_string(),
-                "agent/cancel".to_string(),
-                "agent/resume".to_string(),
-                "health/check".to_string(),
-            ],
+            capabilities,
         }
     }
 
-    fn initialize_result(&self) -> InitializeResult {
+    fn initialize_result(&self, extra_capabilities: &[String]) -> InitializeResult {
         InitializeResult {
             protocol_version: PROTOCOL_VERSION.to_string(),
             plugin_info: PluginInfo {
@@ -88,8 +95,8 @@ impl ProviderInfo {
                 plugin_kind: animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
                 description: Some(self.description.to_string()),
             },
-            capabilities: PluginCapabilities {
-                methods: vec![
+            capabilities: {
+                let mut methods = vec![
                     "agent/run".to_string(),
                     "agent/cancel".to_string(),
                     // TODO(codex-p2): the built-in SessionBackend adapters
@@ -101,12 +108,20 @@ impl ProviderInfo {
                     // before returning, or gate this capability per backend.
                     "agent/resume".to_string(),
                     "health/check".to_string(),
-                ],
-                streaming: true,
-                progress: false,
-                cancellation: true,
-                subject_kinds: Vec::new(),
-                mcp_tools: Vec::new(),
+                ];
+                for capability in extra_capabilities {
+                    if !methods.contains(capability) {
+                        methods.push(capability.clone());
+                    }
+                }
+                PluginCapabilities {
+                    methods,
+                    streaming: true,
+                    progress: false,
+                    cancellation: true,
+                    subject_kinds: Vec::new(),
+                    mcp_tools: Vec::new(),
+                }
             },
         }
     }
@@ -193,6 +208,35 @@ pub trait ProviderBackend: Send + Sync + 'static {
 
     /// Cancel an in-flight session by the backend's own session id.
     async fn cancel(&self, session_id: &str) -> SessionResult<()>;
+
+    /// Deliver a human response (`agent/respond`, host → plugin) for an
+    /// interaction this backend previously surfaced via a
+    /// [`SessionEvent::InteractionRequested`] emission. Returns whether the
+    /// backend accepted and forwarded the response to its native channel.
+    /// Added in v0.1.13.5.
+    ///
+    /// The default implementation is inert — it returns `false` so existing
+    /// providers compile and behave exactly as before. Hosts only route
+    /// `agent/respond` to plugins that declare the `"agent/respond"`
+    /// capability, which the runtime never advertises on a backend's behalf.
+    async fn respond_interaction(
+        &self,
+        _params: animus_provider_protocol::AgentRespondParams,
+    ) -> SessionResult<bool> {
+        Ok(false)
+    }
+
+    /// Extra capability strings merged (deduplicated) into the plugin
+    /// manifest and `initialize` result on top of the runtime's standard
+    /// `agent/run` / `agent/cancel` / `agent/resume` / `health/check` set.
+    /// A backend that overrides [`ProviderBackend::respond_interaction`]
+    /// should return
+    /// [`animus_provider_protocol::CAPABILITY_AGENT_RESPOND`] here so
+    /// hosts route `agent/respond` to it. Added in v0.1.13.5; the default
+    /// declares nothing, leaving existing manifests byte-identical.
+    fn extra_capabilities(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Adapter that wraps any `Arc<dyn SessionBackend>` so the runtime can drive it.
@@ -228,7 +272,7 @@ impl ProviderBackend for SessionBackendProvider {
 /// Stable entrypoint for a session-backend-wrapping provider plugin. Call
 /// this from `#[tokio::main]`.
 pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) -> Result<()> {
-    handle_cli_args(&info);
+    handle_cli_args(&info, &backend.extra_capabilities());
     refuse_terminal_stdin(info.plugin_name);
 
     let backend = Arc::new(backend);
@@ -281,10 +325,10 @@ async fn park_pending_cancel_route(request: &RpcRequest, cancel_routes: &CancelR
         .insert(control.to_string(), CancelRoute::Pending);
 }
 
-fn handle_cli_args(info: &ProviderInfo) {
+fn handle_cli_args(info: &ProviderInfo, extra_capabilities: &[String]) {
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
-            "--manifest" | "-m" => print_manifest_and_exit(info),
+            "--manifest" | "-m" => print_manifest_and_exit(info, extra_capabilities),
             "--help" | "-h" => {
                 eprintln!(
                     "{} {} — STDIO provider plugin for Animus",
@@ -306,12 +350,12 @@ fn handle_cli_args(info: &ProviderInfo) {
     }
 }
 
-fn print_manifest_and_exit(info: &ProviderInfo) -> ! {
+fn print_manifest_and_exit(info: &ProviderInfo, extra_capabilities: &[String]) -> ! {
     let mut stdout = io::stdout().lock();
     let _ = writeln!(
         stdout,
         "{}",
-        serde_json::to_string(&info.manifest()).expect("serialize manifest")
+        serde_json::to_string(&info.manifest(extra_capabilities)).expect("serialize manifest")
     );
     let _ = stdout.flush();
     std::process::exit(0);
@@ -326,17 +370,19 @@ async fn handle_request<P: ProviderBackend, W: AsyncWrite + Unpin + Send + 'stat
 ) {
     let id = request.id.clone();
     let response = match request.method.as_str() {
-        "initialize" => Some(match serde_json::to_value(info.initialize_result()) {
-            Ok(value) => RpcResponse::ok(id, value),
-            Err(error) => RpcResponse::err(
-                id,
-                RpcError {
-                    code: error_codes::INTERNAL_ERROR,
-                    message: format!("failed to encode initialize result: {error}"),
-                    data: None,
-                },
-            ),
-        }),
+        "initialize" => Some(
+            match serde_json::to_value(info.initialize_result(&backend.extra_capabilities())) {
+                Ok(value) => RpcResponse::ok(id, value),
+                Err(error) => RpcResponse::err(
+                    id,
+                    RpcError {
+                        code: error_codes::INTERNAL_ERROR,
+                        message: format!("failed to encode initialize result: {error}"),
+                        data: None,
+                    },
+                ),
+            },
+        ),
         "initialized" => None,
         "$/ping" => Some(RpcResponse::ok(id, json!({}))),
         "health/check" => Some(
@@ -399,6 +445,7 @@ async fn handle_request<P: ProviderBackend, W: AsyncWrite + Unpin + Send + 'stat
             )
             .await,
         ),
+        "agent/respond" => Some(handle_agent_respond(id, request.params, backend.clone()).await),
         "shutdown" => Some(RpcResponse::ok(id, json!({}))),
         "exit" => std::process::exit(0),
         other if other.starts_with("$/") => None,
@@ -642,6 +689,27 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                     fatal_error = true;
                 }
             }
+            SessionEvent::InteractionRequested { id, kind } => {
+                send_notification(
+                    &stdout,
+                    animus_provider_protocol::NOTIFICATION_AGENT_INTERACTION_REQUESTED,
+                    json!({
+                        "interaction_id": id,
+                        "session_id": session_id.as_deref().unwrap_or(&fallback_session_id),
+                        "kind": kind,
+                        "payload": {},
+                    }),
+                )
+                .await;
+                metadata.push(json!({
+                    "interaction_requested": { "id": id, "kind": kind },
+                }));
+            }
+            SessionEvent::InteractionResolved { id, decision } => {
+                metadata.push(json!({
+                    "interaction_resolved": { "id": id, "decision": decision },
+                }));
+            }
             SessionEvent::Finished { exit_code: code } => {
                 exit_code = code;
                 break;
@@ -719,6 +787,35 @@ async fn handle_agent_cancel<P: ProviderBackend>(
             RpcError {
                 code: error_codes::INTERNAL_ERROR,
                 message: format!("{} agent/cancel failed: {error}", info.plugin_name),
+                data: None,
+            },
+        ),
+    }
+}
+
+/// Dispatch an `agent/respond` request (host → plugin) to
+/// [`ProviderBackend::respond_interaction`] and reply `{ accepted }`.
+/// Backends that don't override the trait method reply
+/// `{ accepted: false }` — inert, never an error.
+async fn handle_agent_respond<P: ProviderBackend>(
+    id: Option<Value>,
+    params: Option<Value>,
+    backend: Arc<P>,
+) -> RpcResponse {
+    let params = match params.ok_or_else(|| invalid_params("missing params for agent/respond")) {
+        Ok(p) => match serde_json::from_value::<animus_provider_protocol::AgentRespondParams>(p) {
+            Ok(parsed) => parsed,
+            Err(error) => return invalid_rpc(id, format!("invalid agent/respond params: {error}")),
+        },
+        Err(error) => return RpcResponse::err(id, error),
+    };
+    match backend.respond_interaction(params).await {
+        Ok(accepted) => RpcResponse::ok(id, json!({ "accepted": accepted })),
+        Err(error) => RpcResponse::err(
+            id,
+            RpcError {
+                code: error_codes::INTERNAL_ERROR,
+                message: format!("agent/respond failed: {error}"),
                 data: None,
             },
         ),
@@ -1581,5 +1678,169 @@ mod run_loop_tests {
             .await
             .unwrap();
         run_task.await.expect("run task must finish");
+    }
+
+    #[tokio::test]
+    async fn interaction_events_stream_notification_and_land_in_metadata() {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        tx.send(SessionEvent::InteractionRequested {
+            id: "int-1".to_string(),
+            kind: "approval".to_string(),
+        })
+        .await
+        .unwrap();
+        tx.send(SessionEvent::InteractionResolved {
+            id: "int-1".to_string(),
+            decision: "allow".to_string(),
+        })
+        .await
+        .unwrap();
+        tx.send(SessionEvent::Finished { exit_code: Some(0) })
+            .await
+            .unwrap();
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
+        let sink = capture_sink();
+
+        let response = handle_agent_run(
+            Some(json!(1)),
+            Some(json!({ "prompt": "hi", "cwd": "/tmp" })),
+            &provider_info(),
+            backend,
+            sink.clone(),
+            None,
+            fresh_routes(),
+        )
+        .await;
+
+        let frames = captured_frames(&sink).await;
+        let interaction_frame = frames
+            .iter()
+            .find(|frame| {
+                frame.get("method").and_then(Value::as_str)
+                    == Some(animus_provider_protocol::NOTIFICATION_AGENT_INTERACTION_REQUESTED)
+            })
+            .expect("an agent/interactionRequested notification must be streamed");
+        let params = &interaction_frame["params"];
+        assert_eq!(params["interaction_id"], "int-1");
+        assert_eq!(params["session_id"], "inner-1");
+        assert_eq!(params["kind"], "approval");
+        assert!(
+            params["payload"].is_object(),
+            "the wire payload object must be present even when empty"
+        );
+
+        let result = response
+            .result
+            .expect("agent/run must return a result payload");
+        let metadata = result["metadata"]
+            .as_array()
+            .expect("result metadata array");
+        assert!(
+            metadata
+                .iter()
+                .any(|entry| entry["interaction_requested"]["id"] == "int-1"),
+            "the requested interaction must land in result metadata"
+        );
+        assert!(
+            metadata.iter().any(|entry| {
+                entry["interaction_resolved"]["id"] == "int-1"
+                    && entry["interaction_resolved"]["decision"] == "allow"
+            }),
+            "the resolved interaction must land in result metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_respond_default_backend_reports_not_accepted() {
+        let (_tx, rx) = mpsc::channel::<SessionEvent>(8);
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
+
+        let response = handle_agent_respond(
+            Some(json!(1)),
+            Some(json!({
+                "interaction_id": "int-1",
+                "session_id": "inner-1",
+                "response": { "decision": "allow" }
+            })),
+            backend.clone(),
+        )
+        .await;
+        assert!(
+            response.error.is_none(),
+            "the default respond impl must reply, not error: {:?}",
+            response.error
+        );
+        assert_eq!(
+            response.result.expect("agent/respond result")["accepted"],
+            json!(false),
+            "a backend without a native channel must report accepted=false"
+        );
+
+        let invalid = handle_agent_respond(
+            Some(json!(2)),
+            Some(json!({ "interaction_id": "int-1" })),
+            backend,
+        )
+        .await;
+        assert!(
+            invalid.error.is_some(),
+            "missing required fields must surface an invalid-params error"
+        );
+    }
+
+    #[tokio::test]
+    async fn extra_capabilities_are_advertised_and_default_stays_inert() {
+        let info = provider_info();
+        let standard = ["agent/run", "agent/cancel", "agent/resume", "health/check"];
+
+        let (_tx, rx) = mpsc::channel::<SessionEvent>(8);
+        let default_backend = TestBackend::with_run(test_run("inner-1", rx));
+        let default_manifest = info.manifest(&default_backend.extra_capabilities());
+        assert_eq!(
+            default_manifest.capabilities, standard,
+            "a backend without overrides must not grow new capabilities"
+        );
+
+        struct RespondingBackend;
+
+        #[async_trait]
+        impl ProviderBackend for RespondingBackend {
+            async fn start(
+                &self,
+                _request: SessionRequest,
+                _resume_session: Option<&str>,
+            ) -> SessionResult<SessionRun> {
+                unreachable!("manifest test never starts a session")
+            }
+
+            async fn cancel(&self, _session_id: &str) -> SessionResult<()> {
+                Ok(())
+            }
+
+            fn extra_capabilities(&self) -> Vec<String> {
+                vec![
+                    animus_provider_protocol::CAPABILITY_AGENT_RESPOND.to_string(),
+                    // Duplicate of a standard method: must be deduplicated.
+                    "agent/run".to_string(),
+                ]
+            }
+        }
+
+        let manifest = info.manifest(&RespondingBackend.extra_capabilities());
+        let mut expected: Vec<String> = standard.iter().map(ToString::to_string).collect();
+        expected.push(animus_provider_protocol::CAPABILITY_AGENT_RESPOND.to_string());
+        assert_eq!(
+            manifest.capabilities, expected,
+            "extra capabilities must be appended once, after the standard set"
+        );
+
+        let initialize = info.initialize_result(&RespondingBackend.extra_capabilities());
+        assert!(
+            initialize
+                .capabilities
+                .methods
+                .contains(&animus_provider_protocol::CAPABILITY_AGENT_RESPOND.to_string()),
+            "initialize must advertise the same extra capabilities as the manifest"
+        );
     }
 }
