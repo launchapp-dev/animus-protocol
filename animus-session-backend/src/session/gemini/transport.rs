@@ -159,10 +159,7 @@ fn gemini_settings_with_mcp_servers(
     for (name, entry) in servers {
         merged.insert(name.clone(), entry.clone());
     }
-    settings.insert(
-        "mcpServers".to_string(),
-        serde_json::Value::Object(merged),
-    );
+    settings.insert("mcpServers".to_string(), serde_json::Value::Object(merged));
     Some(serde_json::Value::Object(settings).to_string())
 }
 

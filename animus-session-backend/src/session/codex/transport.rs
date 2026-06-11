@@ -226,7 +226,10 @@ fn codex_mcp_overrides_for_server(name: &str, entry: &serde_json::Value) -> Vec<
     let Some(command) = entry.get("command").and_then(serde_json::Value::as_str) else {
         return overrides;
     };
-    overrides.push(format!("mcp_servers.{key}.command={}", toml_string(command)));
+    overrides.push(format!(
+        "mcp_servers.{key}.command={}",
+        toml_string(command)
+    ));
     if let Some(args) = entry
         .get("args")
         .and_then(serde_json::Value::as_array)
@@ -242,10 +245,7 @@ fn codex_mcp_overrides_for_server(name: &str, entry: &serde_json::Value) -> Vec<
         .and_then(serde_json::Value::as_object)
         .filter(|env| !env.is_empty())
     {
-        overrides.push(format!(
-            "mcp_servers.{key}.env={}",
-            toml_inline_table(env)
-        ));
+        overrides.push(format!("mcp_servers.{key}.env={}", toml_inline_table(env)));
     }
     overrides
 }
@@ -742,15 +742,15 @@ mod mcp_servers_tests {
 
     #[test]
     fn absent_servers_leave_argv_byte_identical() {
-        let baseline =
-            codex_invocation_for_request(&request_with_mcp_servers(None), None).expect("invocation");
+        let baseline = codex_invocation_for_request(&request_with_mcp_servers(None), None)
+            .expect("invocation");
         assert!(config_overrides(&baseline.args).is_empty());
     }
 
     #[test]
     fn empty_servers_object_leaves_argv_byte_identical() {
-        let baseline =
-            codex_invocation_for_request(&request_with_mcp_servers(None), None).expect("invocation");
+        let baseline = codex_invocation_for_request(&request_with_mcp_servers(None), None)
+            .expect("invocation");
         let empty = codex_invocation_for_request(&request_with_mcp_servers(Some(json!({}))), None)
             .expect("invocation");
         assert_eq!(baseline.args, empty.args);
