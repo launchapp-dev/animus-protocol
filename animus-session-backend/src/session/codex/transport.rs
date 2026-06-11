@@ -324,16 +324,21 @@ fn codex_mcp_overrides_for_server(
 /// so the argv is deterministic. A caller-supplied `mcp_servers.*`
 /// override (e.g. from a runtime contract) suppresses injection entirely,
 /// and an absent or empty `mcp_servers` object changes nothing.
+///
+/// Stdio env values are forwarded by NAME through the codex process
+/// environment, so two servers declaring the same env key with different
+/// values cannot both be satisfied; that case fails validation instead of
+/// silently routing one server's secret to the other.
 fn apply_codex_mcp_servers(
     args: &mut Vec<String>,
     env: &mut std::collections::BTreeMap<String, String>,
     request: &SessionRequest,
-) {
+) -> Result<()> {
     let Some(servers) = request.mcp_servers_object() else {
-        return;
+        return Ok(());
     };
     if codex_mcp_servers_already_set(args) {
-        return;
+        return Ok(());
     }
     let mut names: Vec<&String> = servers.keys().collect();
     names.sort();
@@ -350,9 +355,19 @@ fn apply_codex_mcp_servers(
             insert_at += 2;
         }
         for (env_name, value) in env_pairs {
+            if let Some(existing) = env.get(&env_name) {
+                if existing != &value {
+                    return Err(Error::ValidationFailed(format!(
+                        "mcp_servers env key '{env_name}' is declared by multiple servers \
+                         with different values; the codex transport forwards env values by \
+                         name and cannot route both"
+                    )));
+                }
+            }
             env.insert(env_name, value);
         }
     }
+    Ok(())
 }
 
 /// True when the argv already carries a `-c mcp_servers.*` override (so a
@@ -378,7 +393,7 @@ pub(crate) fn codex_invocation_for_request(
         parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
     {
         apply_codex_reasoning_effort(&mut invocation.args, request);
-        apply_codex_mcp_servers(&mut invocation.args, &mut invocation.env, request);
+        apply_codex_mcp_servers(&mut invocation.args, &mut invocation.env, request)?;
         return Ok(invocation);
     }
 
@@ -427,7 +442,7 @@ pub(crate) fn codex_invocation_for_request(
         env: Default::default(),
         prompt_via_stdin: false,
     };
-    apply_codex_mcp_servers(&mut invocation.args, &mut invocation.env, request);
+    apply_codex_mcp_servers(&mut invocation.args, &mut invocation.env, request)?;
     ensure_flag(&mut invocation.args, "--json", 1);
 
     Ok(invocation)
@@ -843,6 +858,33 @@ mod mcp_servers_tests {
                 "mcp_servers.a.command=\"tool\"".to_string(),
                 "mcp_servers.\"b server\".command=\"run \\\"it\\\"\\\\now\"".to_string(),
             ],
+        );
+    }
+
+    #[test]
+    fn conflicting_stdio_env_keys_fail_validation() {
+        let request = request_with_mcp_servers(Some(json!({
+            "a": { "command": "tool-a", "env": { "TOKEN": "secret-a" } },
+            "b": { "command": "tool-b", "env": { "TOKEN": "secret-b" } }
+        })));
+        let error = codex_invocation_for_request(&request, None)
+            .expect_err("same env key with different values must fail validation");
+        assert!(
+            error.to_string().contains("TOKEN"),
+            "error must name the conflicting key: {error}"
+        );
+    }
+
+    #[test]
+    fn same_valued_env_keys_across_servers_are_allowed() {
+        let request = request_with_mcp_servers(Some(json!({
+            "a": { "command": "tool-a", "env": { "TOKEN": "shared" } },
+            "b": { "command": "tool-b", "env": { "TOKEN": "shared" } }
+        })));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            invocation.env.get("TOKEN").map(String::as_str),
+            Some("shared")
         );
     }
 

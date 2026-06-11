@@ -92,6 +92,13 @@ impl ProviderInfo {
                 methods: vec![
                     "agent/run".to_string(),
                     "agent/cancel".to_string(),
+                    // TODO(codex-p2): the built-in SessionBackend adapters
+                    // return a generated control id from start_*_session, not
+                    // the CLI's own transcript id; a host that persists that
+                    // id and replays it via agent/resume reaches the CLI with
+                    // an id it does not recognize unless a Started event
+                    // upgraded it first. Surface the real CLI session id
+                    // before returning, or gate this capability per backend.
                     "agent/resume".to_string(),
                     "health/check".to_string(),
                 ],
