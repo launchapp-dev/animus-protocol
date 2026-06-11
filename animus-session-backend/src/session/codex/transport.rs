@@ -203,7 +203,10 @@ fn toml_string_array(values: &[serde_json::Value]) -> String {
 }
 
 /// Deterministic env-var name carrying one HTTP header value to the
-/// Codex CLI through the child environment instead of argv.
+/// Codex CLI through the child environment instead of argv. The name ends
+/// in an FNV-1a hash of the raw `(server, header)` pair so distinct names
+/// that sanitize identically (e.g. `foo-bar` vs `foo_bar`) can never
+/// collide and route one server's secret to another.
 fn header_env_var_name(server: &str, header: &str) -> String {
     let sanitize = |raw: &str| -> String {
         raw.chars()
@@ -216,7 +219,22 @@ fn header_env_var_name(server: &str, header: &str) -> String {
             })
             .collect()
     };
-    format!("ANIMUS_MCP_{}_HDR_{}", sanitize(server), sanitize(header))
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in server
+        .as_bytes()
+        .iter()
+        .chain(std::iter::once(&0u8))
+        .chain(header.as_bytes())
+    {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!(
+        "ANIMUS_MCP_{}_HDR_{}_{:08X}",
+        sanitize(server),
+        sanitize(header),
+        hash as u32
+    )
 }
 
 /// Build the `-c` override values plus the secret-carrying env pairs for
@@ -781,24 +799,34 @@ mod mcp_servers_tests {
             }
         })));
         let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        let env_name = header_env_var_name("linear", "Authorization");
+        assert!(env_name.starts_with("ANIMUS_MCP_LINEAR_HDR_AUTHORIZATION_"));
         assert_eq!(
             config_overrides(&invocation.args),
             vec![
                 "mcp_servers.linear.url=\"https://mcp.linear.app/mcp\"".to_string(),
-                "mcp_servers.linear.env_http_headers={Authorization=\"ANIMUS_MCP_LINEAR_HDR_AUTHORIZATION\"}"
-                    .to_string(),
+                format!("mcp_servers.linear.env_http_headers={{Authorization=\"{env_name}\"}}"),
             ],
         );
         assert_eq!(
-            invocation
-                .env
-                .get("ANIMUS_MCP_LINEAR_HDR_AUTHORIZATION")
-                .map(String::as_str),
+            invocation.env.get(&env_name).map(String::as_str),
             Some("Bearer x"),
         );
         assert!(
             !invocation.args.iter().any(|arg| arg.contains("Bearer x")),
             "secret header values must never reach argv"
+        );
+    }
+
+    #[test]
+    fn header_env_names_do_not_collide_after_sanitization() {
+        let a = header_env_var_name("foo-bar", "Authorization");
+        let b = header_env_var_name("foo_bar", "Authorization");
+        assert_ne!(a, b, "sanitized-identical names must stay distinct");
+        assert_eq!(
+            a,
+            header_env_var_name("foo-bar", "Authorization"),
+            "names must be deterministic"
         );
     }
 

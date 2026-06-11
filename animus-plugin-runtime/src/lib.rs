@@ -1279,7 +1279,7 @@ pub(crate) async fn write_notification(
 /// forwarder task that drains queued notifications onto the shared stdout.
 /// Called by each `*_main` entrypoint before entering the read loop so the
 /// [`log::info!`], [`log::warn!`], [`log::error!`], etc. macros become live.
-fn install_log_forwarder(stdout: Arc<Mutex<Stdout>>) {
+pub(crate) fn install_log_forwarder(stdout: Arc<Mutex<Stdout>>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<RpcNotification>();
     log::install_emitter(tx);
     tokio::spawn(async move {

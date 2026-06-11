@@ -45,7 +45,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncWrite, BufReader};
 use tokio::sync::Mutex;
 
-use crate::{read_frame, refuse_terminal_stdin, write_frame};
+use crate::{install_log_forwarder, read_frame, refuse_terminal_stdin, write_frame};
 
 /// Manifest + identity for a provider plugin.
 #[derive(Debug, Clone)]
@@ -226,6 +226,7 @@ pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) ->
 
     let backend = Arc::new(backend);
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    install_log_forwarder(stdout.clone());
     let cancel_routes: CancelRoutes = Arc::new(Mutex::new(HashMap::new()));
     let mut reader = BufReader::new(tokio::io::stdin());
     let mut handlers = tokio::task::JoinSet::new();
@@ -493,6 +494,21 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
         // carries one upgrades the route below.
     }
     let backend_label = run.selected_backend.clone();
+    // The provider protocol types streaming-notification and result
+    // `session_id`s as plain strings, so a backend that never learns its
+    // own id must not serialize `null`. Fall back to the host-minted
+    // control id (which cancel routing already understands) or, failing
+    // that, a process-unique synthetic id.
+    static FALLBACK_SESSION_SEQ: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    let fallback_session_id = control_session_id.clone().unwrap_or_else(|| {
+        format!(
+            "{}-session-{}-{}",
+            info.plugin_name,
+            std::process::id(),
+            FALLBACK_SESSION_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    });
     let mut output = String::new();
     let mut metadata = Vec::<Value>::new();
     let mut tool_calls = Vec::<Value>::new();
@@ -524,7 +540,7 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                 send_notification(
                     &stdout,
                     "agent/output",
-                    json!({ "text": text, "session_id": session_id, "final": false }),
+                    json!({ "text": text, "session_id": session_id.as_deref().unwrap_or(&fallback_session_id), "final": false }),
                 )
                 .await;
                 output.push_str(&text);
@@ -533,7 +549,7 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                 send_notification(
                     &stdout,
                     "agent/output",
-                    json!({ "text": text, "session_id": session_id, "final": true }),
+                    json!({ "text": text, "session_id": session_id.as_deref().unwrap_or(&fallback_session_id), "final": true }),
                 )
                 .await;
                 // Final text is canonical: it replaces accumulated deltas so
@@ -544,7 +560,7 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                 send_notification(
                     &stdout,
                     "agent/thinking",
-                    json!({ "text": text, "session_id": session_id }),
+                    json!({ "text": text, "session_id": session_id.as_deref().unwrap_or(&fallback_session_id) }),
                 )
                 .await;
                 thinking.push(text);
@@ -561,7 +577,7 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                         "name": tool_name,
                         "arguments": arguments,
                         "server": server,
-                        "session_id": session_id,
+                        "session_id": session_id.as_deref().unwrap_or(&fallback_session_id),
                     }),
                 )
                 .await;
@@ -583,7 +599,7 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                         "name": tool_name,
                         "output": tool_output,
                         "success": success,
-                        "session_id": session_id,
+                        "session_id": session_id.as_deref().unwrap_or(&fallback_session_id),
                     }),
                 )
                 .await;
@@ -610,7 +626,7 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                     json!({
                         "message": message,
                         "recoverable": recoverable,
-                        "session_id": session_id,
+                        "session_id": session_id.as_deref().unwrap_or(&fallback_session_id),
                     }),
                 )
                 .await;
@@ -636,7 +652,7 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
 
     let duration_ms = started_at.elapsed().as_millis() as u64;
     let result = json!({
-        "session_id": session_id,
+        "session_id": session_id.as_deref().unwrap_or(&fallback_session_id),
         "exit_code": exit_code.unwrap_or(0),
         "output": output,
         "metadata": metadata,
