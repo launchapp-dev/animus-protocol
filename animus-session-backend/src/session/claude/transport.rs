@@ -22,11 +22,11 @@ pub(crate) async fn start_claude_session(
     request: SessionRequest,
     resume_session_id: Option<String>,
 ) -> Result<SessionRun> {
-    let mcp_config_path = write_claude_mcp_config(&request)?;
+    let mcp_config = write_claude_mcp_config(&request)?;
     let invocation = claude_invocation_for_request(
         &request,
         resume_session_id.as_deref(),
-        mcp_config_path.as_deref(),
+        mcp_config.as_ref().map(|guard| guard.path()),
     )?;
     let control_session_id = Uuid::new_v4().to_string();
     let control_session_id_for_run = control_session_id.clone();
@@ -49,9 +49,7 @@ pub(crate) async fn start_claude_session(
             session_id_for_event,
         )
         .await;
-        if let Some(path) = &mcp_config_path {
-            let _ = std::fs::remove_file(path);
-        }
+        drop(mcp_config);
         if let Err(error) = run_result {
             let _ = event_tx
                 .send(SessionEvent::Error {
@@ -133,15 +131,19 @@ fn apply_claude_reasoning_effort(args: &mut Vec<String>, request: &SessionReques
 /// when the request carries no MCP servers. The config goes through a
 /// private file rather than inline argv JSON so secret-bearing entries
 /// (env tokens, auth headers) never show up in process listings. The
-/// file is removed once the session finishes.
-fn write_claude_mcp_config(request: &SessionRequest) -> Result<Option<std::path::PathBuf>> {
+/// returned guard removes the file when dropped — on session completion
+/// or on any earlier error path.
+fn write_claude_mcp_config(
+    request: &SessionRequest,
+) -> Result<Option<crate::session::PrivateFileGuard>> {
     let Some(servers) = request.mcp_servers_object() else {
         return Ok(None);
     };
     let config = serde_json::json!({ "mcpServers": servers });
     let path = std::env::temp_dir().join(format!("animus-claude-mcp-{}.json", Uuid::new_v4()));
-    crate::session::write_private_file(&path, &config.to_string())?;
-    Ok(Some(path))
+    let guard = crate::session::PrivateFileGuard::new(path);
+    crate::session::write_private_file(guard.path(), &config.to_string())?;
+    Ok(Some(guard))
 }
 
 /// Apply a written MCP config file to a Claude argv as
@@ -633,26 +635,28 @@ mod mcp_config_tests {
             "linear": { "type": "sse", "url": "https://mcp.linear.app/sse" }
         });
         let request = request_with_mcp_servers(Some(servers.clone()));
-        let path = write_claude_mcp_config(&request)
+        let guard = write_claude_mcp_config(&request)
             .expect("write config")
             .expect("config path");
         let invocation =
-            claude_invocation_for_request(&request, None, Some(&path)).expect("invocation");
+            claude_invocation_for_request(&request, None, Some(guard.path())).expect("invocation");
 
         assert_eq!(invocation.args[0], "--mcp-config");
-        assert_eq!(invocation.args[1], path.display().to_string());
+        assert_eq!(invocation.args[1], guard.path().display().to_string());
         assert_eq!(invocation.args[2], "--strict-mcp-config");
         assert_eq!(invocation.args.last().map(String::as_str), Some("say hi"));
 
         let written: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("read config"))
+            serde_json::from_str(&std::fs::read_to_string(guard.path()).expect("read config"))
                 .expect("config JSON");
         assert_eq!(written, json!({ "mcpServers": servers }));
         assert!(
             !invocation.args.iter().any(|arg| arg.contains("TOKEN")),
             "secret values must never reach argv"
         );
-        let _ = std::fs::remove_file(&path);
+        let path = guard.path().to_path_buf();
+        drop(guard);
+        assert!(!path.exists(), "guard drop must remove the config file");
     }
 
     #[cfg(unix)]
@@ -660,15 +664,14 @@ mod mcp_config_tests {
     fn mcp_config_file_is_user_only() {
         use std::os::unix::fs::PermissionsExt;
         let request = request_with_mcp_servers(Some(json!({ "docs": { "command": "npx" } })));
-        let path = write_claude_mcp_config(&request)
+        let guard = write_claude_mcp_config(&request)
             .expect("write config")
             .expect("config path");
-        let mode = std::fs::metadata(&path)
+        let mode = std::fs::metadata(guard.path())
             .expect("metadata")
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -732,16 +735,15 @@ mod mcp_config_tests {
         }));
         let servers = json!({ "docs": { "command": "npx" } });
         request.mcp_servers = Some(servers.clone());
-        let path = write_claude_mcp_config(&request)
+        let guard = write_claude_mcp_config(&request)
             .expect("write config")
             .expect("config path");
         let invocation =
-            claude_invocation_for_request(&request, None, Some(&path)).expect("invocation");
+            claude_invocation_for_request(&request, None, Some(guard.path())).expect("invocation");
         assert_eq!(
             mcp_config_arg(&invocation.args),
-            Some(path.display().to_string()),
+            Some(guard.path().display().to_string()),
         );
         assert!(invocation.args.iter().any(|a| a == "--strict-mcp-config"));
-        let _ = std::fs::remove_file(&path);
     }
 }

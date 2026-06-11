@@ -45,6 +45,29 @@ pub(crate) fn write_private_file(path: &std::path::Path, contents: &str) -> std:
     options.open(path)?.write_all(contents.as_bytes())
 }
 
+/// Owns a secret-bearing temp file and removes it on drop, so every exit
+/// path (spawn failure, invocation-parse error, normal completion) cleans
+/// the file up without per-path bookkeeping.
+pub(crate) struct PrivateFileGuard {
+    path: std::path::PathBuf,
+}
+
+impl PrivateFileGuard {
+    pub(crate) fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for PrivateFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 pub use claude::ClaudeSessionBackend;
 pub use codex::CodexSessionBackend;
 pub use gemini::GeminiSessionBackend;

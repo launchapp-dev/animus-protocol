@@ -202,17 +202,20 @@ fn gemini_system_settings_path(request: &SessionRequest) -> std::path::PathBuf {
 }
 
 /// Write the per-run settings file carrying `mcp_servers` (merged with any
-/// existing system settings) into the OS temp dir and return its path, or
-/// `None` when the request carries no MCP servers. The file is removed
-/// once the session finishes.
-fn write_gemini_mcp_settings(request: &SessionRequest) -> Result<Option<std::path::PathBuf>> {
+/// existing system settings) into the OS temp dir, or return `None` when
+/// the request carries no MCP servers. The returned guard removes the file
+/// when dropped — on session completion or on any earlier error path.
+fn write_gemini_mcp_settings(
+    request: &SessionRequest,
+) -> Result<Option<crate::session::PrivateFileGuard>> {
     let existing = std::fs::read_to_string(gemini_system_settings_path(request)).ok();
     let Some(settings) = gemini_settings_with_mcp_servers(request, existing.as_deref()) else {
         return Ok(None);
     };
     let path = std::env::temp_dir().join(format!("animus-gemini-settings-{}.json", Uuid::new_v4()));
-    crate::session::write_private_file(&path, &settings)?;
-    Ok(Some(path))
+    let guard = crate::session::PrivateFileGuard::new(path);
+    crate::session::write_private_file(guard.path(), &settings)?;
+    Ok(Some(guard))
 }
 
 async fn run_gemini_session(
@@ -224,7 +227,7 @@ async fn run_gemini_session(
     backend: String,
     session_id: Option<String>,
 ) -> Result<()> {
-    let mcp_settings_path = write_gemini_mcp_settings(&request)?;
+    let mcp_settings = write_gemini_mcp_settings(&request)?;
     let mut command = Command::new(&invocation.command);
     command
         .args(&invocation.args)
@@ -244,8 +247,8 @@ async fn run_gemini_session(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(path) = &mcp_settings_path {
-        command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", path);
+    if let Some(guard) = &mcp_settings {
+        command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", guard.path());
     }
     #[cfg(unix)]
     command.process_group(0);
@@ -338,9 +341,7 @@ async fn run_gemini_session(
     let _ = stdout_task.await;
     let _ = stderr_task.await;
 
-    if let Some(path) = &mcp_settings_path {
-        let _ = std::fs::remove_file(path);
-    }
+    drop(mcp_settings);
 
     let exit_code = exit_result?;
 
