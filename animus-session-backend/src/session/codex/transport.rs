@@ -355,14 +355,20 @@ fn apply_codex_mcp_servers(
             insert_at += 2;
         }
         for (env_name, value) in env_pairs {
-            if let Some(existing) = env.get(&env_name) {
-                if existing != &value {
-                    return Err(Error::ValidationFailed(format!(
-                        "mcp_servers env key '{env_name}' is declared by multiple servers \
-                         with different values; the codex transport forwards env values by \
-                         name and cannot route both"
-                    )));
-                }
+            let conflicting = env
+                .get(&env_name)
+                .map(|existing| existing != &value)
+                .unwrap_or(false)
+                || request
+                    .env_vars
+                    .iter()
+                    .any(|(key, existing)| key == &env_name && existing != &value);
+            if conflicting {
+                return Err(Error::ValidationFailed(format!(
+                    "mcp_servers env key '{env_name}' conflicts with another value for the \
+                     same name (another server's declaration or the request env); the codex \
+                     transport forwards env values by name and cannot route both"
+                )));
             }
             env.insert(env_name, value);
         }
@@ -885,6 +891,22 @@ mod mcp_servers_tests {
         assert_eq!(
             invocation.env.get("TOKEN").map(String::as_str),
             Some("shared")
+        );
+    }
+
+    #[test]
+    fn mcp_env_key_conflicting_with_request_env_fails_validation() {
+        let mut request = request_with_mcp_servers(Some(json!({
+            "a": { "command": "tool-a", "env": { "TOKEN": "secret" } }
+        })));
+        request
+            .env_vars
+            .push(("TOKEN".to_string(), "outer".to_string()));
+        let error = codex_invocation_for_request(&request, None)
+            .expect_err("MCP env key conflicting with request env must fail validation");
+        assert!(
+            error.to_string().contains("TOKEN"),
+            "error must name the conflicting key: {error}"
         );
     }
 
