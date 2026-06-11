@@ -148,11 +148,30 @@ pub(crate) fn gemini_invocation_for_request(
     Ok(invocation)
 }
 
+/// Translate one canonical `mcp_servers` entry into the Gemini settings
+/// `mcpServers` shape. Gemini reads `url` as an SSE endpoint and `httpUrl`
+/// as streamable HTTP, so `{"type": "http"}` entries move their `url` to
+/// `httpUrl`; stdio and SSE entries pass through unchanged
+/// (`command`/`args`/`env`, `url` + `headers`).
+fn gemini_mcp_entry(entry: &serde_json::Value) -> serde_json::Value {
+    let Some(object) = entry.as_object() else {
+        return entry.clone();
+    };
+    if object.get("type").and_then(serde_json::Value::as_str) != Some("http") {
+        return entry.clone();
+    }
+    let Some(url) = object.get("url").cloned() else {
+        return entry.clone();
+    };
+    let mut translated = object.clone();
+    translated.remove("url");
+    translated.insert("httpUrl".to_string(), url);
+    serde_json::Value::Object(translated)
+}
+
 /// Build the settings JSON injected via `GEMINI_CLI_SYSTEM_SETTINGS_PATH`
 /// when the request carries MCP servers, or `None` when `mcp_servers` is
-/// absent or empty. The Gemini CLI settings `mcpServers` schema accepts
-/// the canonical entries unchanged (`command`/`args`/`env` for stdio,
-/// `type` + `url` + `headers` for remote), so they pass through as-is.
+/// absent or empty. Entries are translated via [`gemini_mcp_entry`].
 /// `existing` is the current system settings document (if any); its keys
 /// are preserved, with the per-run servers shallow-merged into
 /// `mcpServers` (per-run entries win on name conflicts).
@@ -171,7 +190,7 @@ fn gemini_settings_with_mcp_servers(
         .cloned()
         .unwrap_or_default();
     for (name, entry) in servers {
-        merged.insert(name.clone(), entry.clone());
+        merged.insert(name.clone(), gemini_mcp_entry(entry));
     }
     settings.insert("mcpServers".to_string(), serde_json::Value::Object(merged));
     Some(serde_json::Value::Object(settings).to_string())
@@ -467,6 +486,31 @@ mod mcp_settings_tests {
                 "env": { "TOKEN": "t" }
             },
             "linear": { "type": "http", "url": "https://mcp.linear.app/mcp" }
+        });
+        let request = request_with_mcp_servers(Some(servers));
+        let settings = gemini_settings_with_mcp_servers(&request, None).expect("settings");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&settings).expect("json"),
+            json!({ "mcpServers": {
+                "docs": {
+                    "command": "npx",
+                    "args": ["-y", "docs-mcp"],
+                    "env": { "TOKEN": "t" }
+                },
+                "linear": { "type": "http", "httpUrl": "https://mcp.linear.app/mcp" }
+            }}),
+            "http entries must carry httpUrl (gemini reads url as SSE)",
+        );
+    }
+
+    #[test]
+    fn sse_entries_keep_url_untranslated() {
+        let servers = json!({
+            "linear": {
+                "type": "sse",
+                "url": "https://mcp.linear.app/sse",
+                "headers": { "Authorization": "Bearer x" }
+            }
         });
         let request = request_with_mcp_servers(Some(servers.clone()));
         let settings = gemini_settings_with_mcp_servers(&request, None).expect("settings");
