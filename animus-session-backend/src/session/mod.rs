@@ -30,6 +30,21 @@ pub(crate) async fn kill_and_reap_child(child: &mut tokio::process::Child) {
     let _ = child.wait().await;
 }
 
+/// Write `contents` to a fresh file readable only by the current user
+/// (mode `0600` on Unix) so secret-bearing per-run config is not exposed
+/// to other local users via the shared temp dir.
+pub(crate) fn write_private_file(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(contents.as_bytes())
+}
+
 pub use claude::ClaudeSessionBackend;
 pub use codex::CodexSessionBackend;
 pub use gemini::GeminiSessionBackend;

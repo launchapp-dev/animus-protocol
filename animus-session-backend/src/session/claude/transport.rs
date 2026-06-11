@@ -22,7 +22,12 @@ pub(crate) async fn start_claude_session(
     request: SessionRequest,
     resume_session_id: Option<String>,
 ) -> Result<SessionRun> {
-    let invocation = claude_invocation_for_request(&request, resume_session_id.as_deref())?;
+    let mcp_config_path = write_claude_mcp_config(&request)?;
+    let invocation = claude_invocation_for_request(
+        &request,
+        resume_session_id.as_deref(),
+        mcp_config_path.as_deref(),
+    )?;
     let control_session_id = Uuid::new_v4().to_string();
     let control_session_id_for_run = control_session_id.clone();
     let (event_tx, event_rx) = mpsc::channel(128);
@@ -34,7 +39,7 @@ pub(crate) async fn start_claude_session(
         let backend_label = "claude-native".to_string();
         let session_id_for_event = Some(control_session_id.clone());
 
-        if let Err(error) = run_claude_session(
+        let run_result = run_claude_session(
             request,
             invocation,
             event_tx.clone(),
@@ -43,8 +48,11 @@ pub(crate) async fn start_claude_session(
             backend_label,
             session_id_for_event,
         )
-        .await
-        {
+        .await;
+        if let Some(path) = &mcp_config_path {
+            let _ = std::fs::remove_file(path);
+        }
+        if let Err(error) = run_result {
             let _ = event_tx
                 .send(SessionEvent::Error {
                     message: error.to_string(),
@@ -120,42 +128,52 @@ fn apply_claude_reasoning_effort(args: &mut Vec<String>, request: &SessionReques
     args.insert(1, level.to_string());
 }
 
-/// Apply `mcp_servers` to a Claude argv as `--mcp-config <json>` plus
-/// `--strict-mcp-config`. The Claude CLI accepts inline JSON strings for
-/// `--mcp-config`; the payload is the canonical `.mcp.json` document
-/// (`{"mcpServers": {...}}`) passed as a single argv element.
+/// Write the per-run `--mcp-config` document (`{"mcpServers": {...}}`)
+/// into a user-only (`0600`) temp file and return its path, or `None`
+/// when the request carries no MCP servers. The config goes through a
+/// private file rather than inline argv JSON so secret-bearing entries
+/// (env tokens, auth headers) never show up in process listings. The
+/// file is removed once the session finishes.
+fn write_claude_mcp_config(request: &SessionRequest) -> Result<Option<std::path::PathBuf>> {
+    let Some(servers) = request.mcp_servers_object() else {
+        return Ok(None);
+    };
+    let config = serde_json::json!({ "mcpServers": servers });
+    let path = std::env::temp_dir().join(format!("animus-claude-mcp-{}.json", Uuid::new_v4()));
+    crate::session::write_private_file(&path, &config.to_string())?;
+    Ok(Some(path))
+}
+
+/// Apply a written MCP config file to a Claude argv as
+/// `--mcp-config <path>` plus `--strict-mcp-config`.
 ///
 /// The flag triple is inserted at the FRONT of the argv (the options
 /// region) for the same reason as `--effort`: the trailing token is not
 /// guaranteed to be the prompt. A caller-supplied `--mcp-config` (e.g.
-/// inside a runtime-contract launch block) wins, and an absent or empty
-/// `mcp_servers` object leaves the argv untouched.
-// TODO(codex-p2): secret-bearing `mcp_servers` entries (env tokens, auth
-// headers) are visible in process listings while the run is active because
-// the config rides inline in argv; switch to a 0600 temp file path (the
-// CLI accepts file paths for --mcp-config) like the gemini transport.
-fn apply_claude_mcp_config(args: &mut Vec<String>, request: &SessionRequest) {
-    let Some(servers) = request.mcp_servers_object() else {
+/// inside a runtime-contract launch block) wins, and an absent config
+/// path (no/empty `mcp_servers`) leaves the argv untouched.
+fn apply_claude_mcp_config(args: &mut Vec<String>, mcp_config_path: Option<&std::path::Path>) {
+    let Some(path) = mcp_config_path else {
         return;
     };
     if args.iter().any(|arg| arg == "--mcp-config") {
         return;
     }
-    let config = serde_json::json!({ "mcpServers": servers });
     args.insert(0, "--mcp-config".to_string());
-    args.insert(1, config.to_string());
+    args.insert(1, path.display().to_string());
     args.insert(2, "--strict-mcp-config".to_string());
 }
 
 pub(crate) fn claude_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
+    mcp_config_path: Option<&std::path::Path>,
 ) -> Result<LaunchInvocation> {
     if let Some(mut invocation) =
         parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
     {
         apply_claude_reasoning_effort(&mut invocation.args, request);
-        apply_claude_mcp_config(&mut invocation.args, request);
+        apply_claude_mcp_config(&mut invocation.args, mcp_config_path);
         if !invocation.env.contains_key("ANTHROPIC_BASE_URL") {
             if let Some((base_url, api_key)) = resolve_anthropic_compatible_provider(&request.model)
             {
@@ -240,7 +258,7 @@ pub(crate) fn claude_invocation_for_request(
     }
     args.push(request.prompt.clone());
     apply_claude_reasoning_effort(&mut args, request);
-    apply_claude_mcp_config(&mut args, request);
+    apply_claude_mcp_config(&mut args, mcp_config_path);
     let mut invocation = LaunchInvocation {
         command: "claude".to_string(),
         args,
@@ -489,7 +507,7 @@ mod reasoning_effort_tests {
     #[test]
     fn bare_args_inject_effort_flag() {
         let request = request_with_extras(json!({ "reasoning_effort": "high" }));
-        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
         assert_eq!(effort_value(&invocation.args), Some("high".to_string()));
         assert_eq!(invocation.args.last().map(String::as_str), Some("say hi"));
     }
@@ -497,14 +515,14 @@ mod reasoning_effort_tests {
     #[test]
     fn absent_reasoning_effort_omits_flag() {
         let request = request_with_extras(json!({}));
-        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
         assert!(effort_value(&invocation.args).is_none());
     }
 
     #[test]
     fn unknown_level_is_ignored() {
         let request = request_with_extras(json!({ "reasoning_effort": "ludicrous" }));
-        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
         assert!(effort_value(&invocation.args).is_none());
     }
 
@@ -524,7 +542,7 @@ mod reasoning_effort_tests {
                 }
             }
         }));
-        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
         let count = invocation
             .args
             .iter()
@@ -547,7 +565,7 @@ mod reasoning_effort_tests {
                 }
             }
         }));
-        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
         assert_eq!(effort_value(&invocation.args), Some("medium".to_string()));
     }
 
@@ -568,7 +586,7 @@ mod reasoning_effort_tests {
                 }
             }
         }));
-        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
         let fmt_pos = invocation
             .args
             .iter()
@@ -597,15 +615,15 @@ mod mcp_config_tests {
         request
     }
 
-    fn mcp_config_value(args: &[String]) -> Option<serde_json::Value> {
+    fn mcp_config_arg(args: &[String]) -> Option<String> {
         args.iter()
             .position(|arg| arg == "--mcp-config")
             .and_then(|index| args.get(index + 1))
-            .map(|raw| serde_json::from_str(raw).expect("inline --mcp-config JSON"))
+            .cloned()
     }
 
     #[test]
-    fn present_servers_inject_inline_mcp_config_and_strict_flag() {
+    fn present_servers_inject_mcp_config_file_path_and_strict_flag() {
         let servers = json!({
             "docs": {
                 "command": "npx",
@@ -615,31 +633,64 @@ mod mcp_config_tests {
             "linear": { "type": "sse", "url": "https://mcp.linear.app/sse" }
         });
         let request = request_with_mcp_servers(Some(servers.clone()));
-        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let path = write_claude_mcp_config(&request)
+            .expect("write config")
+            .expect("config path");
+        let invocation =
+            claude_invocation_for_request(&request, None, Some(&path)).expect("invocation");
 
         assert_eq!(invocation.args[0], "--mcp-config");
+        assert_eq!(invocation.args[1], path.display().to_string());
         assert_eq!(invocation.args[2], "--strict-mcp-config");
-        assert_eq!(
-            mcp_config_value(&invocation.args),
-            Some(json!({ "mcpServers": servers })),
-        );
         assert_eq!(invocation.args.last().map(String::as_str), Some("say hi"));
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read config"))
+                .expect("config JSON");
+        assert_eq!(written, json!({ "mcpServers": servers }));
+        assert!(
+            !invocation.args.iter().any(|arg| arg.contains("TOKEN")),
+            "secret values must never reach argv"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_config_file_is_user_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let request = request_with_mcp_servers(Some(json!({ "docs": { "command": "npx" } })));
+        let path = write_claude_mcp_config(&request)
+            .expect("write config")
+            .expect("config path");
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn absent_servers_leave_argv_byte_identical() {
-        let baseline = claude_invocation_for_request(&request_with_mcp_servers(None), None)
-            .expect("invocation");
+    fn absent_servers_write_no_config_and_leave_argv_untouched() {
+        let request = request_with_mcp_servers(None);
+        assert!(write_claude_mcp_config(&request)
+            .expect("write config")
+            .is_none());
+        let baseline = claude_invocation_for_request(&request, None, None).expect("invocation");
         assert!(!baseline.args.iter().any(|arg| arg == "--mcp-config"));
         assert!(!baseline.args.iter().any(|arg| arg == "--strict-mcp-config"));
     }
 
     #[test]
-    fn empty_servers_object_leaves_argv_byte_identical() {
-        let baseline = claude_invocation_for_request(&request_with_mcp_servers(None), None)
+    fn empty_servers_object_writes_no_config_and_leaves_argv_byte_identical() {
+        let empty_request = request_with_mcp_servers(Some(json!({})));
+        assert!(write_claude_mcp_config(&empty_request)
+            .expect("write config")
+            .is_none());
+        let baseline = claude_invocation_for_request(&request_with_mcp_servers(None), None, None)
             .expect("invocation");
-        let empty = claude_invocation_for_request(&request_with_mcp_servers(Some(json!({}))), None)
-            .expect("invocation");
+        let empty = claude_invocation_for_request(&empty_request, None, None).expect("invocation");
         assert_eq!(baseline.args, empty.args);
     }
 
@@ -656,7 +707,9 @@ mod mcp_config_tests {
             }
         }));
         request.mcp_servers = Some(json!({ "docs": { "command": "npx" } }));
-        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let invocation =
+            claude_invocation_for_request(&request, None, Some(std::path::Path::new("/tmp/x")))
+                .expect("invocation");
         let count = invocation
             .args
             .iter()
@@ -679,11 +732,16 @@ mod mcp_config_tests {
         }));
         let servers = json!({ "docs": { "command": "npx" } });
         request.mcp_servers = Some(servers.clone());
-        let invocation = claude_invocation_for_request(&request, None).expect("invocation");
+        let path = write_claude_mcp_config(&request)
+            .expect("write config")
+            .expect("config path");
+        let invocation =
+            claude_invocation_for_request(&request, None, Some(&path)).expect("invocation");
         assert_eq!(
-            mcp_config_value(&invocation.args),
-            Some(json!({ "mcpServers": servers })),
+            mcp_config_arg(&invocation.args),
+            Some(path.display().to_string()),
         );
         assert!(invocation.args.iter().any(|a| a == "--strict-mcp-config"));
+        let _ = std::fs::remove_file(&path);
     }
 }

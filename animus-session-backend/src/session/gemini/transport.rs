@@ -211,23 +211,8 @@ fn write_gemini_mcp_settings(request: &SessionRequest) -> Result<Option<std::pat
         return Ok(None);
     };
     let path = std::env::temp_dir().join(format!("animus-gemini-settings-{}.json", Uuid::new_v4()));
-    write_private_file(&path, &settings)?;
+    crate::session::write_private_file(&path, &settings)?;
     Ok(Some(path))
-}
-
-/// Write `contents` to a fresh file readable only by the current user
-/// (mode `0600` on Unix) so secret-bearing MCP config is not exposed to
-/// other local users via the shared temp dir.
-fn write_private_file(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path)?.write_all(contents.as_bytes())
 }
 
 async fn run_gemini_session(
