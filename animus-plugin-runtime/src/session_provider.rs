@@ -228,16 +228,22 @@ pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) ->
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let cancel_routes: CancelRoutes = Arc::new(Mutex::new(HashMap::new()));
     let mut reader = BufReader::new(tokio::io::stdin());
+    let mut handlers = tokio::task::JoinSet::new();
 
     while let Some(request) = read_frame(&mut reader).await? {
         let backend = backend.clone();
         let stdout = stdout.clone();
         let info = info.clone();
         let cancel_routes = cancel_routes.clone();
-        tokio::spawn(async move {
+        handlers.spawn(async move {
             handle_request(request, info, backend, stdout, cancel_routes).await;
         });
+        while handlers.try_join_next().is_some() {}
     }
+
+    // stdin EOF: in-flight handlers must still write their responses
+    // before the provider exits.
+    while handlers.join_next().await.is_some() {}
 
     Ok(())
 }
@@ -457,6 +463,7 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
     let mut thinking = Vec::<String>::new();
     let mut errors = Vec::<String>::new();
     let mut exit_code: Option<i32> = None;
+    let mut fatal_error = false;
 
     while let Some(event) = run.events.recv().await {
         match event {
@@ -572,8 +579,7 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                 .await;
                 errors.push(message.clone());
                 if !recoverable {
-                    exit_code = Some(1);
-                    break;
+                    fatal_error = true;
                 }
             }
             SessionEvent::Finished { exit_code: code } => {
@@ -581,6 +587,10 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                 break;
             }
         }
+    }
+
+    if fatal_error && exit_code.unwrap_or(0) == 0 {
+        exit_code = Some(1);
     }
 
     if let Some(control) = control_session_id.as_deref() {
@@ -938,6 +948,7 @@ mod run_loop_tests {
         })
         .await
         .unwrap();
+        drop(tx);
         let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
 
         let response = handle_agent_run(
@@ -962,6 +973,51 @@ mod run_loop_tests {
         assert_eq!(
             result["errors"][0], "fatal provider failure",
             "errors array must be preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn fatal_error_keeps_draining_and_overrides_success_exit_code() {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        tx.send(SessionEvent::Error {
+            message: "boom".to_string(),
+            recoverable: false,
+        })
+        .await
+        .unwrap();
+        tx.send(SessionEvent::FinalText {
+            text: "partial answer".to_string(),
+        })
+        .await
+        .unwrap();
+        tx.send(SessionEvent::Finished { exit_code: Some(0) })
+            .await
+            .unwrap();
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
+
+        let response = handle_agent_run(
+            Some(json!(1)),
+            Some(json!({ "prompt": "hi", "cwd": "/tmp" })),
+            &provider_info(),
+            backend,
+            test_stdout(),
+            None,
+            fresh_routes(),
+        )
+        .await;
+
+        let result = response
+            .result
+            .expect("agent/run must return a result payload");
+        assert_eq!(
+            result.get("exit_code").and_then(Value::as_i64),
+            Some(1),
+            "a fatal error must not be masked by a zero Finished code"
+        );
+        assert_eq!(
+            result.get("output").and_then(Value::as_str),
+            Some("partial answer"),
+            "events after a fatal error must still be drained"
         );
     }
 
