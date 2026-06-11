@@ -231,6 +231,7 @@ pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) ->
     let mut handlers = tokio::task::JoinSet::new();
 
     while let Some(request) = read_frame(&mut reader).await? {
+        park_pending_cancel_route(&request, &cancel_routes).await;
         let backend = backend.clone();
         let stdout = stdout.clone();
         let info = info.clone();
@@ -246,6 +247,30 @@ pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) ->
     while handlers.join_next().await.is_some() {}
 
     Ok(())
+}
+
+/// Park a [`CancelRoute::Pending`] marker for an `agent/run` /
+/// `agent/resume` frame BEFORE its handler task is spawned. A host can
+/// send `agent/run` and `agent/cancel` in the same buffered stdin batch;
+/// without this, both handlers may be spawned before the run handler
+/// executes, so the cancel handler would see no route and pass the host
+/// control id through to a backend that does not recognize it.
+async fn park_pending_cancel_route(request: &RpcRequest, cancel_routes: &CancelRoutes) {
+    if request.method != "agent/run" && request.method != "agent/resume" {
+        return;
+    }
+    let Some(control) = request
+        .params
+        .as_ref()
+        .and_then(|params| params.get("control_session_id"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    cancel_routes
+        .lock()
+        .await
+        .insert(control.to_string(), CancelRoute::Pending);
 }
 
 fn handle_cli_args(info: &ProviderInfo) {
@@ -402,11 +427,23 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
     resume_session: Option<String>,
     cancel_routes: CancelRoutes,
 ) -> RpcResponse {
+    let parked_control = params
+        .as_ref()
+        .and_then(|p| p.get("control_session_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let params: AgentRunParams =
         match params.ok_or_else(|| invalid_params("missing params for agent/run")) {
             Ok(p) => match serde_json::from_value::<AgentRunParams>(p) {
                 Ok(parsed) => parsed,
-                Err(error) => return invalid_rpc(id, format!("invalid agent/run params: {error}")),
+                Err(error) => {
+                    // A Pending route parked by the read loop for this frame
+                    // must not outlive a rejected request.
+                    if let Some(control) = parked_control {
+                        cancel_routes.lock().await.remove(&control);
+                    }
+                    return invalid_rpc(id, format!("invalid agent/run params: {error}"));
+                }
             },
             Err(error) => return RpcResponse::err(id, error),
         };
@@ -973,6 +1010,41 @@ mod run_loop_tests {
         assert_eq!(
             result["errors"][0], "fatal provider failure",
             "errors array must be preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_frame_parks_pending_route_before_handler_spawn() {
+        let routes = fresh_routes();
+        let request = RpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "agent/run".to_string(),
+            params: Some(json!({
+                "prompt": "hi",
+                "cwd": "/tmp",
+                "control_session_id": "ctrl-race"
+            })),
+        };
+        park_pending_cancel_route(&request, &routes).await;
+        assert!(
+            matches!(
+                routes.lock().await.get("ctrl-race"),
+                Some(CancelRoute::Pending)
+            ),
+            "agent/run frames must park a Pending route before their handler is spawned"
+        );
+
+        let other = RpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(2)),
+            method: "agent/cancel".to_string(),
+            params: Some(json!({ "session_id": "ctrl-other" })),
+        };
+        park_pending_cancel_route(&other, &routes).await;
+        assert!(
+            !routes.lock().await.contains_key("ctrl-other"),
+            "non-run frames must not park routes"
         );
     }
 
