@@ -77,6 +77,20 @@ pub(crate) async fn terminate_gemini_session(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Map a protocol permission mode onto Gemini's `--approval-mode` values
+/// (`default`, `auto_edit`, `yolo`, `plan`). Gemini-native values pass
+/// through; unknown values yield `None` so the caller falls back to
+/// `--yolo` (headless autonomy) instead of crashing CLI argument parsing.
+fn gemini_approval_mode(permission_mode: &str) -> Option<&'static str> {
+    match permission_mode {
+        "default" => Some("default"),
+        "plan" => Some("plan"),
+        "acceptEdits" | "auto_edit" => Some("auto_edit"),
+        "bypassPermissions" | "yolo" => Some("yolo"),
+        _ => None,
+    }
+}
+
 pub(crate) fn gemini_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
@@ -100,14 +114,14 @@ pub(crate) fn gemini_invocation_for_request(
         args.push(session_id);
     }
 
-    if let Some(permission_mode) = request
+    if let Some(approval_mode) = request
         .permission_mode
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .and_then(gemini_approval_mode)
     {
         args.push("--approval-mode".to_string());
-        args.push(permission_mode.to_string());
+        args.push(approval_mode.to_string());
     } else {
         args.push("--yolo".to_string());
     }
@@ -197,8 +211,23 @@ fn write_gemini_mcp_settings(request: &SessionRequest) -> Result<Option<std::pat
         return Ok(None);
     };
     let path = std::env::temp_dir().join(format!("animus-gemini-settings-{}.json", Uuid::new_v4()));
-    std::fs::write(&path, settings)?;
+    write_private_file(&path, &settings)?;
     Ok(Some(path))
+}
+
+/// Write `contents` to a fresh file readable only by the current user
+/// (mode `0600` on Unix) so secret-bearing MCP config is not exposed to
+/// other local users via the shared temp dir.
+fn write_private_file(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(contents.as_bytes())
 }
 
 async fn run_gemini_session(
@@ -506,5 +535,36 @@ mod mcp_settings_tests {
         )
         .expect("invocation");
         assert_eq!(baseline.args, with_servers.args);
+    }
+
+    #[test]
+    fn permission_modes_map_to_gemini_approval_modes() {
+        for (protocol, gemini) in [
+            ("default", "default"),
+            ("plan", "plan"),
+            ("acceptEdits", "auto_edit"),
+            ("auto_edit", "auto_edit"),
+            ("bypassPermissions", "yolo"),
+            ("yolo", "yolo"),
+        ] {
+            let mut request = request_with_mcp_servers(None);
+            request.permission_mode = Some(protocol.to_string());
+            let invocation = gemini_invocation_for_request(&request, None).expect("invocation");
+            let position = invocation
+                .args
+                .iter()
+                .position(|arg| arg == "--approval-mode")
+                .unwrap_or_else(|| panic!("--approval-mode missing for {protocol}"));
+            assert_eq!(invocation.args[position + 1], gemini);
+        }
+    }
+
+    #[test]
+    fn unknown_permission_mode_falls_back_to_yolo() {
+        let mut request = request_with_mcp_servers(None);
+        request.permission_mode = Some("definitely-not-a-mode".to_string());
+        let invocation = gemini_invocation_for_request(&request, None).expect("invocation");
+        assert!(!invocation.args.iter().any(|arg| arg == "--approval-mode"));
+        assert!(invocation.args.iter().any(|arg| arg == "--yolo"));
     }
 }

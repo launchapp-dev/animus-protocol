@@ -130,6 +130,10 @@ fn apply_claude_reasoning_effort(args: &mut Vec<String>, request: &SessionReques
 /// guaranteed to be the prompt. A caller-supplied `--mcp-config` (e.g.
 /// inside a runtime-contract launch block) wins, and an absent or empty
 /// `mcp_servers` object leaves the argv untouched.
+// TODO(codex-p2): secret-bearing `mcp_servers` entries (env tokens, auth
+// headers) are visible in process listings while the run is active because
+// the config rides inline in argv; switch to a 0600 temp file path (the
+// CLI accepts file paths for --mcp-config) like the gemini transport.
 fn apply_claude_mcp_config(args: &mut Vec<String>, request: &SessionRequest) {
     let Some(servers) = request.mcp_servers_object() else {
         return;

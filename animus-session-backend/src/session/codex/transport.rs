@@ -206,6 +206,10 @@ fn toml_string_array(values: &[serde_json::Value]) -> String {
 /// Remote entries (`url`) become `mcp_servers.<name>.url` plus
 /// `http_headers`; stdio entries become `command`/`args`/`env`. Entries
 /// with neither `url` nor `command` yield nothing.
+// TODO(codex-p2): secret-bearing entries (env tokens, auth headers) are
+// visible in process listings while the run is active because the
+// overrides ride in argv; move secret-bearing MCP config to a 0600
+// CODEX_HOME config file or another non-argv channel.
 fn codex_mcp_overrides_for_server(name: &str, entry: &serde_json::Value) -> Vec<String> {
     let key = toml_key(name);
     let mut overrides = Vec::new();
