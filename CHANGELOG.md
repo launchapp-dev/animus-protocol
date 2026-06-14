@@ -5,6 +5,18 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
+## v0.5.10 — queue precise-wake (2026-06-14)
+
+### Added
+
+`animus-queue-protocol` 0.3.1 -> 0.3.2 (additive, backward compatible):
+
+- `METHOD_QUEUE_NEXT_DEADLINE = "queue/next_deadline"` + `QueueNextDeadlineResponse
+  { next_run_at: Option<String> }` — reports the earliest future `run_at`
+  across pending deferred entries so the daemon can sleep until exactly that
+  instant (precise wake) instead of relying on its heartbeat. `None` when the
+  queue holds no future-dated entries.
+
 ## v0.5.9 — deferred queue dispatch (2026-06-13)
 
 ### Added

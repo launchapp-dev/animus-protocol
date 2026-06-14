@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 pub const KIND: &str = "queue";
 
 /// Per-crate semver protocol version.
-pub const PROTOCOL_VERSION: &str = "0.3.1";
+pub const PROTOCOL_VERSION: &str = "0.3.2";
 
 /// Add a dispatch to the queue.
 pub const METHOD_QUEUE_ENQUEUE: &str = "queue/enqueue";
@@ -56,6 +56,11 @@ pub const METHOD_QUEUE_COMPLETION: &str = "queue/completion";
 /// another in-flight lease). Distinct from [`METHOD_QUEUE_RELEASE`] which
 /// targets a Held entry.
 pub const METHOD_QUEUE_RELEASE_PENDING: &str = "queue/release_pending";
+/// Report the earliest future `run_at` across pending deferred entries so
+/// the daemon can sleep until exactly that instant (precise wake) instead
+/// of relying on its heartbeat. No params. Returns
+/// [`QueueNextDeadlineResponse`].
+pub const METHOD_QUEUE_NEXT_DEADLINE: &str = "queue/next_deadline";
 
 // =====================================================================
 // Status vocabulary
@@ -338,6 +343,18 @@ pub struct QueueCompletionRequest {
     pub workflow_id: Option<String>,
 }
 
+/// Response for [`METHOD_QUEUE_NEXT_DEADLINE`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct QueueNextDeadlineResponse {
+    /// Earliest future `run_at` (RFC 3339) across pending deferred entries,
+    /// or `None` when the queue holds no future-dated entries. The daemon
+    /// uses this to wake precisely at the next deferred entry's dispatch
+    /// time. Expired entries are swept before this is computed, so a value
+    /// here is always in the future relative to the plugin's clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_run_at: Option<String>,
+}
+
 // =====================================================================
 // Manifest + capabilities
 // =====================================================================
@@ -402,6 +419,20 @@ mod tests {
         assert!(v.get("warning").is_none());
         let back: QueueEnqueueResponse = serde_json::from_value(v).unwrap();
         assert_eq!(back, r);
+    }
+
+    #[test]
+    fn next_deadline_response_round_trips() {
+        let some = QueueNextDeadlineResponse { next_run_at: Some("2030-01-01T15:00:00Z".into()) };
+        let v = serde_json::to_value(&some).unwrap();
+        assert_eq!(v.get("next_run_at").and_then(|t| t.as_str()), Some("2030-01-01T15:00:00Z"));
+        assert_eq!(serde_json::from_value::<QueueNextDeadlineResponse>(v).unwrap(), some);
+
+        // Empty queue: field omitted, decodes back to None.
+        let none = QueueNextDeadlineResponse { next_run_at: None };
+        let v = serde_json::to_value(&none).unwrap();
+        assert!(v.get("next_run_at").is_none());
+        assert_eq!(serde_json::from_value::<QueueNextDeadlineResponse>(v).unwrap(), none);
     }
 
     #[test]

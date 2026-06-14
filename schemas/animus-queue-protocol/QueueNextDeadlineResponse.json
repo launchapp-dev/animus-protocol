@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueNextDeadlineResponse",
+  "description": "Response for [`METHOD_QUEUE_NEXT_DEADLINE`].",
+  "type": "object",
+  "properties": {
+    "next_run_at": {
+      "description": "Earliest future `run_at` (RFC 3339) across pending deferred entries,\nor `None` when the queue holds no future-dated entries. The daemon\nuses this to wake precisely at the next deferred entry's dispatch\ntime. Expired entries are swept before this is computed, so a value\nhere is always in the future relative to the plugin's clock.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

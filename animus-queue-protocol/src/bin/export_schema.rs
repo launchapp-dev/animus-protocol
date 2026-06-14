@@ -28,8 +28,8 @@ use animus_queue_protocol::{
     QueueCapabilities, QueueCompletionRequest, QueueDropRequest, QueueEnqueueRequest,
     QueueEnqueueResponse, QueueEntry, QueueHoldRequest, QueueLeaseRequest, QueueLeaseResponse,
     QueueListRequest, QueueListResponse, QueueMarkAssignedRequest, QueueMutationResponse,
-    QueueReleasePendingParams, QueueReleasePendingResponse, QueueReleaseRequest,
-    QueueReorderRequest, QueueReorderResponse, QueueStats,
+    QueueNextDeadlineResponse, QueueReleasePendingParams, QueueReleasePendingResponse,
+    QueueReleaseRequest, QueueReorderRequest, QueueReorderResponse, QueueStats,
 };
 use schemars::{schema_for, Schema};
 
@@ -88,6 +88,10 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         (
             "QueueReleasePendingResponse",
             schema_for!(QueueReleasePendingResponse),
+        ),
+        (
+            "QueueNextDeadlineResponse",
+            schema_for!(QueueNextDeadlineResponse),
         ),
         (
             "QueueCompletionRequest",
