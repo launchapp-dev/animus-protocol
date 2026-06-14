@@ -4,6 +4,22 @@
   "description": "Request for [`METHOD_QUEUE_ENQUEUE`].",
   "type": "object",
   "properties": {
+    "expire_after_secs": {
+      "description": "Optional grace window, in seconds, applied after `run_at`. If a\ndeferred entry is still pending past `run_at + expire_after_secs`\n(e.g. the daemon was down through its window), the plugin drops it\non its next sweep instead of dispatching late. `None` means never\nexpire — always fire late whenever the daemon next leases. Ignored\nwhen `run_at` is `None`.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "run_at": {
+      "description": "Optional RFC 3339 earliest-dispatch time. When set and in the\nfuture, the entry is enqueued as deferred: it stays in\n[`status::PENDING`] but is excluded from [`METHOD_QUEUE_LEASE`]\nuntil this instant passes. `None` means dispatch as soon as\ncapacity allows (today's behavior).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "subject_dispatch": {
       "description": "Full dispatch envelope to enqueue.",
       "$ref": "#/$defs/SubjectDispatch"

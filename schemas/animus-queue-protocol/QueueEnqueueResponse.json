@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "enqueued": {
-      "description": "`true` if a new entry was created. `false` if the dispatch was\nrejected as a duplicate of an existing pending/assigned entry\n(idempotent enqueue).",
+      "description": "`true` if a new entry was created. For immediate (non-deferred)\nenqueues this stays idempotent: `false` if the dispatch was\nrejected as a duplicate of an existing pending/assigned entry.\nDeferred enqueues (`run_at` set) are always created — scheduling\nthe same subject for distinct times is legitimate — so `enqueued`\nis `true` and any collision is surfaced via `warning` instead.",
       "type": "boolean"
     },
     "entry_id": {
@@ -15,6 +15,13 @@
     "subject_id": {
       "description": "Convenience: the subject id from the dispatch envelope.",
       "type": "string"
+    },
+    "warning": {
+      "description": "Non-fatal advisory. Set when the enqueue succeeded but the caller\nmay want to reconsider — most commonly that another pending,\ndeferred, or assigned entry already exists for this subject. The\nduplicate is still enqueued; the caller (agent or operator) decides\nwhether to drop it. `None` when there is nothing to flag.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

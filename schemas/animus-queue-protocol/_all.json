@@ -69,6 +69,22 @@
     "QueueEnqueueRequest": {
       "description": "Request for [`METHOD_QUEUE_ENQUEUE`].",
       "properties": {
+        "expire_after_secs": {
+          "description": "Optional grace window, in seconds, applied after `run_at`. If a\ndeferred entry is still pending past `run_at + expire_after_secs`\n(e.g. the daemon was down through its window), the plugin drops it\non its next sweep instead of dispatching late. `None` means never\nexpire — always fire late whenever the daemon next leases. Ignored\nwhen `run_at` is `None`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_at": {
+          "description": "Optional RFC 3339 earliest-dispatch time. When set and in the\nfuture, the entry is enqueued as deferred: it stays in\n[`status::PENDING`] but is excluded from [`METHOD_QUEUE_LEASE`]\nuntil this instant passes. `None` means dispatch as soon as\ncapacity allows (today's behavior).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "subject_dispatch": {
           "$ref": "#/$defs/SubjectDispatch",
           "description": "Full dispatch envelope to enqueue."
@@ -84,7 +100,7 @@
       "description": "Response for [`METHOD_QUEUE_ENQUEUE`].",
       "properties": {
         "enqueued": {
-          "description": "`true` if a new entry was created. `false` if the dispatch was\nrejected as a duplicate of an existing pending/assigned entry\n(idempotent enqueue).",
+          "description": "`true` if a new entry was created. For immediate (non-deferred)\nenqueues this stays idempotent: `false` if the dispatch was\nrejected as a duplicate of an existing pending/assigned entry.\nDeferred enqueues (`run_at` set) are always created — scheduling\nthe same subject for distinct times is legitimate — so `enqueued`\nis `true` and any collision is surfaced via `warning` instead.",
           "type": "boolean"
         },
         "entry_id": {
@@ -94,6 +110,13 @@
         "subject_id": {
           "description": "Convenience: the subject id from the dispatch envelope.",
           "type": "string"
+        },
+        "warning": {
+          "description": "Non-fatal advisory. Set when the enqueue succeeded but the caller\nmay want to reconsider — most commonly that another pending,\ndeferred, or assigned entry already exists for this subject. The\nduplicate is still enqueued; the caller (agent or operator) decides\nwhether to drop it. `None` when there is nothing to flag.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -122,8 +145,24 @@
           "description": "Stable entry id (unique within the project queue). Mutation calls\ntarget this id.",
           "type": "string"
         },
+        "expire_after_secs": {
+          "description": "Grace window in seconds after `run_at` before the entry is expired\nand dropped on sweep. `None` means never expire. Ignored when\n`run_at` is `None`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "held_at": {
           "description": "RFC 3339 hold timestamp.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_at": {
+          "description": "RFC 3339 earliest-dispatch time for a deferred entry. While `now`\nis before this instant the entry is pending-but-not-leasable.\n`None` for ordinary (dispatch-ASAP) entries.",
           "type": [
             "string",
             "null"
@@ -435,6 +474,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "deferred": {
+          "default": 0,
+          "description": "Subset of `pending` that is deferred — `run_at` is still in the\nfuture, so these are not yet leasable. Lets callers distinguish\n\"scheduled for later\" from \"ready to dispatch\" without inspecting\nevery entry. `0` on backends that predate deferred dispatch.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "held": {
           "description": "Held entries.",
           "format": "uint",
@@ -442,7 +488,7 @@
           "type": "integer"
         },
         "pending": {
-          "description": "Pending entries.",
+          "description": "Pending entries (includes deferred entries not yet leasable).",
           "format": "uint",
           "minimum": 0,
           "type": "integer"

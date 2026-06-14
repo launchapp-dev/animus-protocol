@@ -5,6 +5,30 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
+## v0.5.9 — deferred queue dispatch (2026-06-13)
+
+### Added
+
+`animus-queue-protocol` 0.3.0 -> 0.3.1 (additive, backward compatible):
+
+- `QueueEnqueueRequest.run_at: Option<String>` — RFC 3339 earliest-dispatch
+  time. When set and in the future, the entry is enqueued deferred: it
+  stays `pending` but is excluded from `queue/lease` until the instant
+  passes. `None` preserves dispatch-ASAP behavior.
+- `QueueEnqueueRequest.expire_after_secs: Option<u64>` — grace window after
+  `run_at`; a still-pending deferred entry past `run_at + expire_after_secs`
+  is dropped on sweep instead of dispatched late. `None` = never expire.
+- `QueueEnqueueResponse.warning: Option<String>` — non-fatal advisory. Set
+  (most commonly) when another entry already exists for the same subject;
+  the duplicate is still enqueued (deferred enqueues are never deduped) and
+  the caller decides whether to drop it.
+- `QueueEntry.run_at` / `QueueEntry.expire_after_secs` — surfaced on
+  list/lease so callers can distinguish scheduled-for-later entries.
+- `QueueStats.deferred: usize` — subset of `pending` not yet leasable.
+
+All new fields use serde defaults / `skip_serializing_if`, so older
+clients and stored payloads round-trip unchanged.
+
 ## v0.5.7 — restore `subject/delete` + plugin-runtime subject helpers (2026-06-07)
 
 ### Restored

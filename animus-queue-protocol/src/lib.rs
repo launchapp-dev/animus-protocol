@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 pub const KIND: &str = "queue";
 
 /// Per-crate semver protocol version.
-pub const PROTOCOL_VERSION: &str = "0.3.0";
+pub const PROTOCOL_VERSION: &str = "0.3.1";
 
 /// Add a dispatch to the queue.
 pub const METHOD_QUEUE_ENQUEUE: &str = "queue/enqueue";
@@ -90,20 +90,45 @@ pub mod completion_status {
 pub struct QueueEnqueueRequest {
     /// Full dispatch envelope to enqueue.
     pub subject_dispatch: SubjectDispatch,
+    /// Optional RFC 3339 earliest-dispatch time. When set and in the
+    /// future, the entry is enqueued as deferred: it stays in
+    /// [`status::PENDING`] but is excluded from [`METHOD_QUEUE_LEASE`]
+    /// until this instant passes. `None` means dispatch as soon as
+    /// capacity allows (today's behavior).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_at: Option<String>,
+    /// Optional grace window, in seconds, applied after `run_at`. If a
+    /// deferred entry is still pending past `run_at + expire_after_secs`
+    /// (e.g. the daemon was down through its window), the plugin drops it
+    /// on its next sweep instead of dispatching late. `None` means never
+    /// expire — always fire late whenever the daemon next leases. Ignored
+    /// when `run_at` is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire_after_secs: Option<u64>,
 }
 
 /// Response for [`METHOD_QUEUE_ENQUEUE`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueEnqueueResponse {
-    /// `true` if a new entry was created. `false` if the dispatch was
-    /// rejected as a duplicate of an existing pending/assigned entry
-    /// (idempotent enqueue).
+    /// `true` if a new entry was created. For immediate (non-deferred)
+    /// enqueues this stays idempotent: `false` if the dispatch was
+    /// rejected as a duplicate of an existing pending/assigned entry.
+    /// Deferred enqueues (`run_at` set) are always created — scheduling
+    /// the same subject for distinct times is legitimate — so `enqueued`
+    /// is `true` and any collision is surfaced via `warning` instead.
     pub enqueued: bool,
     /// Stable entry id assigned by the plugin. Used by all subsequent
     /// mutation calls.
     pub entry_id: String,
     /// Convenience: the subject id from the dispatch envelope.
     pub subject_id: String,
+    /// Non-fatal advisory. Set when the enqueue succeeded but the caller
+    /// may want to reconsider — most commonly that another pending,
+    /// deferred, or assigned entry already exists for this subject. The
+    /// duplicate is still enqueued; the caller (agent or operator) decides
+    /// whether to drop it. `None` when there is nothing to flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// Request for [`METHOD_QUEUE_LIST`].
@@ -158,6 +183,16 @@ pub struct QueueEntry {
     /// RFC 3339 hold timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_at: Option<String>,
+    /// RFC 3339 earliest-dispatch time for a deferred entry. While `now`
+    /// is before this instant the entry is pending-but-not-leasable.
+    /// `None` for ordinary (dispatch-ASAP) entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_at: Option<String>,
+    /// Grace window in seconds after `run_at` before the entry is expired
+    /// and dropped on sweep. `None` means never expire. Ignored when
+    /// `run_at` is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire_after_secs: Option<u64>,
 }
 
 /// Queue aggregate counts.
@@ -165,12 +200,18 @@ pub struct QueueEntry {
 pub struct QueueStats {
     /// Total entries.
     pub total: usize,
-    /// Pending entries.
+    /// Pending entries (includes deferred entries not yet leasable).
     pub pending: usize,
     /// Assigned entries.
     pub assigned: usize,
     /// Held entries.
     pub held: usize,
+    /// Subset of `pending` that is deferred — `run_at` is still in the
+    /// future, so these are not yet leasable. Lets callers distinguish
+    /// "scheduled for later" from "ready to dispatch" without inspecting
+    /// every entry. `0` on backends that predate deferred dispatch.
+    #[serde(default)]
+    pub deferred: usize,
 }
 
 /// Request for [`METHOD_QUEUE_LEASE`].
@@ -353,10 +394,103 @@ mod tests {
             enqueued: true,
             entry_id: "ent_1".into(),
             subject_id: "TASK-1".into(),
+            warning: None,
         };
         let v = serde_json::to_value(&r).unwrap();
+        // `warning: None` is omitted from the wire and legacy responses
+        // without the field decode cleanly.
+        assert!(v.get("warning").is_none());
         let back: QueueEnqueueResponse = serde_json::from_value(v).unwrap();
         assert_eq!(back, r);
+    }
+
+    #[test]
+    fn enqueue_response_carries_warning() {
+        let r = QueueEnqueueResponse {
+            enqueued: true,
+            entry_id: "ent_2".into(),
+            subject_id: "TASK-2".into(),
+            warning: Some("subject TASK-2 already has 1 queued entry".into()),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(
+            v.get("warning").and_then(|w| w.as_str()),
+            Some("subject TASK-2 already has 1 queued entry")
+        );
+        let back: QueueEnqueueResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(back, r);
+    }
+
+    fn sample_dispatch(id: &str) -> SubjectDispatch {
+        use animus_subject_protocol::SubjectRef;
+        let requested_at = "2030-01-01T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        SubjectDispatch::for_subject_with_metadata(
+            SubjectRef::task(id),
+            "standard",
+            "test",
+            requested_at,
+        )
+    }
+
+    #[test]
+    fn enqueue_request_round_trips_deferred() {
+        let req = QueueEnqueueRequest {
+            subject_dispatch: sample_dispatch("TASK-9"),
+            run_at: Some("2030-01-01T15:00:00Z".into()),
+            expire_after_secs: Some(600),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(
+            v.get("run_at").and_then(|t| t.as_str()),
+            Some("2030-01-01T15:00:00Z")
+        );
+        assert_eq!(v.get("expire_after_secs").and_then(|t| t.as_u64()), Some(600));
+        let back: QueueEnqueueRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn enqueue_request_omits_deferral_when_immediate() {
+        let req = QueueEnqueueRequest {
+            subject_dispatch: sample_dispatch("TASK-10"),
+            run_at: None,
+            expire_after_secs: None,
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("run_at").is_none());
+        assert!(v.get("expire_after_secs").is_none());
+        // Legacy enqueue payloads (no deferral fields) still decode.
+        let legacy = serde_json::json!({ "subject_dispatch": v.get("subject_dispatch").unwrap() });
+        let back: QueueEnqueueRequest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.run_at, None);
+        assert_eq!(back.expire_after_secs, None);
+    }
+
+    #[test]
+    fn entry_round_trips_with_deferral_fields() {
+        let entry = QueueEntry {
+            entry_id: "ent_3".into(),
+            subject_id: "TASK-11".into(),
+            task_id: Some("TASK-11".into()),
+            subject_dispatch: sample_dispatch("TASK-11"),
+            status: status::PENDING.into(),
+            workflow_id: None,
+            enqueued_at: "2030-01-01T00:00:00Z".into(),
+            assigned_at: None,
+            held_at: None,
+            run_at: Some("2030-01-01T15:00:00Z".into()),
+            expire_after_secs: Some(600),
+        };
+        let v = serde_json::to_value(&entry).unwrap();
+        let back: QueueEntry = serde_json::from_value(v).unwrap();
+        assert_eq!(back, entry);
+        // Stats default keeps `deferred` at zero for legacy payloads.
+        let legacy_stats: QueueStats =
+            serde_json::from_value(serde_json::json!({ "total": 1, "pending": 1, "assigned": 0, "held": 0 }))
+                .unwrap();
+        assert_eq!(legacy_stats.deferred, 0);
     }
 
     #[test]

@@ -10,6 +10,13 @@
       "format": "uint",
       "minimum": 0
     },
+    "deferred": {
+      "description": "Subset of `pending` that is deferred — `run_at` is still in the\nfuture, so these are not yet leasable. Lets callers distinguish\n\"scheduled for later\" from \"ready to dispatch\" without inspecting\nevery entry. `0` on backends that predate deferred dispatch.",
+      "type": "integer",
+      "format": "uint",
+      "default": 0,
+      "minimum": 0
+    },
     "held": {
       "description": "Held entries.",
       "type": "integer",
@@ -17,7 +24,7 @@
       "minimum": 0
     },
     "pending": {
-      "description": "Pending entries.",
+      "description": "Pending entries (includes deferred entries not yet leasable).",
       "type": "integer",
       "format": "uint",
       "minimum": 0

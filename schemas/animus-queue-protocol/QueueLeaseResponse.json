@@ -35,8 +35,24 @@
           "description": "Stable entry id (unique within the project queue). Mutation calls\ntarget this id.",
           "type": "string"
         },
+        "expire_after_secs": {
+          "description": "Grace window in seconds after `run_at` before the entry is expired\nand dropped on sweep. `None` means never expire. Ignored when\n`run_at` is `None`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "held_at": {
           "description": "RFC 3339 hold timestamp.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_at": {
+          "description": "RFC 3339 earliest-dispatch time for a deferred entry. While `now`\nis before this instant the entry is pending-but-not-leasable.\n`None` for ordinary (dispatch-ASAP) entries.",
           "type": [
             "string",
             "null"
