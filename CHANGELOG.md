@@ -5,6 +5,19 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
+## v0.5.11 — remove orphaned agent-runner-protocol crate (2026-06-14)
+
+### Removed
+
+- `animus-agent-runner-protocol` crate deleted. It was the wire protocol for
+  the agent-runner sidecar removed in v0.5.3 (providers now spawn/supervise
+  the coding-agent CLIs end to end), was bumped to `v0.1.1 deprecated`, and
+  had zero consumers across the entire fleet (ao-cli + all plugin repos).
+  Older git tags still contain the crate, so any historical pin is
+  unaffected. The `PLUGIN_KIND_AGENT_RUNNER` wire constant on
+  `animus-plugin-protocol` is retained (manifest-parse compatibility) with an
+  updated doc comment.
+
 ## v0.5.10 — queue precise-wake (2026-06-14)
 
 ### Added

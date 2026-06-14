@@ -146,14 +146,12 @@ pub const PLUGIN_KIND_DURABLE_STORE: &str = "durable_store";
 /// (`memory/put`, `memory/get`, `memory/query`, etc.).
 pub const PLUGIN_KIND_MEMORY_STORE: &str = "memory_store";
 
-/// Plugin kind for agent-runner sidecar plugins (v0.5).
+/// Plugin kind for the legacy agent-runner sidecar.
 ///
-/// Agent-runner plugins own the sidecar that spawns coding-agent CLIs
-/// (claude, codex, gemini, opencode, ...), supervises their lifetime,
-/// parses stdout into structured events, and reports cost / token /
-/// artifact telemetry. See `animus-agent-runner-protocol` for the typed
-/// RPC surface (`agent_runner/run`, `agent_runner/control`,
-/// `agent_runner/agent_status`, etc.).
+/// The agent-runner sidecar (and its `animus-agent-runner-protocol` crate)
+/// was removed in v0.5.3 — provider plugins now spawn and supervise the
+/// coding-agent CLIs end to end. This wire constant is retained only so an
+/// older `agent_runner`-kind manifest still parses to a known kind.
 pub const PLUGIN_KIND_AGENT_RUNNER: &str = "agent_runner";
 
 /// Strongly typed enumeration of plugin roles.
