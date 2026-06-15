@@ -5,6 +5,26 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
+## Unreleased — restore transport_backend_main entrypoints (regression fix)
+
+### Fixed
+
+`animus-plugin-runtime` 0.2.1 (additive, restores dropped public API):
+
+- Restored `transport_backend_main` and
+  `transport_backend_main_with_capabilities`, the stdio-loop entrypoints every
+  transport plugin (`animus-transport-http`, `animus-transport-graphql`,
+  `animus-web-ui` wrapper) calls from `main.rs`. They were accidentally dropped
+  in commit `aed9f42` ("v0.1.14: sync ... from animus-cli") when the crate was
+  refactored to its provider-focused shape, which broke transport-plugin
+  compilation against the current protocol. The restored code lives in a new
+  `src/transport.rs` module (coexisting with `plugin.rs` / `subject.rs`) and is
+  adapted to the current `animus-plugin-protocol` wire types
+  (`PluginCapabilities.projections`, `InitializeResult.kind_capabilities`,
+  `PluginManifest.env_required` / `notification_buffer_size`).
+  `extra_capabilities` is `Vec<String>`. Adds an `animus-transport-protocol`
+  path dependency to the crate.
+
 ## v0.5.11 — remove orphaned agent-runner-protocol crate (2026-06-14)
 
 ### Removed

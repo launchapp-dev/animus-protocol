@@ -25,15 +25,26 @@
 //! exposes typed request method registration, notification handlers,
 //! init/shutdown hooks, a clonable [`plugin::Notifier`], and end-to-end
 //! handling of `initialize`/`shutdown`/`$/cancelRequest` framing.
+//!
+//! # Transport plugins
+//!
+//! Transport backends (HTTP, GraphQL, WebSocket, ...) implement
+//! [`transport::TransportBackend`](animus_transport_protocol::TransportBackend)
+//! and call [`transport_backend_main`] (or
+//! [`transport_backend_main_with_capabilities`]) from `main`. These
+//! entrypoints were dropped in the v0.1.14 sync (`aed9f42`) and restored as
+//! the [`transport`] module.
 
 pub mod plugin;
 pub mod subject;
+pub mod transport;
 
 pub use plugin::{CancellationToken, InitContext, MethodContext, Notifier, Plugin};
 pub use subject::{
     subject_backend_main, subject_backend_main_with_capabilities, subject_backend_main_with_kinds,
     subject_plugin, subject_plugin_with_kind_aliases,
 };
+pub use transport::{transport_backend_main, transport_backend_main_with_capabilities};
 
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
