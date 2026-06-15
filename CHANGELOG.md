@@ -5,7 +5,7 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
-## Unreleased — restore transport_backend_main entrypoints (regression fix)
+## v0.5.12 — restore transport_backend_main entrypoints (regression fix)
 
 ### Fixed
 
