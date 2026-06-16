@@ -5,6 +5,21 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
+## Unreleased — subject/unwatch verb
+
+### Added
+
+`animus-subject-protocol` 0.1.16 (additive):
+
+- Added [`METHOD_SUBJECT_UNWATCH`] (`"subject/unwatch"`) and the
+  `SubjectUnwatchRequest { watch_id: String }` request type. The daemon
+  issues this when it drops a `subject/watch` subscription so the backend
+  can cancel the backing `watch()` task instead of leaking it until plugin
+  shutdown. The `watch_id` correlates with the JSON-RPC request id used in
+  the originating `subject/watch` call. Best-effort — backends that do not
+  track per-watch tasks may treat it as a no-op. The schema export binary
+  now emits `SubjectUnwatchRequest.json`.
+
 ## v0.5.12 — restore transport_backend_main entrypoints (regression fix)
 
 ### Fixed

@@ -1,6 +1,6 @@
 [package]
 name = "animus-subject-protocol"
-version = "0.1.15"
+version = "0.1.16"
 edition = "2021"
 description = "SubjectBackend trait + normalized Subject schema for Animus subject backend plugins (Linear, Jira, GitHub Issues, Notion, native task store, etc.)."
 

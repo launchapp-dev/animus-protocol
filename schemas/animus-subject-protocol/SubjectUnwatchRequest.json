@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubjectUnwatchRequest",
+  "description": "Request payload for [`METHOD_SUBJECT_UNWATCH`]. Added in v0.1.16.\n\nCarries the `watch_id` correlating with the JSON-RPC request id the\ndaemon used when it issued the original `subject/watch` call, so the\nbackend can cancel the matching watch task.",
+  "type": "object",
+  "properties": {
+    "watch_id": {
+      "description": "Id of the watch subscription to stop. Matches the request id from\nthe originating `subject/watch` call.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "watch_id"
+  ]
+}

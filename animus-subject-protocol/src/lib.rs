@@ -69,6 +69,16 @@ pub const METHOD_SUBJECT_DELETE: &str = "subject/delete";
 /// polling-only backends respond with [`error_codes::METHOD_NOT_SUPPORTED`].
 pub const METHOD_SUBJECT_WATCH: &str = "subject/watch";
 
+/// `subject/unwatch` — stop a server-streaming subscription previously
+/// started with [`METHOD_SUBJECT_WATCH`]. The daemon issues this when it
+/// drops a watch subscription so the backend can cancel the backing
+/// `watch()` task instead of leaking it until plugin shutdown. The
+/// `watch_id` correlates with the JSON-RPC request id the daemon used when
+/// it issued the original `subject/watch` call. Best-effort: backends that
+/// do not track per-watch tasks MAY treat this as a no-op. Added in
+/// v0.1.16.
+pub const METHOD_SUBJECT_UNWATCH: &str = "subject/unwatch";
+
 /// `subject/schema` — capability declaration; returns [`SubjectSchema`].
 pub const METHOD_SUBJECT_SCHEMA: &str = "subject/schema";
 
@@ -413,6 +423,18 @@ pub struct SubjectPatch {
 pub struct DeleteSubjectRequest {
     /// Id of the subject to delete.
     pub id: SubjectId,
+}
+
+/// Request payload for [`METHOD_SUBJECT_UNWATCH`]. Added in v0.1.16.
+///
+/// Carries the `watch_id` correlating with the JSON-RPC request id the
+/// daemon used when it issued the original `subject/watch` call, so the
+/// backend can cancel the matching watch task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubjectUnwatchRequest {
+    /// Id of the watch subscription to stop. Matches the request id from
+    /// the originating `subject/watch` call.
+    pub watch_id: String,
 }
 
 /// Response payload for `subject/delete`. Added in v0.1.8.
