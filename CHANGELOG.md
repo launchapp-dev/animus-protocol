@@ -5,7 +5,7 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
-## Unreleased — subject/unwatch verb
+## v0.5.13 — subject/unwatch verb
 
 ### Added
 
