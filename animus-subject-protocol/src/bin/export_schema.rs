@@ -70,10 +70,7 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("SubjectPatch", schema_for!(SubjectPatch)),
         ("DeleteSubjectRequest", schema_for!(DeleteSubjectRequest)),
         ("DeleteSubjectResponse", schema_for!(DeleteSubjectResponse)),
-        (
-            "SubjectUnwatchRequest",
-            schema_for!(SubjectUnwatchRequest),
-        ),
+        ("SubjectUnwatchRequest", schema_for!(SubjectUnwatchRequest)),
         ("SubjectSchema", schema_for!(SubjectSchema)),
         ("StatusDispatchHint", schema_for!(StatusDispatchHint)),
         ("CustomFieldSpec", schema_for!(CustomFieldSpec)),

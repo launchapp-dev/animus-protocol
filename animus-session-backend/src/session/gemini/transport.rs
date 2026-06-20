@@ -17,9 +17,12 @@ use crate::session::{
 use super::parser::parse_gemini_json_chunk;
 
 pub(crate) async fn start_gemini_session(
-    request: SessionRequest,
+    mut request: SessionRequest,
     resume_session_id: Option<String>,
 ) -> Result<SessionRun> {
+    // Gemini has no headless approval hook, so approvals ride a voluntary
+    // prompt preamble directing the agent to the Animus MCP tools.
+    crate::session::apply_approvals_prompt_preamble(&mut request);
     let invocation = gemini_invocation_for_request(&request, resume_session_id.as_deref())?;
     let control_session_id = Uuid::new_v4().to_string();
     let control_session_id_for_run = control_session_id.clone();
@@ -77,6 +80,20 @@ pub(crate) async fn terminate_gemini_session(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Map a protocol permission mode onto Gemini's `--approval-mode` values
+/// (`default`, `auto_edit`, `yolo`, `plan`). Gemini-native values pass
+/// through; unrecognized values degrade to `default` (Gemini's safe
+/// approval policy) rather than crashing CLI argument parsing — and never
+/// to `yolo`, which would silently escalate a restrictive mode.
+fn gemini_approval_mode(permission_mode: &str) -> &'static str {
+    match permission_mode {
+        "plan" => "plan",
+        "acceptEdits" | "auto_edit" => "auto_edit",
+        "bypassPermissions" | "yolo" => "yolo",
+        _ => "default",
+    }
+}
+
 pub(crate) fn gemini_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
@@ -98,6 +115,18 @@ pub(crate) fn gemini_invocation_for_request(
     } else if let Some(session_id) = configured_gemini_session_id(request) {
         args.push("--resume".to_string());
         args.push(session_id);
+    }
+
+    if let Some(permission_mode) = request
+        .permission_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--approval-mode".to_string());
+        args.push(gemini_approval_mode(permission_mode).to_string());
+    } else {
+        args.push("--yolo".to_string());
     }
 
     if !request.model.trim().is_empty() {
@@ -122,6 +151,95 @@ pub(crate) fn gemini_invocation_for_request(
     Ok(invocation)
 }
 
+/// Translate one canonical `mcp_servers` entry into the Gemini settings
+/// `mcpServers` shape. Gemini reads `url` as an SSE endpoint and `httpUrl`
+/// as streamable HTTP, so `{"type": "http"}` entries move their `url` to
+/// `httpUrl`; stdio and SSE entries pass through unchanged
+/// (`command`/`args`/`env`, `url` + `headers`).
+fn gemini_mcp_entry(entry: &serde_json::Value) -> serde_json::Value {
+    let Some(object) = entry.as_object() else {
+        return entry.clone();
+    };
+    if object.get("type").and_then(serde_json::Value::as_str) != Some("http") {
+        return entry.clone();
+    }
+    let Some(url) = object.get("url").cloned() else {
+        return entry.clone();
+    };
+    let mut translated = object.clone();
+    translated.remove("url");
+    translated.insert("httpUrl".to_string(), url);
+    serde_json::Value::Object(translated)
+}
+
+/// Build the settings JSON injected via `GEMINI_CLI_SYSTEM_SETTINGS_PATH`
+/// when the request carries MCP servers, or `None` when `mcp_servers` is
+/// absent or empty. Entries are translated via [`gemini_mcp_entry`].
+/// `existing` is the current system settings document (if any); its keys
+/// are preserved, with the per-run servers shallow-merged into
+/// `mcpServers` (per-run entries win on name conflicts).
+fn gemini_settings_with_mcp_servers(
+    request: &SessionRequest,
+    existing: Option<&str>,
+) -> Option<String> {
+    let servers = request.mcp_servers_object()?;
+    let mut settings = existing
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut merged = settings
+        .get("mcpServers")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (name, entry) in servers {
+        merged.insert(name.clone(), gemini_mcp_entry(entry));
+    }
+    settings.insert("mcpServers".to_string(), serde_json::Value::Object(merged));
+    Some(serde_json::Value::Object(settings).to_string())
+}
+
+/// Resolve the system settings file the Gemini CLI would load for this
+/// run: an explicit `GEMINI_CLI_SYSTEM_SETTINGS_PATH` from the request's
+/// env vars or the parent environment, falling back to the CLI's
+/// platform default.
+fn gemini_system_settings_path(request: &SessionRequest) -> std::path::PathBuf {
+    if let Some((_, value)) = request
+        .env_vars
+        .iter()
+        .find(|(key, _)| key == "GEMINI_CLI_SYSTEM_SETTINGS_PATH")
+    {
+        return std::path::PathBuf::from(value);
+    }
+    if let Ok(value) = std::env::var("GEMINI_CLI_SYSTEM_SETTINGS_PATH") {
+        return std::path::PathBuf::from(value);
+    }
+    if cfg!(target_os = "macos") {
+        std::path::PathBuf::from("/Library/Application Support/GeminiCli/settings.json")
+    } else if cfg!(windows) {
+        std::path::PathBuf::from("C:\\ProgramData\\gemini-cli\\settings.json")
+    } else {
+        std::path::PathBuf::from("/etc/gemini-cli/settings.json")
+    }
+}
+
+/// Write the per-run settings file carrying `mcp_servers` (merged with any
+/// existing system settings) into the OS temp dir, or return `None` when
+/// the request carries no MCP servers. The returned guard removes the file
+/// when dropped — on session completion or on any earlier error path.
+fn write_gemini_mcp_settings(
+    request: &SessionRequest,
+) -> Result<Option<crate::session::PrivateFileGuard>> {
+    let existing = std::fs::read_to_string(gemini_system_settings_path(request)).ok();
+    let Some(settings) = gemini_settings_with_mcp_servers(request, existing.as_deref()) else {
+        return Ok(None);
+    };
+    let path = std::env::temp_dir().join(format!("animus-gemini-settings-{}.json", Uuid::new_v4()));
+    let guard = crate::session::PrivateFileGuard::new(path);
+    crate::session::write_private_file(guard.path(), &settings)?;
+    Ok(Some(guard))
+}
+
 async fn run_gemini_session(
     request: SessionRequest,
     invocation: LaunchInvocation,
@@ -131,6 +249,7 @@ async fn run_gemini_session(
     backend: String,
     session_id: Option<String>,
 ) -> Result<()> {
+    let mcp_settings = write_gemini_mcp_settings(&request)?;
     let mut command = Command::new(&invocation.command);
     command
         .args(&invocation.args)
@@ -139,10 +258,20 @@ async fn run_gemini_session(
         .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN")
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        // Gemini CLI refuses to run in an "untrusted" directory in headless
+        // mode (exit 55) unless the workspace is trusted. Animus always
+        // launches gemini against the caller's own project root in an
+        // automated context, so opt into trust here — the documented
+        // headless escape hatch — rather than requiring every operator to
+        // pre-trust each directory interactively.
+        .env("GEMINI_CLI_TRUST_WORKSPACE", "true")
         .envs(request.env_vars.iter().cloned())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(guard) = &mcp_settings {
+        command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", guard.path());
+    }
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn()?;
@@ -229,10 +358,14 @@ async fn run_gemini_session(
         }
     });
 
-    let exit_code = wait_for_gemini_child(&mut child, request.timeout_secs, &mut cancel_rx).await?;
+    let exit_result = wait_for_gemini_child(&mut child, request.timeout_secs, &mut cancel_rx).await;
 
     let _ = stdout_task.await;
     let _ = stderr_task.await;
+
+    drop(mcp_settings);
+
+    let exit_code = exit_result?;
 
     let _ = event_tx.send(SessionEvent::Finished { exit_code }).await;
 
@@ -323,4 +456,210 @@ fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
         .lock()
         .ok()
         .and_then(|mut registry| registry.remove(session_id))
+}
+
+#[cfg(test)]
+mod approvals_preamble_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
+        SessionRequest {
+            tool: "gemini".into(),
+            model: "gemini-2.5-pro".into(),
+            prompt: "say hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras,
+        }
+    }
+
+    #[test]
+    fn approvals_preamble_reaches_argv_prompt() {
+        let mut request = request_with_extras(json!({ "approvals": true }));
+        crate::session::apply_approvals_prompt_preamble(&mut request);
+        let invocation = gemini_invocation_for_request(&request, None).expect("invocation");
+        let prompt = invocation.args.last().expect("prompt token");
+        assert!(
+            prompt.starts_with(crate::session::APPROVALS_PROMPT_PREAMBLE),
+            "the preamble must lead the prompt; got: {prompt}"
+        );
+        assert!(prompt.ends_with("say hi"));
+    }
+
+    #[test]
+    fn absent_approvals_leaves_invocation_byte_identical() {
+        let mut request = request_with_extras(json!({}));
+        crate::session::apply_approvals_prompt_preamble(&mut request);
+        let baseline = gemini_invocation_for_request(&request_with_extras(json!({})), None)
+            .expect("invocation");
+        let unchanged = gemini_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(baseline.args, unchanged.args);
+    }
+}
+
+#[cfg(test)]
+mod mcp_settings_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn request_with_mcp_servers(mcp_servers: Option<serde_json::Value>) -> SessionRequest {
+        SessionRequest {
+            tool: "gemini".into(),
+            model: "gemini-2.5-pro".into(),
+            prompt: "say hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({}),
+        }
+    }
+
+    #[test]
+    fn present_servers_produce_settings_document() {
+        let servers = json!({
+            "docs": {
+                "command": "npx",
+                "args": ["-y", "docs-mcp"],
+                "env": { "TOKEN": "t" }
+            },
+            "linear": { "type": "http", "url": "https://mcp.linear.app/mcp" }
+        });
+        let request = request_with_mcp_servers(Some(servers));
+        let settings = gemini_settings_with_mcp_servers(&request, None).expect("settings");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&settings).expect("json"),
+            json!({ "mcpServers": {
+                "docs": {
+                    "command": "npx",
+                    "args": ["-y", "docs-mcp"],
+                    "env": { "TOKEN": "t" }
+                },
+                "linear": { "type": "http", "httpUrl": "https://mcp.linear.app/mcp" }
+            }}),
+            "http entries must carry httpUrl (gemini reads url as SSE)",
+        );
+    }
+
+    #[test]
+    fn sse_entries_keep_url_untranslated() {
+        let servers = json!({
+            "linear": {
+                "type": "sse",
+                "url": "https://mcp.linear.app/sse",
+                "headers": { "Authorization": "Bearer x" }
+            }
+        });
+        let request = request_with_mcp_servers(Some(servers.clone()));
+        let settings = gemini_settings_with_mcp_servers(&request, None).expect("settings");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&settings).expect("json"),
+            json!({ "mcpServers": servers }),
+        );
+    }
+
+    #[test]
+    fn existing_system_settings_are_preserved_and_merged() {
+        let request = request_with_mcp_servers(Some(json!({
+            "docs": { "command": "npx" }
+        })));
+        let existing = r#"{"tools":{"sandbox":false},"mcpServers":{"corp":{"url":"https://corp.example/mcp"}}}"#;
+        let settings =
+            gemini_settings_with_mcp_servers(&request, Some(existing)).expect("settings");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&settings).expect("json"),
+            json!({
+                "tools": { "sandbox": false },
+                "mcpServers": {
+                    "corp": { "url": "https://corp.example/mcp" },
+                    "docs": { "command": "npx" }
+                }
+            }),
+        );
+    }
+
+    #[test]
+    fn absent_servers_produce_no_settings() {
+        let request = request_with_mcp_servers(None);
+        assert!(gemini_settings_with_mcp_servers(&request, None).is_none());
+        assert!(write_gemini_mcp_settings(&request)
+            .expect("no settings write")
+            .is_none());
+    }
+
+    #[test]
+    fn empty_servers_object_produces_no_settings() {
+        let request = request_with_mcp_servers(Some(json!({})));
+        assert!(gemini_settings_with_mcp_servers(&request, None).is_none());
+    }
+
+    #[test]
+    fn argv_is_unchanged_by_mcp_servers() {
+        let baseline = gemini_invocation_for_request(&request_with_mcp_servers(None), None)
+            .expect("invocation");
+        let with_servers = gemini_invocation_for_request(
+            &request_with_mcp_servers(Some(json!({ "docs": { "command": "npx" } }))),
+            None,
+        )
+        .expect("invocation");
+        assert_eq!(baseline.args, with_servers.args);
+    }
+
+    #[test]
+    fn permission_modes_map_to_gemini_approval_modes() {
+        for (protocol, gemini) in [
+            ("default", "default"),
+            ("plan", "plan"),
+            ("acceptEdits", "auto_edit"),
+            ("auto_edit", "auto_edit"),
+            ("bypassPermissions", "yolo"),
+            ("yolo", "yolo"),
+        ] {
+            let mut request = request_with_mcp_servers(None);
+            request.permission_mode = Some(protocol.to_string());
+            let invocation = gemini_invocation_for_request(&request, None).expect("invocation");
+            let position = invocation
+                .args
+                .iter()
+                .position(|arg| arg == "--approval-mode")
+                .unwrap_or_else(|| panic!("--approval-mode missing for {protocol}"));
+            assert_eq!(invocation.args[position + 1], gemini);
+        }
+    }
+
+    #[test]
+    fn unknown_permission_mode_degrades_to_safe_default_not_yolo() {
+        let mut request = request_with_mcp_servers(None);
+        request.permission_mode = Some("safe".to_string());
+        let invocation = gemini_invocation_for_request(&request, None).expect("invocation");
+        let position = invocation
+            .args
+            .iter()
+            .position(|arg| arg == "--approval-mode")
+            .expect("--approval-mode must be present for an explicit permission mode");
+        assert_eq!(invocation.args[position + 1], "default");
+        assert!(
+            !invocation.args.iter().any(|arg| arg == "--yolo"),
+            "an explicit restrictive mode must never escalate to --yolo"
+        );
+    }
+
+    #[test]
+    fn absent_permission_mode_keeps_headless_yolo_default() {
+        let request = request_with_mcp_servers(None);
+        let invocation = gemini_invocation_for_request(&request, None).expect("invocation");
+        assert!(!invocation.args.iter().any(|arg| arg == "--approval-mode"));
+        assert!(invocation.args.iter().any(|arg| arg == "--yolo"));
+    }
 }

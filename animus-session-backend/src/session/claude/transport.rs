@@ -22,7 +22,12 @@ pub(crate) async fn start_claude_session(
     request: SessionRequest,
     resume_session_id: Option<String>,
 ) -> Result<SessionRun> {
-    let invocation = claude_invocation_for_request(&request, resume_session_id.as_deref())?;
+    let mcp_config = write_claude_mcp_config(&request)?;
+    let invocation = claude_invocation_for_request(
+        &request,
+        resume_session_id.as_deref(),
+        mcp_config.as_ref().map(|guard| guard.path()),
+    )?;
     let control_session_id = Uuid::new_v4().to_string();
     let control_session_id_for_run = control_session_id.clone();
     let (event_tx, event_rx) = mpsc::channel(128);
@@ -34,7 +39,7 @@ pub(crate) async fn start_claude_session(
         let backend_label = "claude-native".to_string();
         let session_id_for_event = Some(control_session_id.clone());
 
-        if let Err(error) = run_claude_session(
+        let run_result = run_claude_session(
             request,
             invocation,
             event_tx.clone(),
@@ -43,8 +48,9 @@ pub(crate) async fn start_claude_session(
             backend_label,
             session_id_for_event,
         )
-        .await
-        {
+        .await;
+        drop(mcp_config);
+        if let Err(error) = run_result {
             let _ = event_tx
                 .send(SessionEvent::Error {
                     message: error.to_string(),
@@ -79,13 +85,146 @@ pub(crate) async fn terminate_claude_session(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Normalize a `reasoning_effort` extras value to a Claude CLI `--effort`
+/// level. The Claude CLI accepts `low`, `medium`, `high`, `xhigh`, and
+/// `max`; Animus exposes `low`/`medium`/`high`, which map through
+/// unchanged. Unrecognized or empty values yield `None` so the flag is
+/// omitted and the CLI uses its own default effort.
+fn reasoning_effort_to_claude(level: &str) -> Option<&'static str> {
+    match level.trim().to_ascii_lowercase().as_str() {
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        _ => None,
+    }
+}
+
+/// Apply `extras.reasoning_effort` to a Claude argv as `--effort <level>`.
+///
+/// The flag pair is inserted at the FRONT of the argv (the options region),
+/// not next to the trailing token. `claude [options] [prompt]` accepts
+/// options ahead of the positional prompt, and a runtime-contract launch may
+/// send the prompt via stdin — leaving a flag value (e.g. `stream-json`)
+/// last — so prompt-relative insertion could split a flag pair.
+///
+/// A caller-supplied `--effort` (e.g. inside a runtime-contract launch
+/// block) wins: this only inserts the level when no `--effort` flag is
+/// already present.
+fn apply_claude_reasoning_effort(args: &mut Vec<String>, request: &SessionRequest) {
+    let Some(level) = request
+        .extras
+        .get("reasoning_effort")
+        .and_then(serde_json::Value::as_str)
+        .and_then(reasoning_effort_to_claude)
+    else {
+        return;
+    };
+    if args.iter().any(|arg| arg == "--effort") {
+        return;
+    }
+    args.insert(0, "--effort".to_string());
+    args.insert(1, level.to_string());
+}
+
+/// The flattened MCP tool name the Claude CLI uses for the kernel's
+/// `animus.agent.request_approval` tool, passed to
+/// `--permission-prompt-tool` when approvals are enabled.
+///
+/// Claude Code exposes tools from an `--mcp-config` server as
+/// `mcp__<server>__<tool>`, sanitizing each segment by replacing every
+/// character outside `[a-zA-Z0-9_-]` with `_` (and trimming leading or
+/// trailing `_`); its permission-rule grammar only accepts
+/// `mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+`, so dots can never survive.
+/// The kernel injects the server under the name `animus` with tool id
+/// `animus.agent.request_approval`, which therefore flattens to this
+/// value (dot -> underscore). Verified against the claude CLI 2.1.172
+/// binary; if a future CLI changes the mangling, this constant is the
+/// single place to fix.
+pub const CLAUDE_PERMISSION_PROMPT_TOOL: &str = "mcp__animus__animus_agent_request_approval";
+
+/// Apply the approvals hook to a Claude argv as
+/// `--permission-prompt-tool mcp__animus__animus_agent_request_approval`
+/// when the request carries `extras.approvals == true`.
+///
+/// Approvals also strip any `--dangerously-skip-permissions` token from
+/// the argv: that flag bypasses Claude's permission checks entirely, so
+/// leaving it alongside the hook would make approvals silently
+/// ineffective (the tool would never be consulted). The default argv
+/// builder adds it whenever no `permission_mode` is set, and a
+/// runtime-contract launch block may carry it too — approvals are
+/// "enforced, not voluntary", so they win over both.
+///
+/// The flag pair is inserted at the FRONT of the argv (the options
+/// region) for the same reason as `--effort`: the trailing token is not
+/// guaranteed to be the prompt. A caller-supplied
+/// `--permission-prompt-tool` (e.g. inside a runtime-contract launch
+/// block) wins, and a request without approvals leaves the argv
+/// byte-identical. Claude is the only transport with this native hook —
+/// it does NOT additionally receive the voluntary prompt preamble used
+/// by codex/gemini/opencode, to avoid double-prompting.
+fn apply_claude_permission_prompt_tool(args: &mut Vec<String>, request: &SessionRequest) {
+    if !crate::session::approvals_enabled(request) {
+        return;
+    }
+    args.retain(|arg| arg != "--dangerously-skip-permissions");
+    if args.iter().any(|arg| arg == "--permission-prompt-tool") {
+        return;
+    }
+    args.insert(0, "--permission-prompt-tool".to_string());
+    args.insert(1, CLAUDE_PERMISSION_PROMPT_TOOL.to_string());
+}
+
+/// Write the per-run `--mcp-config` document (`{"mcpServers": {...}}`)
+/// into a user-only (`0600`) temp file and return its path, or `None`
+/// when the request carries no MCP servers. The config goes through a
+/// private file rather than inline argv JSON so secret-bearing entries
+/// (env tokens, auth headers) never show up in process listings. The
+/// returned guard removes the file when dropped — on session completion
+/// or on any earlier error path.
+fn write_claude_mcp_config(
+    request: &SessionRequest,
+) -> Result<Option<crate::session::PrivateFileGuard>> {
+    let Some(servers) = request.mcp_servers_object() else {
+        return Ok(None);
+    };
+    let config = serde_json::json!({ "mcpServers": servers });
+    let path = std::env::temp_dir().join(format!("animus-claude-mcp-{}.json", Uuid::new_v4()));
+    let guard = crate::session::PrivateFileGuard::new(path);
+    crate::session::write_private_file(guard.path(), &config.to_string())?;
+    Ok(Some(guard))
+}
+
+/// Apply a written MCP config file to a Claude argv as
+/// `--mcp-config <path>` plus `--strict-mcp-config`.
+///
+/// The flag triple is inserted at the FRONT of the argv (the options
+/// region) for the same reason as `--effort`: the trailing token is not
+/// guaranteed to be the prompt. A caller-supplied `--mcp-config` (e.g.
+/// inside a runtime-contract launch block) wins, and an absent config
+/// path (no/empty `mcp_servers`) leaves the argv untouched.
+fn apply_claude_mcp_config(args: &mut Vec<String>, mcp_config_path: Option<&std::path::Path>) {
+    let Some(path) = mcp_config_path else {
+        return;
+    };
+    if args.iter().any(|arg| arg == "--mcp-config") {
+        return;
+    }
+    args.insert(0, "--mcp-config".to_string());
+    args.insert(1, path.display().to_string());
+    args.insert(2, "--strict-mcp-config".to_string());
+}
+
 pub(crate) fn claude_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
+    mcp_config_path: Option<&std::path::Path>,
 ) -> Result<LaunchInvocation> {
     if let Some(mut invocation) =
         parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
     {
+        apply_claude_reasoning_effort(&mut invocation.args, request);
+        apply_claude_mcp_config(&mut invocation.args, mcp_config_path);
+        apply_claude_permission_prompt_tool(&mut invocation.args, request);
         if !invocation.env.contains_key("ANTHROPIC_BASE_URL") {
             if let Some((base_url, api_key)) = resolve_anthropic_compatible_provider(&request.model)
             {
@@ -169,6 +308,9 @@ pub(crate) fn claude_invocation_for_request(
         args.push(resolved_model);
     }
     args.push(request.prompt.clone());
+    apply_claude_reasoning_effort(&mut args, request);
+    apply_claude_mcp_config(&mut args, mcp_config_path);
+    apply_claude_permission_prompt_tool(&mut args, request);
     let mut invocation = LaunchInvocation {
         command: "claude".to_string(),
         args,
@@ -384,4 +526,457 @@ fn configured_claude_session_id(request: &SessionRequest) -> Option<String> {
     }
 
     Some(Uuid::new_v4().to_string())
+}
+
+#[cfg(test)]
+mod reasoning_effort_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    pub(super) fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
+        SessionRequest {
+            tool: "claude".into(),
+            model: "claude-sonnet-4-6".into(),
+            prompt: "say hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras,
+        }
+    }
+
+    fn effort_value(args: &[String]) -> Option<String> {
+        args.iter()
+            .position(|arg| arg == "--effort")
+            .and_then(|index| args.get(index + 1).cloned())
+    }
+
+    #[test]
+    fn bare_args_inject_effort_flag() {
+        let request = request_with_extras(json!({ "reasoning_effort": "high" }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert_eq!(effort_value(&invocation.args), Some("high".to_string()));
+        assert_eq!(invocation.args.last().map(String::as_str), Some("say hi"));
+    }
+
+    #[test]
+    fn absent_reasoning_effort_omits_flag() {
+        let request = request_with_extras(json!({}));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert!(effort_value(&invocation.args).is_none());
+    }
+
+    #[test]
+    fn unknown_level_is_ignored() {
+        let request = request_with_extras(json!({ "reasoning_effort": "ludicrous" }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert!(effort_value(&invocation.args).is_none());
+    }
+
+    #[test]
+    fn runtime_contract_effort_not_duplicated() {
+        let request = request_with_extras(json!({
+            "reasoning_effort": "low",
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": [
+                            "--print", "--verbose", "--output-format", "stream-json",
+                            "--effort", "max", "say hi"
+                        ]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        let count = invocation
+            .args
+            .iter()
+            .filter(|arg| *arg == "--effort")
+            .count();
+        assert_eq!(count, 1, "caller-supplied --effort must not be duplicated");
+        assert_eq!(effort_value(&invocation.args), Some("max".to_string()));
+    }
+
+    #[test]
+    fn runtime_contract_path_gets_effort_when_absent() {
+        let request = request_with_extras(json!({
+            "reasoning_effort": "medium",
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "say hi"]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert_eq!(effort_value(&invocation.args), Some("medium".to_string()));
+    }
+
+    #[test]
+    fn stdin_contract_does_not_split_trailing_flag_pair() {
+        // prompt_via_stdin => the argv ends with a flag VALUE (`stream-json`).
+        // The `--effort` pair must go to the front, never between
+        // `--output-format` and its value.
+        let request = request_with_extras(json!({
+            "reasoning_effort": "high",
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "--output-format", "stream-json"],
+                        "prompt_via_stdin": true
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        let fmt_pos = invocation
+            .args
+            .iter()
+            .position(|a| a == "--output-format")
+            .expect("--output-format present");
+        assert_eq!(
+            invocation.args.get(fmt_pos + 1).map(String::as_str),
+            Some("stream-json"),
+            "--output-format must stay adjacent to its value; got args: {:?}",
+            invocation.args
+        );
+        assert_eq!(effort_value(&invocation.args), Some("high".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod approvals_hook_tests {
+    use super::*;
+    use serde_json::json;
+
+    use super::reasoning_effort_tests::request_with_extras;
+
+    fn permission_prompt_tool(args: &[String]) -> Option<String> {
+        args.iter()
+            .position(|arg| arg == "--permission-prompt-tool")
+            .and_then(|index| args.get(index + 1).cloned())
+    }
+
+    #[test]
+    fn approvals_true_injects_permission_prompt_tool_flag() {
+        let request = request_with_extras(json!({ "approvals": true }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some(CLAUDE_PERMISSION_PROMPT_TOOL.to_string()),
+        );
+        assert_eq!(
+            invocation.args.last().map(String::as_str),
+            Some("say hi"),
+            "the prompt must stay the final argv token"
+        );
+        assert!(
+            !invocation
+                .args
+                .iter()
+                .any(|arg| arg.contains("Human-in-the-loop")),
+            "claude gets the native hook only — never the voluntary prompt preamble"
+        );
+        assert!(
+            !invocation
+                .args
+                .iter()
+                .any(|arg| arg == "--dangerously-skip-permissions"),
+            "approvals must strip --dangerously-skip-permissions or the hook is never consulted"
+        );
+    }
+
+    #[test]
+    fn absent_approvals_keeps_default_skip_permissions_flag() {
+        let invocation = claude_invocation_for_request(&request_with_extras(json!({})), None, None)
+            .expect("invocation");
+        assert!(
+            invocation
+                .args
+                .iter()
+                .any(|arg| arg == "--dangerously-skip-permissions"),
+            "without approvals the default headless argv keeps its skip-permissions behavior"
+        );
+    }
+
+    #[test]
+    fn approvals_strip_contract_supplied_skip_permissions() {
+        let request = request_with_extras(json!({
+            "approvals": true,
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": [
+                            "--print",
+                            "--dangerously-skip-permissions",
+                            "say hi"
+                        ]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert!(
+            !invocation
+                .args
+                .iter()
+                .any(|arg| arg == "--dangerously-skip-permissions"),
+            "approvals are enforced — a contract-supplied skip flag must not defeat the hook"
+        );
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some(CLAUDE_PERMISSION_PROMPT_TOOL.to_string()),
+        );
+    }
+
+    #[test]
+    fn absent_approvals_leaves_argv_byte_identical() {
+        let baseline = claude_invocation_for_request(&request_with_extras(json!({})), None, None)
+            .expect("invocation");
+        let disabled = claude_invocation_for_request(
+            &request_with_extras(json!({ "approvals": false })),
+            None,
+            None,
+        )
+        .expect("invocation");
+        assert_eq!(baseline.args, disabled.args);
+        assert!(permission_prompt_tool(&baseline.args).is_none());
+    }
+
+    #[test]
+    fn caller_supplied_permission_prompt_tool_is_not_clobbered() {
+        let request = request_with_extras(json!({
+            "approvals": true,
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": [
+                            "--print",
+                            "--permission-prompt-tool", "mcp__custom__gate",
+                            "say hi"
+                        ]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        let count = invocation
+            .args
+            .iter()
+            .filter(|arg| *arg == "--permission-prompt-tool")
+            .count();
+        assert_eq!(count, 1, "caller-supplied hook must win");
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some("mcp__custom__gate".to_string()),
+        );
+    }
+
+    #[test]
+    fn runtime_contract_path_gets_hook_when_absent() {
+        let request = request_with_extras(json!({
+            "approvals": true,
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "say hi"]
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some(CLAUDE_PERMISSION_PROMPT_TOOL.to_string()),
+        );
+    }
+
+    #[test]
+    fn stdin_contract_does_not_split_trailing_flag_pair() {
+        let request = request_with_extras(json!({
+            "approvals": true,
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "--output-format", "stream-json"],
+                        "prompt_via_stdin": true
+                    }
+                }
+            }
+        }));
+        let invocation = claude_invocation_for_request(&request, None, None).expect("invocation");
+        let fmt_pos = invocation
+            .args
+            .iter()
+            .position(|a| a == "--output-format")
+            .expect("--output-format present");
+        assert_eq!(
+            invocation.args.get(fmt_pos + 1).map(String::as_str),
+            Some("stream-json"),
+            "--output-format must stay adjacent to its value; got args: {:?}",
+            invocation.args
+        );
+        assert_eq!(
+            permission_prompt_tool(&invocation.args),
+            Some(CLAUDE_PERMISSION_PROMPT_TOOL.to_string()),
+        );
+    }
+}
+
+#[cfg(test)]
+mod mcp_config_tests {
+    use super::*;
+    use serde_json::json;
+
+    use super::reasoning_effort_tests::request_with_extras;
+
+    fn request_with_mcp_servers(mcp_servers: Option<serde_json::Value>) -> SessionRequest {
+        let mut request = request_with_extras(json!({}));
+        request.mcp_servers = mcp_servers;
+        request
+    }
+
+    fn mcp_config_arg(args: &[String]) -> Option<String> {
+        args.iter()
+            .position(|arg| arg == "--mcp-config")
+            .and_then(|index| args.get(index + 1))
+            .cloned()
+    }
+
+    #[test]
+    fn present_servers_inject_mcp_config_file_path_and_strict_flag() {
+        let servers = json!({
+            "docs": {
+                "command": "npx",
+                "args": ["-y", "docs-mcp"],
+                "env": { "TOKEN": "t" }
+            },
+            "linear": { "type": "sse", "url": "https://mcp.linear.app/sse" }
+        });
+        let request = request_with_mcp_servers(Some(servers.clone()));
+        let guard = write_claude_mcp_config(&request)
+            .expect("write config")
+            .expect("config path");
+        let invocation =
+            claude_invocation_for_request(&request, None, Some(guard.path())).expect("invocation");
+
+        assert_eq!(invocation.args[0], "--mcp-config");
+        assert_eq!(invocation.args[1], guard.path().display().to_string());
+        assert_eq!(invocation.args[2], "--strict-mcp-config");
+        assert_eq!(invocation.args.last().map(String::as_str), Some("say hi"));
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(guard.path()).expect("read config"))
+                .expect("config JSON");
+        assert_eq!(written, json!({ "mcpServers": servers }));
+        assert!(
+            !invocation.args.iter().any(|arg| arg.contains("TOKEN")),
+            "secret values must never reach argv"
+        );
+        let path = guard.path().to_path_buf();
+        drop(guard);
+        assert!(!path.exists(), "guard drop must remove the config file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_config_file_is_user_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let request = request_with_mcp_servers(Some(json!({ "docs": { "command": "npx" } })));
+        let guard = write_claude_mcp_config(&request)
+            .expect("write config")
+            .expect("config path");
+        let mode = std::fs::metadata(guard.path())
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn absent_servers_write_no_config_and_leave_argv_untouched() {
+        let request = request_with_mcp_servers(None);
+        assert!(write_claude_mcp_config(&request)
+            .expect("write config")
+            .is_none());
+        let baseline = claude_invocation_for_request(&request, None, None).expect("invocation");
+        assert!(!baseline.args.iter().any(|arg| arg == "--mcp-config"));
+        assert!(!baseline.args.iter().any(|arg| arg == "--strict-mcp-config"));
+    }
+
+    #[test]
+    fn empty_servers_object_writes_no_config_and_leaves_argv_byte_identical() {
+        let empty_request = request_with_mcp_servers(Some(json!({})));
+        assert!(write_claude_mcp_config(&empty_request)
+            .expect("write config")
+            .is_none());
+        let baseline = claude_invocation_for_request(&request_with_mcp_servers(None), None, None)
+            .expect("invocation");
+        let empty = claude_invocation_for_request(&empty_request, None, None).expect("invocation");
+        assert_eq!(baseline.args, empty.args);
+    }
+
+    #[test]
+    fn runtime_contract_mcp_config_is_not_duplicated() {
+        let mut request = request_with_extras(json!({
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "--mcp-config", "{\"mcpServers\":{}}", "say hi"]
+                    }
+                }
+            }
+        }));
+        request.mcp_servers = Some(json!({ "docs": { "command": "npx" } }));
+        let invocation =
+            claude_invocation_for_request(&request, None, Some(std::path::Path::new("/tmp/x")))
+                .expect("invocation");
+        let count = invocation
+            .args
+            .iter()
+            .filter(|arg| *arg == "--mcp-config")
+            .count();
+        assert_eq!(count, 1, "caller-supplied --mcp-config must win");
+    }
+
+    #[test]
+    fn runtime_contract_path_gets_mcp_config_when_absent() {
+        let mut request = request_with_extras(json!({
+            "runtime_contract": {
+                "cli": {
+                    "launch": {
+                        "command": "claude",
+                        "args": ["--print", "say hi"]
+                    }
+                }
+            }
+        }));
+        let servers = json!({ "docs": { "command": "npx" } });
+        request.mcp_servers = Some(servers.clone());
+        let guard = write_claude_mcp_config(&request)
+            .expect("write config")
+            .expect("config path");
+        let invocation =
+            claude_invocation_for_request(&request, None, Some(guard.path())).expect("invocation");
+        assert_eq!(
+            mcp_config_arg(&invocation.args),
+            Some(guard.path().display().to_string()),
+        );
+        assert!(invocation.args.iter().any(|a| a == "--strict-mcp-config"));
+    }
 }

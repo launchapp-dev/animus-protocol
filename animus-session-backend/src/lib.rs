@@ -57,5 +57,6 @@ pub use session::{
     ClaudeSessionBackend, CodexSessionBackend, GeminiSessionBackend, OaiRunnerSessionBackend,
     OpenCodeSessionBackend, SessionBackend, SessionBackendInfo, SessionBackendKind,
     SessionBackendResolver, SessionCapabilities, SessionEvent, SessionRequest, SessionRun,
-    SessionStability, SubprocessSessionBackend,
+    SessionStability, SubprocessSessionBackend, APPROVALS_PROMPT_PREAMBLE,
+    CLAUDE_PERMISSION_PROMPT_TOOL,
 };

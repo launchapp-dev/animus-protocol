@@ -423,16 +423,27 @@ mod tests {
 
     #[test]
     fn next_deadline_response_round_trips() {
-        let some = QueueNextDeadlineResponse { next_run_at: Some("2030-01-01T15:00:00Z".into()) };
+        let some = QueueNextDeadlineResponse {
+            next_run_at: Some("2030-01-01T15:00:00Z".into()),
+        };
         let v = serde_json::to_value(&some).unwrap();
-        assert_eq!(v.get("next_run_at").and_then(|t| t.as_str()), Some("2030-01-01T15:00:00Z"));
-        assert_eq!(serde_json::from_value::<QueueNextDeadlineResponse>(v).unwrap(), some);
+        assert_eq!(
+            v.get("next_run_at").and_then(|t| t.as_str()),
+            Some("2030-01-01T15:00:00Z")
+        );
+        assert_eq!(
+            serde_json::from_value::<QueueNextDeadlineResponse>(v).unwrap(),
+            some
+        );
 
         // Empty queue: field omitted, decodes back to None.
         let none = QueueNextDeadlineResponse { next_run_at: None };
         let v = serde_json::to_value(&none).unwrap();
         assert!(v.get("next_run_at").is_none());
-        assert_eq!(serde_json::from_value::<QueueNextDeadlineResponse>(v).unwrap(), none);
+        assert_eq!(
+            serde_json::from_value::<QueueNextDeadlineResponse>(v).unwrap(),
+            none
+        );
     }
 
     #[test]
@@ -477,7 +488,10 @@ mod tests {
             v.get("run_at").and_then(|t| t.as_str()),
             Some("2030-01-01T15:00:00Z")
         );
-        assert_eq!(v.get("expire_after_secs").and_then(|t| t.as_u64()), Some(600));
+        assert_eq!(
+            v.get("expire_after_secs").and_then(|t| t.as_u64()),
+            Some(600)
+        );
         let back: QueueEnqueueRequest = serde_json::from_value(v).unwrap();
         assert_eq!(back, req);
     }
@@ -518,9 +532,10 @@ mod tests {
         let back: QueueEntry = serde_json::from_value(v).unwrap();
         assert_eq!(back, entry);
         // Stats default keeps `deferred` at zero for legacy payloads.
-        let legacy_stats: QueueStats =
-            serde_json::from_value(serde_json::json!({ "total": 1, "pending": 1, "assigned": 0, "held": 0 }))
-                .unwrap();
+        let legacy_stats: QueueStats = serde_json::from_value(
+            serde_json::json!({ "total": 1, "pending": 1, "assigned": 0, "held": 0 }),
+        )
+        .unwrap();
         assert_eq!(legacy_stats.deferred, 0);
     }
 

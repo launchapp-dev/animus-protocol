@@ -17,9 +17,12 @@ use crate::session::{
 use super::parser::parse_opencode_json_line;
 
 pub(crate) async fn start_opencode_session(
-    request: SessionRequest,
+    mut request: SessionRequest,
     resume_session_id: Option<String>,
 ) -> Result<SessionRun> {
+    // opencode has no headless approval hook, so approvals ride a voluntary
+    // prompt preamble directing the agent to the Animus MCP tools.
+    crate::session::apply_approvals_prompt_preamble(&mut request);
     let invocation = opencode_invocation_for_request(&request, resume_session_id.as_deref())?;
     let control_session_id = Uuid::new_v4().to_string();
     let control_session_id_for_run = control_session_id.clone();
@@ -113,6 +116,84 @@ pub(crate) fn opencode_invocation_for_request(
     Ok(invocation)
 }
 
+/// Translate one canonical `mcp_servers` entry into the opencode config
+/// `mcp` shape: stdio entries become `{"type": "local", "command":
+/// [command, ...args], "environment": {...}}`, remote entries become
+/// `{"type": "remote", "url": "...", "headers": {...}}`. Entries with
+/// neither `url` nor `command` yield `None`.
+fn opencode_mcp_entry(entry: &serde_json::Value) -> Option<serde_json::Value> {
+    use serde_json::{Map, Value};
+
+    if let Some(url) = entry.get("url").and_then(Value::as_str) {
+        let mut out = Map::new();
+        out.insert("type".to_string(), Value::String("remote".to_string()));
+        out.insert("url".to_string(), Value::String(url.to_string()));
+        if let Some(headers) = entry
+            .get("headers")
+            .and_then(Value::as_object)
+            .filter(|headers| !headers.is_empty())
+        {
+            out.insert("headers".to_string(), Value::Object(headers.clone()));
+        }
+        out.insert("enabled".to_string(), Value::Bool(true));
+        return Some(Value::Object(out));
+    }
+    let command = entry.get("command").and_then(Value::as_str)?;
+    let mut argv = vec![Value::String(command.to_string())];
+    if let Some(args) = entry.get("args").and_then(Value::as_array) {
+        argv.extend(args.iter().filter(|arg| arg.is_string()).cloned());
+    }
+    let mut out = Map::new();
+    out.insert("type".to_string(), Value::String("local".to_string()));
+    out.insert("command".to_string(), Value::Array(argv));
+    if let Some(env) = entry
+        .get("env")
+        .and_then(Value::as_object)
+        .filter(|env| !env.is_empty())
+    {
+        out.insert("environment".to_string(), Value::Object(env.clone()));
+    }
+    out.insert("enabled".to_string(), Value::Bool(true));
+    Some(Value::Object(out))
+}
+
+/// Build the JSON config injected via the `OPENCODE_CONFIG_CONTENT` env
+/// var (which opencode merges over project config) when the request
+/// carries MCP servers, or `None` when `mcp_servers` is absent or empty.
+/// Any caller-supplied `OPENCODE_CONFIG_CONTENT` in the request's env
+/// vars is preserved, with the per-run servers merged into its `mcp` key.
+fn opencode_config_content_for_request(request: &SessionRequest) -> Option<String> {
+    use serde_json::{Map, Value};
+
+    let servers = request.mcp_servers_object()?;
+    let mut mcp = Map::new();
+    for (name, entry) in servers {
+        if let Some(translated) = opencode_mcp_entry(entry) {
+            mcp.insert(name.clone(), translated);
+        }
+    }
+    if mcp.is_empty() {
+        return None;
+    }
+    let mut config = request
+        .env_vars
+        .iter()
+        .find(|(key, _)| key == "OPENCODE_CONFIG_CONTENT")
+        .and_then(|(_, value)| serde_json::from_str::<Value>(value).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut merged = config
+        .get("mcp")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (name, entry) in mcp {
+        merged.insert(name, entry);
+    }
+    config.insert("mcp".to_string(), Value::Object(merged));
+    Some(Value::Object(config).to_string())
+}
+
 async fn run_opencode_session(
     request: SessionRequest,
     invocation: LaunchInvocation,
@@ -134,6 +215,9 @@ async fn run_opencode_session(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(content) = opencode_config_content_for_request(&request) {
+        command.env("OPENCODE_CONFIG_CONTENT", content);
+    }
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn()?;
@@ -258,4 +342,156 @@ fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
         .lock()
         .ok()
         .and_then(|mut registry| registry.remove(session_id))
+}
+
+#[cfg(test)]
+mod approvals_preamble_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn request_with_extras(extras: serde_json::Value) -> SessionRequest {
+        SessionRequest {
+            tool: "opencode".into(),
+            model: "anthropic/claude-sonnet-4-5".into(),
+            prompt: "say hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras,
+        }
+    }
+
+    #[test]
+    fn approvals_preamble_reaches_argv_prompt() {
+        let mut request = request_with_extras(json!({ "approvals": true }));
+        crate::session::apply_approvals_prompt_preamble(&mut request);
+        let invocation = opencode_invocation_for_request(&request, None).expect("invocation");
+        let prompt = invocation.args.last().expect("prompt token");
+        assert!(
+            prompt.starts_with(crate::session::APPROVALS_PROMPT_PREAMBLE),
+            "the preamble must lead the prompt; got: {prompt}"
+        );
+        assert!(prompt.ends_with("say hi"));
+    }
+
+    #[test]
+    fn absent_approvals_leaves_invocation_byte_identical() {
+        let mut request = request_with_extras(json!({}));
+        crate::session::apply_approvals_prompt_preamble(&mut request);
+        let baseline = opencode_invocation_for_request(&request_with_extras(json!({})), None)
+            .expect("invocation");
+        let unchanged = opencode_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(baseline.args, unchanged.args);
+    }
+}
+
+#[cfg(test)]
+mod mcp_config_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn request_with_mcp_servers(mcp_servers: Option<serde_json::Value>) -> SessionRequest {
+        SessionRequest {
+            tool: "opencode".into(),
+            model: "anthropic/claude-sonnet-4-5".into(),
+            prompt: "say hi".into(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({}),
+        }
+    }
+
+    #[test]
+    fn stdio_and_remote_servers_translate_to_opencode_mcp_config() {
+        let request = request_with_mcp_servers(Some(json!({
+            "docs": {
+                "command": "npx",
+                "args": ["-y", "docs-mcp"],
+                "env": { "TOKEN": "t" }
+            },
+            "linear": {
+                "type": "http",
+                "url": "https://mcp.linear.app/mcp",
+                "headers": { "Authorization": "Bearer x" }
+            }
+        })));
+        let content = opencode_config_content_for_request(&request).expect("config content");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content).expect("json"),
+            json!({
+                "mcp": {
+                    "docs": {
+                        "type": "local",
+                        "command": ["npx", "-y", "docs-mcp"],
+                        "environment": { "TOKEN": "t" },
+                        "enabled": true
+                    },
+                    "linear": {
+                        "type": "remote",
+                        "url": "https://mcp.linear.app/mcp",
+                        "headers": { "Authorization": "Bearer x" },
+                        "enabled": true
+                    }
+                }
+            }),
+        );
+    }
+
+    #[test]
+    fn absent_servers_produce_no_config_content() {
+        let request = request_with_mcp_servers(None);
+        assert!(opencode_config_content_for_request(&request).is_none());
+    }
+
+    #[test]
+    fn empty_servers_object_produces_no_config_content() {
+        let request = request_with_mcp_servers(Some(json!({})));
+        assert!(opencode_config_content_for_request(&request).is_none());
+    }
+
+    #[test]
+    fn caller_supplied_config_content_is_preserved_and_merged() {
+        let mut request = request_with_mcp_servers(Some(json!({
+            "docs": { "command": "npx" }
+        })));
+        request.env_vars.push((
+            "OPENCODE_CONFIG_CONTENT".to_string(),
+            r#"{"theme":"dark","mcp":{"corp":{"type":"remote","url":"https://corp.example/mcp"}}}"#
+                .to_string(),
+        ));
+        let content = opencode_config_content_for_request(&request).expect("config content");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content).expect("json"),
+            json!({
+                "theme": "dark",
+                "mcp": {
+                    "corp": { "type": "remote", "url": "https://corp.example/mcp" },
+                    "docs": { "type": "local", "command": ["npx"], "enabled": true }
+                }
+            }),
+        );
+    }
+
+    #[test]
+    fn argv_is_unchanged_by_mcp_servers() {
+        let baseline = opencode_invocation_for_request(&request_with_mcp_servers(None), None)
+            .expect("invocation");
+        let with_servers = opencode_invocation_for_request(
+            &request_with_mcp_servers(Some(json!({ "docs": { "command": "npx" } }))),
+            None,
+        )
+        .expect("invocation");
+        assert_eq!(baseline.args, with_servers.args);
+    }
 }

@@ -62,6 +62,26 @@ pub const NOTIFICATION_AGENT_TOOL_RESULT: &str = "agent/toolResult";
 /// errors mid-run.
 pub const NOTIFICATION_AGENT_ERROR: &str = "agent/error";
 
+/// `agent/interactionRequested` — notification (plugin → host) that the
+/// agent surfaced a native human-in-the-loop interaction (approval or
+/// question) through the provider's own channel (e.g. codex app-server
+/// approvals). The host records it in its interactions store and inbox.
+/// Added in v0.1.13.5.
+pub const NOTIFICATION_AGENT_INTERACTION_REQUESTED: &str = "agent/interactionRequested";
+
+/// `agent/respond` — request (host → plugin) delivering the human decision
+/// or answer for an interaction the plugin previously surfaced via
+/// [`NOTIFICATION_AGENT_INTERACTION_REQUESTED`]. The plugin forwards it to
+/// its CLI's native channel. Hosts only route this to plugins that declare
+/// [`CAPABILITY_AGENT_RESPOND`]. Added in v0.1.13.5.
+pub const METHOD_AGENT_RESPOND: &str = "agent/respond";
+
+/// Capability string a provider plugin declares (in its manifest /
+/// `initialize` capabilities) to opt in to receiving [`METHOD_AGENT_RESPOND`]
+/// requests. Absent capability changes nothing — the host never routes
+/// responses to plugins that don't declare it. Added in v0.1.13.5.
+pub const CAPABILITY_AGENT_RESPOND: &str = "agent/respond";
+
 // =====================================================================
 // Manifest
 // =====================================================================
@@ -200,6 +220,84 @@ pub type AgentResumeRequest = AgentRunRequest;
 pub struct AgentCancelRequest {
     /// Session id to cancel.
     pub session_id: String,
+}
+
+/// Parameters of an [`NOTIFICATION_AGENT_INTERACTION_REQUESTED`]
+/// notification (plugin → host). Added in v0.1.13.5.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InteractionRequestedParams {
+    /// Plugin-assigned interaction id, echoed back in `agent/respond`.
+    pub interaction_id: String,
+    /// Session the interaction belongs to.
+    pub session_id: String,
+    /// Interaction kind: `"approval"` or `"question"`.
+    pub kind: String,
+    /// Kind-specific detail.
+    #[serde(default)]
+    pub payload: InteractionRequestPayload,
+    /// RFC 3339 timestamp after which the plugin treats the interaction as
+    /// expired (approvals fail closed on expiry).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+/// Kind-specific detail inside [`InteractionRequestedParams`]. Approval
+/// interactions fill `action` (plus optionally `tool_name` / `arguments`);
+/// question interactions fill `question` (plus optionally `options`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InteractionRequestPayload {
+    /// Human-readable description of the action awaiting approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// Tool the agent wants to invoke, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// Arguments of the pending tool invocation, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Value>,
+    /// The question text (question interactions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    /// Suggested answers (question interactions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+}
+
+/// Parameters for an [`METHOD_AGENT_RESPOND`] call (host → plugin).
+/// Added in v0.1.13.5.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentRespondParams {
+    /// Interaction id from the originating `agent/interactionRequested`.
+    pub interaction_id: String,
+    /// Session the interaction belongs to.
+    pub session_id: String,
+    /// The human response.
+    pub response: InteractionResponse,
+}
+
+/// Human response carried by [`AgentRespondParams`]. Approvals fill
+/// `decision` (`"allow"` or `"deny"`) and optionally `message`; questions
+/// fill `answer` and optionally `message`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InteractionResponse {
+    /// Approval decision: `"allow"` or `"deny"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    /// Free-text answer for question interactions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    /// Optional human note accompanying the decision or answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Result of an [`METHOD_AGENT_RESPOND`] call. Added in v0.1.13.5.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentRespondResult {
+    /// `true` when the plugin accepted the response and forwarded it to
+    /// its native channel; `false` when it could not (unknown interaction,
+    /// already resolved, or the plugin does not implement `agent/respond`).
+    pub accepted: bool,
 }
 
 /// Final response to `agent/run` or `agent/resume`.
@@ -410,6 +508,26 @@ pub enum AgentNotification {
         /// True if the run continues after this error.
         recoverable: bool,
     },
+    /// Agent surfaced a native human-in-the-loop interaction. Maps to
+    /// [`NOTIFICATION_AGENT_INTERACTION_REQUESTED`]. Added in v0.1.13.5.
+    ///
+    /// The field is named `interaction_kind` Rust-side because the enum's
+    /// serde tag already claims `kind`; the wire payload (see
+    /// [`AgentNotification::payload`]) emits it as `kind` per spec.
+    InteractionRequested {
+        /// Stable session id.
+        session_id: String,
+        /// Plugin-assigned interaction id.
+        interaction_id: String,
+        /// Interaction kind: `"approval"` or `"question"`.
+        interaction_kind: String,
+        /// Kind-specific detail.
+        #[serde(default)]
+        payload: InteractionRequestPayload,
+        /// RFC 3339 expiry, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<String>,
+    },
 }
 
 impl AgentNotification {
@@ -421,6 +539,9 @@ impl AgentNotification {
             AgentNotification::ToolCall { .. } => NOTIFICATION_AGENT_TOOL_CALL,
             AgentNotification::ToolResult { .. } => NOTIFICATION_AGENT_TOOL_RESULT,
             AgentNotification::Error { .. } => NOTIFICATION_AGENT_ERROR,
+            AgentNotification::InteractionRequested { .. } => {
+                NOTIFICATION_AGENT_INTERACTION_REQUESTED
+            }
         }
     }
 
@@ -477,6 +598,24 @@ impl AgentNotification {
                 "message": message,
                 "recoverable": recoverable,
             }),
+            AgentNotification::InteractionRequested {
+                session_id,
+                interaction_id,
+                interaction_kind,
+                payload,
+                expires_at,
+            } => {
+                let mut wire = serde_json::json!({
+                    "interaction_id": interaction_id,
+                    "session_id": session_id,
+                    "kind": interaction_kind,
+                    "payload": payload,
+                });
+                if let Some(expires_at) = expires_at {
+                    wire["expires_at"] = serde_json::json!(expires_at);
+                }
+                wire
+            }
         }
     }
 }
@@ -605,6 +744,23 @@ pub trait ProviderBackend: Send + Sync + 'static {
     /// Cancel an in-flight session.
     async fn cancel_agent(&self, session_id: &str) -> Result<(), BackendError>;
 
+    /// Deliver a human response for an interaction this provider previously
+    /// surfaced via an [`AgentNotification::InteractionRequested`] emission
+    /// (wire method [`METHOD_AGENT_RESPOND`]). Added in v0.1.13.5.
+    ///
+    /// The default implementation is inert — it accepts nothing and returns
+    /// `{ accepted: false }` — so existing providers compile and behave
+    /// exactly as before. Providers with a native human-in-the-loop channel
+    /// (e.g. codex app-server approvals) should override this, forward the
+    /// response to their CLI, and also declare [`CAPABILITY_AGENT_RESPOND`]
+    /// so hosts route responses to them.
+    async fn respond_interaction(
+        &self,
+        _request: AgentRespondParams,
+    ) -> Result<AgentRespondResult, BackendError> {
+        Ok(AgentRespondResult { accepted: false })
+    }
+
     /// Provider health.
     async fn health(&self) -> Result<HealthCheckResult, BackendError>;
 }
@@ -664,6 +820,131 @@ mod tests {
         assert_eq!(payload["name"], "shell");
         assert_eq!(payload["server"], "local");
         assert_eq!(payload["arguments"]["cmd"], "ls");
+    }
+
+    #[test]
+    fn interaction_requested_method_and_payload_match_spec() {
+        let notification = AgentNotification::InteractionRequested {
+            session_id: "s1".into(),
+            interaction_id: "int-9".into(),
+            interaction_kind: "approval".into(),
+            payload: InteractionRequestPayload {
+                action: Some("git push --force".into()),
+                tool_name: Some("git.push".into()),
+                arguments: Some(serde_json::json!({"force": true})),
+                question: None,
+                options: None,
+            },
+            expires_at: Some("2026-06-10T12:00:00Z".into()),
+        };
+        assert_eq!(
+            notification.method(),
+            NOTIFICATION_AGENT_INTERACTION_REQUESTED
+        );
+        let payload = notification.payload();
+        assert_eq!(payload["interaction_id"], "int-9");
+        assert_eq!(payload["session_id"], "s1");
+        assert_eq!(payload["kind"], "approval");
+        assert_eq!(payload["payload"]["action"], "git push --force");
+        assert_eq!(payload["payload"]["tool_name"], "git.push");
+        assert_eq!(payload["expires_at"], "2026-06-10T12:00:00Z");
+
+        let no_expiry = AgentNotification::InteractionRequested {
+            session_id: "s1".into(),
+            interaction_id: "int-10".into(),
+            interaction_kind: "question".into(),
+            payload: InteractionRequestPayload {
+                question: Some("Which migration?".into()),
+                options: Some(vec!["in place".into(), "copy".into()]),
+                ..Default::default()
+            },
+            expires_at: None,
+        };
+        let payload = no_expiry.payload();
+        assert!(
+            payload.get("expires_at").is_none(),
+            "absent expiry must be omitted from the wire payload"
+        );
+        assert_eq!(payload["payload"]["question"], "Which migration?");
+    }
+
+    #[test]
+    fn respond_params_round_trip() {
+        let params = AgentRespondParams {
+            interaction_id: "int-9".into(),
+            session_id: "s1".into(),
+            response: InteractionResponse {
+                decision: Some("allow".into()),
+                answer: None,
+                message: Some("go ahead".into()),
+            },
+        };
+        let value = serde_json::to_value(&params).unwrap();
+        assert_eq!(value["response"]["decision"], "allow");
+        assert!(
+            value["response"].get("answer").is_none(),
+            "absent options must be omitted"
+        );
+        let back: AgentRespondParams = serde_json::from_value(value).unwrap();
+        assert_eq!(back, params);
+
+        let result: AgentRespondResult =
+            serde_json::from_value(serde_json::json!({ "accepted": true })).unwrap();
+        assert!(result.accepted);
+    }
+
+    #[tokio::test]
+    async fn default_respond_interaction_is_inert() {
+        struct MinimalProvider;
+
+        #[async_trait]
+        impl ProviderBackend for MinimalProvider {
+            fn manifest(&self) -> ProviderManifest {
+                ProviderManifest {
+                    name: "minimal".into(),
+                    version: "0".into(),
+                    description: String::new(),
+                    supported_models: vec![],
+                    tool: "minimal".into(),
+                    capabilities: ProviderCapabilities::default(),
+                }
+            }
+
+            async fn run_agent(
+                &self,
+                _request: AgentRunRequest,
+            ) -> Result<AgentRunResponse, BackendError> {
+                Err(BackendError::Cancelled)
+            }
+
+            async fn resume_agent(
+                &self,
+                _request: AgentResumeRequest,
+            ) -> Result<AgentRunResponse, BackendError> {
+                Err(BackendError::Cancelled)
+            }
+
+            async fn cancel_agent(&self, _session_id: &str) -> Result<(), BackendError> {
+                Ok(())
+            }
+
+            async fn health(&self) -> Result<HealthCheckResult, BackendError> {
+                Err(BackendError::Cancelled)
+            }
+        }
+
+        let result = MinimalProvider
+            .respond_interaction(AgentRespondParams {
+                interaction_id: "int-1".into(),
+                session_id: "s1".into(),
+                response: InteractionResponse::default(),
+            })
+            .await
+            .expect("default respond_interaction must not error");
+        assert!(
+            !result.accepted,
+            "the default impl must be inert (accepted=false)"
+        );
     }
 
     #[test]
