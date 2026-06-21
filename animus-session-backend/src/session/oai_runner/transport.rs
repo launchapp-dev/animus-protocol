@@ -25,10 +25,14 @@ use super::parser::parse_oai_runner_json_line;
 pub const ANIMUS_OAI_RUNNER_BIN_ENV: &str = "ANIMUS_OAI_RUNNER_BIN";
 
 pub(crate) async fn start_oai_runner_session(
-    request: SessionRequest,
+    mut request: SessionRequest,
     resume_session_id: Option<String>,
     runner_binary_path: Option<PathBuf>,
 ) -> Result<SessionRun> {
+    // The OpenAI-compatible runner has no headless approval hook, so approvals
+    // ride a voluntary prompt preamble directing the agent to the Animus MCP
+    // `request_approval` tool (parity with codex/gemini/opencode).
+    crate::session::apply_approvals_prompt_preamble(&mut request);
     let invocation = oai_runner_invocation_for_request(
         &request,
         resume_session_id.as_deref(),
