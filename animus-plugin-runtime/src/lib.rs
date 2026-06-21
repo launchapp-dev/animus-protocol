@@ -160,6 +160,13 @@ struct AgentRunParams {
     response_schema: Option<Value>,
     #[serde(default)]
     runtime_contract: Option<Value>,
+    /// Catch-all for any other top-level params the kernel sends that aren't
+    /// mapped to a typed field above — notably `approvals` (the kernel-mediated
+    /// approval gate flag). Without this, serde silently drops them and the
+    /// session transports never see them (e.g. claude's `--permission-prompt-tool`
+    /// gate would not engage), which fails OPEN. Merged into `SessionRequest.extras`.
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -636,6 +643,13 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
     if let Some(sid) = params.session_id {
         extras.insert("session_id".to_string(), Value::String(sid));
     }
+    // Forward every other top-level param the kernel sent (notably `approvals`)
+    // that isn't mapped to a typed field. Typed-derived keys above win on
+    // collision. Without this the approval gate fails OPEN for run_provider-based
+    // providers (the transport never sees extras.approvals).
+    for (key, value) in params.extra {
+        extras.entry(key).or_insert(value);
+    }
 
     SessionRequest {
         tool: info.default_tool.to_string(),
@@ -675,4 +689,55 @@ fn invalid_rpc(id: Option<Value>, message: impl Into<String>) -> RpcResponse {
 
 fn error_rpc(id: Option<Value>, error: RpcError) -> RpcResponse {
     RpcResponse::err(id, error)
+}
+
+#[cfg(test)]
+mod build_session_request_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn info() -> ProviderInfo {
+        ProviderInfo {
+            plugin_name: "test",
+            plugin_version: "0",
+            description: "test",
+            default_tool: "claude",
+            default_model: "m",
+        }
+    }
+
+    #[test]
+    fn forwards_approvals_and_unmapped_extras() {
+        // The kernel sends `approvals` (the gate flag) as a top-level RPC param
+        // with no typed field; it MUST survive into SessionRequest.extras or the
+        // transport approval gate fails OPEN.
+        let params: AgentRunParams = serde_json::from_value(json!({
+            "prompt": "hi",
+            "cwd": "/tmp",
+            "approvals": true,
+            "custom_extra": "x",
+        }))
+        .expect("parse params");
+        let req = build_session_request(&info(), params);
+        assert_eq!(
+            req.extras.get("approvals").and_then(Value::as_bool),
+            Some(true),
+            "approvals must reach SessionRequest.extras"
+        );
+        assert_eq!(
+            req.extras.get("custom_extra").and_then(Value::as_str),
+            Some("x")
+        );
+    }
+
+    #[test]
+    fn absent_approvals_not_injected() {
+        let params: AgentRunParams =
+            serde_json::from_value(json!({ "prompt": "hi", "cwd": "/tmp" })).expect("parse params");
+        let req = build_session_request(&info(), params);
+        assert!(
+            req.extras.get("approvals").is_none(),
+            "absent approvals must not be injected"
+        );
+    }
 }
