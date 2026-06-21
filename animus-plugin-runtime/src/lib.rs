@@ -35,6 +35,7 @@
 //! entrypoints were dropped in the v0.1.14 sync (`aed9f42`) and restored as
 //! the [`transport`] module.
 
+pub mod log;
 pub mod plugin;
 pub mod subject;
 pub mod transport;
@@ -226,6 +227,8 @@ pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) ->
 
     let backend = Arc::new(backend);
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    // Stream plugin-emitted logs (log::{info,warn,error}! macros) to the host.
+    install_log_forwarder(stdout.clone());
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
 
@@ -395,6 +398,21 @@ async fn send_notification(
 ) {
     let notification = RpcNotification::new(method, Some(params));
     write_frame(stdout, &notification).await;
+}
+
+/// Install the global plugin-log emitter for this process and spawn a forwarder
+/// task that drains queued `log/entry` notifications onto the shared stdout, so
+/// plugin code's `log::{info,warn,error}!` macros stream to the host (daemon log
+/// file + log-storage backend), queryable alongside core engine logs. Called by
+/// the runtime entrypoints before the read loop so the macros become live.
+pub(crate) fn install_log_forwarder(stdout: Arc<Mutex<tokio::io::Stdout>>) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<RpcNotification>();
+    log::install_emitter(tx);
+    tokio::spawn(async move {
+        while let Some(notification) = rx.recv().await {
+            write_frame(&stdout, &notification).await;
+        }
+    });
 }
 
 async fn handle_agent_run<P: ProviderBackend>(
