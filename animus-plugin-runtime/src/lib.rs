@@ -37,10 +37,12 @@
 
 pub mod log;
 pub mod plugin;
+pub mod provider_main;
 pub mod subject;
 pub mod transport;
 
 pub use plugin::{CancellationToken, InitContext, MethodContext, Notifier, Plugin};
+pub use provider_main::{provider_main, provider_main_with_capabilities};
 pub use subject::{
     subject_backend_main, subject_backend_main_with_capabilities, subject_backend_main_with_kinds,
     subject_plugin, subject_plugin_with_kind_aliases,
@@ -389,7 +391,10 @@ async fn handle_request<P: ProviderBackend>(
     }
 }
 
-async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<tokio::io::Stdout>>, frame: &T) {
+pub(crate) async fn write_frame<T: serde::Serialize>(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    frame: &T,
+) {
     if let Ok(mut payload) = serde_json::to_string(frame) {
         payload.push('\n');
         let mut guard = stdout.lock().await;

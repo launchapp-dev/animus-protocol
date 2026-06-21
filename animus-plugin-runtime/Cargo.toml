@@ -12,6 +12,7 @@ anyhow = "1"
 async-trait = "0.1"
 animus-session-backend = { path = "../animus-session-backend" }
 animus-plugin-protocol = { path = "../animus-plugin-protocol" }
+animus-provider-protocol = { path = "../animus-provider-protocol" }
 animus-subject-protocol = { path = "../animus-subject-protocol" }
 animus-transport-protocol = { path = "../animus-transport-protocol" }
 serde = { version = "1", features = ["derive"] }
