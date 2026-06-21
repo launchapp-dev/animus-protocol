@@ -5,6 +5,26 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
+## v0.1.19 — protocol + config-protocol move into animus-protocol
+
+### Added
+
+Moved the kernel `protocol` crate and `animus-config-protocol` out of
+`launchapp-dev/animus-cli` into this repo, per the architecture rule that no
+protocol/wire-type crates live inside the CLI. They now build as workspace
+members alongside the other `animus-*-protocol` crates:
+
+- `protocol` 0.1.0 — kernel wire types (orchestrator enums, `PhaseCapabilities`,
+  `PhaseRoutingConfig`, `McpRuntimeConfig`, `hook_policy`, model routing,
+  repository scope, sync config, error classification). Sibling dep on
+  `animus-subject-protocol` is now a path dep within this workspace.
+- `animus-config-protocol` 0.1.0 — `config_source` plugin wire types
+  (`ConfigModel` envelope + the canonical YAML parser + `WorkflowConfig`
+  types). Path-deps `protocol`.
+
+ao-cli and out-of-tree plugins (config-yaml, workflow-runner) git-dep both by
+this tag instead of pinning the CLI repo rev.
+
 ## v0.5.13 — subject/unwatch verb
 
 ### Added
