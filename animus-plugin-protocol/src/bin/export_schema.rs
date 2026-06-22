@@ -23,6 +23,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use animus_plugin_protocol::conversation_store::{
+    ChatMessage, ConversationAppendMessageRequest, ConversationAppendMessageResponse,
+    ConversationCreateRequest, ConversationCreateResponse, ConversationDeleteRequest,
+    ConversationDeleteResponse, ConversationListRequest, ConversationListResponse,
+    ConversationLoadMessagesRequest, ConversationLoadMessagesResponse, ConversationLoadMetaRequest,
+    ConversationLoadMetaResponse, ConversationMeta, ConversationSaveMetaRequest,
+    ConversationSaveMetaResponse, ConversationScope, ConversationSummary, Visibility,
+};
 use animus_plugin_protocol::{
     EnvRequirement, HealthCheckResult, HealthStatus, HostCapabilities, HostInfo, InitializeParams,
     InitializeResult, McpTool, PluginCapabilities, PluginInfo, PluginManifest, RpcError,
@@ -81,6 +89,67 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("TriggerWatchParams", schema_for!(TriggerWatchParams)),
         ("TriggerEvent", schema_for!(TriggerEvent)),
         ("TriggerAckParams", schema_for!(TriggerAckParams)),
+        ("Visibility", schema_for!(Visibility)),
+        ("ConversationMeta", schema_for!(ConversationMeta)),
+        ("ChatMessage", schema_for!(ChatMessage)),
+        ("ConversationSummary", schema_for!(ConversationSummary)),
+        ("ConversationScope", schema_for!(ConversationScope)),
+        (
+            "ConversationCreateRequest",
+            schema_for!(ConversationCreateRequest),
+        ),
+        (
+            "ConversationCreateResponse",
+            schema_for!(ConversationCreateResponse),
+        ),
+        (
+            "ConversationLoadMetaRequest",
+            schema_for!(ConversationLoadMetaRequest),
+        ),
+        (
+            "ConversationLoadMetaResponse",
+            schema_for!(ConversationLoadMetaResponse),
+        ),
+        (
+            "ConversationSaveMetaRequest",
+            schema_for!(ConversationSaveMetaRequest),
+        ),
+        (
+            "ConversationSaveMetaResponse",
+            schema_for!(ConversationSaveMetaResponse),
+        ),
+        (
+            "ConversationAppendMessageRequest",
+            schema_for!(ConversationAppendMessageRequest),
+        ),
+        (
+            "ConversationAppendMessageResponse",
+            schema_for!(ConversationAppendMessageResponse),
+        ),
+        (
+            "ConversationLoadMessagesRequest",
+            schema_for!(ConversationLoadMessagesRequest),
+        ),
+        (
+            "ConversationLoadMessagesResponse",
+            schema_for!(ConversationLoadMessagesResponse),
+        ),
+        (
+            "ConversationListRequest",
+            schema_for!(ConversationListRequest),
+        ),
+        (
+            "ConversationListResponse",
+            schema_for!(ConversationListResponse),
+        ),
+        (
+            "ConversationDeleteRequest",
+            schema_for!(ConversationDeleteRequest),
+        ),
+        (
+            "ConversationDeleteResponse",
+            schema_for!(ConversationDeleteResponse),
+        ),
     ]
 }
 

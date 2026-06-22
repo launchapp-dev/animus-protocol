@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Visibility",
+  "description": "Visibility of a conversation. Controls whether [`ConversationListRequest::as_user`]\nfiltering surfaces it to users other than its `owner`.",
+  "oneOf": [
+    {
+      "description": "Visible only to the conversation's `owner` (and to unscoped/admin\nqueries that pass no `as_user`). The default.",
+      "type": "string",
+      "const": "private"
+    },
+    {
+      "description": "Visible to every user, in addition to its owner.",
+      "type": "string",
+      "const": "shared"
+    }
+  ]
+}

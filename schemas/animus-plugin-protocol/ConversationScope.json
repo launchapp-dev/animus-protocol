@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationScope",
+  "description": "Fields common to every conversation-store request: the project + scope\nidentity a multi-tenant backend partitions on. Flattened into each\nrequest so the wire payload stays flat.",
+  "type": "object",
+  "properties": {
+    "project_root": {
+      "description": "Absolute project root path of the calling CLI/daemon.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repo_scope": {
+      "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}
