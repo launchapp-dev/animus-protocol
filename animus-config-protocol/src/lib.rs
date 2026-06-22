@@ -59,6 +59,17 @@
 //!   syntactic pre-check (e.g. YAML diagnostics with file/line). The kernel
 //!   still runs the authoritative validator; this is for better error locality
 //!   at the source.
+//! - [`METHOD_CONFIG_WRITE`] (`config/write`) — optional, gated on the
+//!   [`CAPABILITY_CONFIG_WRITE`] flag. The kernel ships the entire validated
+//!   canonical [`ConfigModel`] and the plugin persists it however it wants
+//!   (Postgres rows, a remote API). Coarse full-model write only: there are no
+//!   granular per-entity wire methods — the kernel performs entity-level edits
+//!   (manage one agent/workflow) as in-kernel read-modify-write against
+//!   `config/load`, then ships the full model here. A source that cannot
+//!   persist (e.g. a read-only YAML source) MUST NOT advertise
+//!   [`CAPABILITY_CONFIG_WRITE`]; if it nonetheless receives `config/write` it
+//!   MUST respond with
+//!   `animus_plugin_protocol::error_codes::METHOD_NOT_SUPPORTED`.
 
 // NOTE: `missing_docs` is intentionally NOT warned crate-wide. The wire types
 // below are fully documented, but the canonical config-model TYPES and YAML
@@ -151,6 +162,12 @@ pub const METHOD_CONFIG_VALIDATE: &str = "config/validate";
 /// by re-issuing `config/load` and recompiling.
 pub const NOTIFICATION_CONFIG_CHANGED: &str = "config/changed";
 
+/// `config/write` — persist a full, kernel-validated canonical [`ConfigModel`].
+/// Optional, gated on [`CAPABILITY_CONFIG_WRITE`]. Sources that do not support
+/// writes MUST respond with
+/// `animus_plugin_protocol::error_codes::METHOD_NOT_SUPPORTED`.
+pub const METHOD_CONFIG_WRITE: &str = "config/write";
+
 // =====================================================================
 // Capabilities
 // =====================================================================
@@ -162,6 +179,17 @@ pub const NOTIFICATION_CONFIG_CHANGED: &str = "config/changed";
 /// manual reload path with no behavioral regression — mirroring the
 /// `subject/watch` `MethodNotSupported` fallback contract.
 pub const CAPABILITY_CONFIG_WATCH: &str = "config_watch";
+
+/// Capability flag a config source advertises when it can persist a canonical
+/// model shipped via [`METHOD_CONFIG_WRITE`].
+///
+/// A source MUST advertise this in its manifest `capabilities` for the kernel
+/// to attempt a write. A read-only source (e.g. the YAML source, whose authored
+/// shape and comments cannot be losslessly regenerated from the compiled model)
+/// simply omits it; the kernel then refuses the write up front with a clear
+/// "this source does not support writes" error instead of issuing an RPC that
+/// would fail with `METHOD_NOT_SUPPORTED`.
+pub const CAPABILITY_CONFIG_WRITE: &str = "config_write";
 
 // =====================================================================
 // Canonical model schema identity
@@ -347,6 +375,50 @@ pub struct ConfigChangedEvent {
 }
 
 // =====================================================================
+// config/write (optional)
+// =====================================================================
+
+/// Parameters for [`METHOD_CONFIG_WRITE`].
+///
+/// Carries the same project context as [`ConfigLoadRequest`] plus the full,
+/// already-validated canonical [`ConfigModel`] the kernel wants persisted. The
+/// kernel ALWAYS validates the model with its authoritative validator before
+/// issuing this call, so the plugin can persist the payload without re-running
+/// the kernel's compiler — it only needs to honor its own storage constraints.
+///
+/// The write is coarse and full-model: the plugin replaces whatever canonical
+/// model it currently serves for [`Self::repo_scope`] / [`Self::project_root`]
+/// with [`Self::config`]. Entity-level edits (manage one agent/workflow) are a
+/// kernel-side read-modify-write over `config/load` → this method; the plugin
+/// never sees a per-entity wire method.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigWriteRequest {
+    /// Absolute path to the project root (see [`ConfigLoadRequest::project_root`]).
+    pub project_root: String,
+
+    /// The `repo-scope` identifier (see [`ConfigLoadRequest::repo_scope`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_scope: Option<String>,
+
+    /// The full, kernel-validated canonical config model to persist. Its
+    /// [`ConfigModel::schema`] / [`ConfigModel::version`] are guaranteed
+    /// compatible with this contract version.
+    pub config: ConfigModel,
+}
+
+/// Response for [`METHOD_CONFIG_WRITE`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigWriteResponse {
+    /// Cache key for the now-persisted model, mirroring
+    /// [`ConfigLoadResponse::cache_token`]. The kernel uses it to refresh its
+    /// cache key so a subsequent `config/load` is recognized as the just-written
+    /// model. When the plugin does not compute one it MAY return `None` and the
+    /// kernel falls back to re-issuing `config/load`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_token: Option<CacheToken>,
+}
+
+// =====================================================================
 // config/validate (optional)
 // =====================================================================
 
@@ -449,6 +521,30 @@ mod tests {
     fn external_inputs_token_defaults_false_when_absent() {
         let token: CacheToken = serde_json::from_value(serde_json::json!({ "version": "x" })).expect("deserialize");
         assert!(!token.external_inputs);
+    }
+
+    #[test]
+    fn write_request_round_trips() {
+        let req = ConfigWriteRequest {
+            project_root: "/tmp/proj".to_string(),
+            repo_scope: Some("scope-1".to_string()),
+            config: ConfigModel::new(serde_json::json!({ "workflows": [] })),
+        };
+        let v = serde_json::to_value(&req).expect("serialize");
+        let back: ConfigWriteRequest = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(req, back);
+        assert!(back.config.is_compatible());
+    }
+
+    #[test]
+    fn write_response_token_optional() {
+        let empty: ConfigWriteResponse = serde_json::from_value(serde_json::json!({})).expect("deserialize");
+        assert!(empty.cache_token.is_none());
+
+        let with_token = ConfigWriteResponse { cache_token: Some(CacheToken::version("v2")) };
+        let v = serde_json::to_value(&with_token).expect("serialize");
+        let back: ConfigWriteResponse = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(with_token, back);
     }
 
     #[test]

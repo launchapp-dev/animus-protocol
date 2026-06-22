@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConfigChangedEvent",
+  "description": "Notification payload for [`NOTIFICATION_CONFIG_CHANGED`].\n\nEmitted by a config source advertising [`CAPABILITY_CONFIG_WATCH`] when the\ncanonical model may have changed. The host reacts by re-issuing\n[`METHOD_CONFIG_LOAD`] and recompiling. Modeled on `subject/changed`.\n\nThe payload is intentionally minimal: it signals *that* a change occurred,\nnot the new model itself, so the host always recompiles through one code\npath (`config/load` → compile) regardless of source. An optional\n[`Self::version`] lets the host short-circuit a reload when the advertised\nversion matches what it already compiled.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "description": "Opaque new version, if the source knows it. When present and equal to\nthe host's last-compiled [`CacheToken::version`], the host MAY skip the\nreload. When absent, the host always reloads.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

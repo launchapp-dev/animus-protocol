@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConfigDiagnostic",
+  "description": "A single structured diagnostic from [`METHOD_CONFIG_VALIDATE`].\n\nPreserves the error locality of today's `yaml_diagnostic.rs` (file path +\nline/column) so source-level mistakes surface where the author can fix\nthem, even though the kernel still runs the authoritative validator.",
+  "type": "object",
+  "properties": {
+    "column": {
+      "description": "1-based column number within [`Self::file`], if known.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "file": {
+      "description": "Source file the diagnostic refers to, if applicable (e.g. a YAML\noverlay path). Absent for non-file sources.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "line": {
+      "description": "1-based line number within [`Self::file`], if known.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "message": {
+      "description": "Human-readable message.",
+      "type": "string"
+    },
+    "severity": {
+      "description": "How serious the diagnostic is.",
+      "$ref": "#/$defs/DiagnosticSeverity"
+    }
+  },
+  "required": [
+    "severity",
+    "message"
+  ],
+  "$defs": {
+    "DiagnosticSeverity": {
+      "description": "Severity of a [`ConfigDiagnostic`].",
+      "oneOf": [
+        {
+          "description": "A fatal problem that prevents producing a canonical model.",
+          "type": "string",
+          "const": "error"
+        },
+        {
+          "description": "A non-fatal advisory (e.g. an unresolved skill reference).",
+          "type": "string",
+          "const": "warning"
+        }
+      ]
+    }
+  }
+}

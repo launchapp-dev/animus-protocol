@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConfigModel",
+  "description": "The canonical config model a `config_source` returns from `config/load`.\n\nThis is the normalized, *pre-derivation* shape — the parsed canonical model\nbefore the kernel derives `agent-runtime-config.v2` / `state-machines.v1`\nor merges pack overlays. It is the superset of what the kernel's\n`WorkflowConfig` already carries: `workflows`, `phase_catalog`,\n`phase_definitions`, `agent_profiles`, `agent_channels`, `mcp_servers`,\n`phase_mcp_bindings`, `tools` / `tools_allowlist`, `schedules`, `triggers`,\n`daemon`, `secrets`, `default_workflow_ref`.\n\nThe [`Self::config`] payload is carried as opaque JSON keyed by\n[`Self::schema`] / [`Self::version`] (see the crate docs for why). The\nkernel deserializes it into its internal `WorkflowConfig` after a schema\ncompatibility check.",
+  "type": "object",
+  "properties": {
+    "config": {
+      "description": "The canonical config model, shaped as the kernel's `WorkflowConfig`\n(schema `animus.workflow-config.v2`). Carried as opaque JSON — see the\ncrate docs — and deserialized kernel-side after the schema check.\n\nThe exported JSON Schema describes this as an arbitrary JSON value\n(schemars represents `serde_json::Value` as the permissive `true`\nschema); the real shape is pinned by [`Self::schema`] /\n[`Self::version`], which is the versioning contract the kernel enforces."
+    },
+    "schema": {
+      "description": "Schema id of the embedded [`Self::config`] payload. The kernel rejects\na value it does not recognize. Expected to equal\n[`CONFIG_MODEL_SCHEMA_ID`].",
+      "type": "string"
+    },
+    "version": {
+      "description": "Version of the embedded config model. Expected to equal\n[`CONFIG_MODEL_VERSION`]; the kernel refuses a higher, incompatible\nversion.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "config"
+  ]
+}

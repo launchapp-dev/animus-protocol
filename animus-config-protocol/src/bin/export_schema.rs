@@ -25,7 +25,7 @@ use std::process::ExitCode;
 
 use animus_config_protocol::{
     CacheToken, ConfigChangedEvent, ConfigDiagnostic, ConfigLoadRequest, ConfigLoadResponse, ConfigModel,
-    ConfigValidateRequest, ConfigValidateResponse, DiagnosticSeverity,
+    ConfigValidateRequest, ConfigValidateResponse, ConfigWriteRequest, ConfigWriteResponse, DiagnosticSeverity,
 };
 use schemars::{schema_for, Schema};
 
@@ -69,6 +69,8 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("ConfigChangedEvent", schema_for!(ConfigChangedEvent)),
         ("ConfigValidateRequest", schema_for!(ConfigValidateRequest)),
         ("ConfigValidateResponse", schema_for!(ConfigValidateResponse)),
+        ("ConfigWriteRequest", schema_for!(ConfigWriteRequest)),
+        ("ConfigWriteResponse", schema_for!(ConfigWriteResponse)),
         ("ConfigDiagnostic", schema_for!(ConfigDiagnostic)),
         ("DiagnosticSeverity", schema_for!(DiagnosticSeverity)),
     ]

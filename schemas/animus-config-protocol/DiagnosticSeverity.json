@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DiagnosticSeverity",
+  "description": "Severity of a [`ConfigDiagnostic`].",
+  "oneOf": [
+    {
+      "description": "A fatal problem that prevents producing a canonical model.",
+      "type": "string",
+      "const": "error"
+    },
+    {
+      "description": "A non-fatal advisory (e.g. an unresolved skill reference).",
+      "type": "string",
+      "const": "warning"
+    }
+  ]
+}

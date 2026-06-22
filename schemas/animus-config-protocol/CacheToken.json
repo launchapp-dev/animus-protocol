@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CacheToken",
+  "description": "Opaque cache key a config source returns so the kernel cache stays correct\nfor non-file sources.\n\nThe in-tree YAML cache keys on file content + mtime. For Postgres / API\nsources the plugin instead returns a [`CacheToken`]: an opaque version\nstring (a Postgres `max(updated_at)`, an ETag, a content hash, ...) plus an\n[`Self::external_inputs`] flag that reproduces today's\n`sources_have_external_inputs` cache-bypass hazard (inputs like `${VAR}` /\n`${secret.X}` / `system_prompt_file:` that change without mutating the\nsource bytes). When [`Self::external_inputs`] is true the kernel bypasses\nits disk cache for that load, matching current YAML behavior.\n\nRFC open question #5 (cache-token contract) is the reason this is a small\nstructured shape rather than a bare opaque string: it must cover the\n\"external inputs changed but source bytes didn't\" case explicitly.",
+  "type": "object",
+  "properties": {
+    "external_inputs": {
+      "description": "When true, the model embeds inputs not captured by [`Self::version`]\n(env-var / secret interpolation, externally referenced prompt files,\n...) that can change without changing the version. The kernel bypasses\nits disk cache for this load — preserving today's\n`sources_have_external_inputs` semantics.",
+      "type": "boolean",
+      "default": false
+    },
+    "version": {
+      "description": "Opaque version identifier for the loaded model. The kernel keys its\nexisting workflow cache on this value instead of file bytes. Two loads\nthat produce the same canonical model SHOULD return the same version.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version"
+  ]
+}

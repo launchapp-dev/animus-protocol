@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConfigValidateRequest",
+  "description": "Parameters for [`METHOD_CONFIG_VALIDATE`].\n\nIdentical context to [`ConfigLoadRequest`]: a plugin-side syntactic\npre-check runs against the same project scope it would `config/load` from.",
+  "type": "object",
+  "properties": {
+    "project_root": {
+      "description": "Absolute path to the project root (see [`ConfigLoadRequest::project_root`]).",
+      "type": "string"
+    },
+    "repo_scope": {
+      "description": "The `repo-scope` identifier (see [`ConfigLoadRequest::repo_scope`]).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "project_root"
+  ]
+}

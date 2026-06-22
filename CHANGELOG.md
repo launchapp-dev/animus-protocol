@@ -5,6 +5,22 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
+## v0.1.21 — config_source write-back (`config/write`)
+
+### Added
+
+`animus-config-protocol`: a write-back path so config sources can persist a
+kernel-validated canonical model.
+
+- `METHOD_CONFIG_WRITE` (`config/write`) — optional, gated on the new
+  `CAPABILITY_CONFIG_WRITE` (`"config_write"`) manifest capability. The kernel
+  ships the entire validated `ConfigModel`; the plugin persists it. Coarse
+  full-model write only — no granular per-entity wire methods. Sources that
+  cannot persist (e.g. the YAML source) omit the capability; if they receive
+  `config/write` anyway they MUST respond `METHOD_NOT_SUPPORTED`.
+- `ConfigWriteRequest { project_root, repo_scope, config }` and
+  `ConfigWriteResponse { cache_token }` wire types + exported JSON schemas.
+
 ## v0.1.19 — protocol + config-protocol move into animus-protocol
 
 ### Added

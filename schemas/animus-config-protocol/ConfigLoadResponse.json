@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConfigLoadResponse",
+  "description": "Response for [`METHOD_CONFIG_LOAD`].",
+  "type": "object",
+  "properties": {
+    "cache_token": {
+      "description": "Cache key for this load. The kernel keys its workflow cache on\n[`CacheToken::version`] and bypasses the cache when\n[`CacheToken::external_inputs`] is set.",
+      "$ref": "#/$defs/CacheToken"
+    },
+    "config": {
+      "description": "The canonical config model the kernel will compile.",
+      "$ref": "#/$defs/ConfigModel"
+    }
+  },
+  "required": [
+    "config",
+    "cache_token"
+  ],
+  "$defs": {
+    "CacheToken": {
+      "description": "Opaque cache key a config source returns so the kernel cache stays correct\nfor non-file sources.\n\nThe in-tree YAML cache keys on file content + mtime. For Postgres / API\nsources the plugin instead returns a [`CacheToken`]: an opaque version\nstring (a Postgres `max(updated_at)`, an ETag, a content hash, ...) plus an\n[`Self::external_inputs`] flag that reproduces today's\n`sources_have_external_inputs` cache-bypass hazard (inputs like `${VAR}` /\n`${secret.X}` / `system_prompt_file:` that change without mutating the\nsource bytes). When [`Self::external_inputs`] is true the kernel bypasses\nits disk cache for that load, matching current YAML behavior.\n\nRFC open question #5 (cache-token contract) is the reason this is a small\nstructured shape rather than a bare opaque string: it must cover the\n\"external inputs changed but source bytes didn't\" case explicitly.",
+      "type": "object",
+      "properties": {
+        "external_inputs": {
+          "description": "When true, the model embeds inputs not captured by [`Self::version`]\n(env-var / secret interpolation, externally referenced prompt files,\n...) that can change without changing the version. The kernel bypasses\nits disk cache for this load — preserving today's\n`sources_have_external_inputs` semantics.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "Opaque version identifier for the loaded model. The kernel keys its\nexisting workflow cache on this value instead of file bytes. Two loads\nthat produce the same canonical model SHOULD return the same version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version"
+      ]
+    },
+    "ConfigModel": {
+      "description": "The canonical config model a `config_source` returns from `config/load`.\n\nThis is the normalized, *pre-derivation* shape — the parsed canonical model\nbefore the kernel derives `agent-runtime-config.v2` / `state-machines.v1`\nor merges pack overlays. It is the superset of what the kernel's\n`WorkflowConfig` already carries: `workflows`, `phase_catalog`,\n`phase_definitions`, `agent_profiles`, `agent_channels`, `mcp_servers`,\n`phase_mcp_bindings`, `tools` / `tools_allowlist`, `schedules`, `triggers`,\n`daemon`, `secrets`, `default_workflow_ref`.\n\nThe [`Self::config`] payload is carried as opaque JSON keyed by\n[`Self::schema`] / [`Self::version`] (see the crate docs for why). The\nkernel deserializes it into its internal `WorkflowConfig` after a schema\ncompatibility check.",
+      "type": "object",
+      "properties": {
+        "config": {
+          "description": "The canonical config model, shaped as the kernel's `WorkflowConfig`\n(schema `animus.workflow-config.v2`). Carried as opaque JSON — see the\ncrate docs — and deserialized kernel-side after the schema check.\n\nThe exported JSON Schema describes this as an arbitrary JSON value\n(schemars represents `serde_json::Value` as the permissive `true`\nschema); the real shape is pinned by [`Self::schema`] /\n[`Self::version`], which is the versioning contract the kernel enforces."
+        },
+        "schema": {
+          "description": "Schema id of the embedded [`Self::config`] payload. The kernel rejects\na value it does not recognize. Expected to equal\n[`CONFIG_MODEL_SCHEMA_ID`].",
+          "type": "string"
+        },
+        "version": {
+          "description": "Version of the embedded config model. Expected to equal\n[`CONFIG_MODEL_VERSION`]; the kernel refuses a higher, incompatible\nversion.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "schema",
+        "version",
+        "config"
+      ]
+    }
+  }
+}

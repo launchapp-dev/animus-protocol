@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConfigLoadRequest",
+  "description": "Parameters for [`METHOD_CONFIG_LOAD`].\n\nCarries the project context the in-tree YAML scan reads from today: the\nproject root (where `.animus/` lives) and the `repo-scope` the kernel uses\nto locate scoped runtime state and keychain entries. A Postgres/API source\nuses `repo_scope` to select the right rows; the YAML source uses\n`project_root` to find the overlay files.",
+  "type": "object",
+  "properties": {
+    "project_root": {
+      "description": "Absolute path to the project root (the directory whose `.animus/`\ncarries the config). The YAML source scans `.animus/workflows.yaml` +\n`.animus/workflows/*.yaml` under this root.",
+      "type": "string"
+    },
+    "repo_scope": {
+      "description": "The `repo-scope` identifier the kernel computed for this project. Used\nby non-file sources to scope their query and by the host secret path to\nresolve scoped credentials.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "project_root"
+  ]
+}
