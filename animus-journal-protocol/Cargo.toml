@@ -1,0 +1,23 @@
+[package]
+name = "animus-journal-protocol"
+description = "WorkflowJournal trait + run-state/checkpoint/event schema for Animus workflow-journal plugins (sqlite, postgres, ...)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+animus-plugin-protocol = { path = "../animus-plugin-protocol", version = "0.1.12" }
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+schemars = { version = "1.0", features = ["chrono04"] }
+
+[dev-dependencies]
+tempfile = "3"
