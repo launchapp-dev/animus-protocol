@@ -112,28 +112,6 @@ pub struct PhaseRetryConfig {
     pub max_attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backoff: Option<BackoffConfig>,
-    /// Failure-class tokens that SHOULD be retried. When empty (the default),
-    /// the runner keeps its current behavior of retrying all transient
-    /// failures. When non-empty, only failures whose classified token appears
-    /// in this list are eligible for retry.
-    ///
-    /// Precedence: [`Self::no_retry_on`] always wins — a token listed in
-    /// `no_retry_on` is never retried even if it also appears here.
-    ///
-    /// Tokens are free-form strings matched against the runner's failure
-    /// classifier. The authoritative token vocabulary is owned by the runner
-    /// (the consumer of this config); this crate treats them as opaque
-    /// strings and does no validation of the values.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub retry_on: Vec<String>,
-    /// Failure-class tokens that must NEVER be retried. Takes precedence over
-    /// [`Self::retry_on`]: a token present here is never retried regardless of
-    /// any other setting (fail-fast for known-permanent failures).
-    ///
-    /// Tokens are free-form strings matched against the runner's failure
-    /// classifier (vocabulary owned by the runner — see [`Self::retry_on`]).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub no_retry_on: Vec<String>,
 }
 
 impl Default for PhaseRetryConfig {
@@ -141,8 +119,6 @@ impl Default for PhaseRetryConfig {
         Self {
             max_attempts: DEFAULT_MAX_REWORK_ATTEMPTS,
             backoff: None,
-            retry_on: Vec::new(),
-            no_retry_on: Vec::new(),
         }
     }
 }
@@ -218,6 +194,28 @@ pub struct AgentRuntimeOverrides {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_attempts: Option<usize>,
+    /// Failure-class tokens that SHOULD be retried by the agent-call retry
+    /// loop. When empty (the default), the runner keeps its current behavior
+    /// of retrying all transient failures. When non-empty, only failures
+    /// whose classified token appears in this list are eligible for retry.
+    ///
+    /// Precedence: [`Self::no_retry_on`] always wins — a token listed in
+    /// `no_retry_on` is never retried even if it also appears here.
+    ///
+    /// Tokens are free-form strings matched against the runner's failure
+    /// classifier. The authoritative token vocabulary is owned by the runner
+    /// (the consumer of this config); this crate treats them as opaque
+    /// strings and does no validation of the values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retry_on: Vec<String>,
+    /// Failure-class tokens that must NEVER be retried. Takes precedence over
+    /// [`Self::retry_on`]: a token present here is never retried regardless of
+    /// any other setting (fail-fast for known-permanent failures).
+    ///
+    /// Tokens are free-form strings matched against the runner's failure
+    /// classifier (vocabulary owned by the runner — see [`Self::retry_on`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub no_retry_on: Vec<String>,
     #[serde(default)]
     pub extra_args: Vec<String>,
     #[serde(default)]
@@ -603,6 +601,16 @@ pub struct AgentProfile {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_attempts: Option<usize>,
+    /// Profile-level default for the agent-call retry loop's retry-eligible
+    /// failure classes (see [`AgentRuntimeOverrides::retry_on`]). A phase
+    /// `runtime.retry_on` falls back to this when unset.
+    #[serde(default)]
+    pub retry_on: Vec<String>,
+    /// Profile-level default for never-retry failure classes (see
+    /// [`AgentRuntimeOverrides::no_retry_on`]). A phase `runtime.no_retry_on`
+    /// falls back to this when unset.
+    #[serde(default)]
+    pub no_retry_on: Vec<String>,
     #[serde(default)]
     pub extra_args: Vec<String>,
     #[serde(default)]
@@ -684,6 +692,10 @@ pub struct AgentProfileOverlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_attempts: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_on: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_retry_on: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_args: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_config_overrides: Option<Vec<String>>,
@@ -745,6 +757,8 @@ impl AgentProfileOverlay {
             network_access,
             timeout_secs,
             max_attempts,
+            retry_on,
+            no_retry_on,
             extra_args,
             codex_config_overrides,
             max_continuations,
@@ -784,6 +798,8 @@ impl From<AgentProfile> for AgentProfileOverlay {
             network_access: profile.network_access,
             timeout_secs: profile.timeout_secs,
             max_attempts: profile.max_attempts,
+            retry_on: Some(profile.retry_on),
+            no_retry_on: Some(profile.no_retry_on),
             extra_args: Some(profile.extra_args),
             codex_config_overrides: Some(profile.codex_config_overrides),
             max_continuations: profile.max_continuations,
@@ -1058,6 +1074,12 @@ pub fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfileOverla
     if overlay.max_attempts.is_some() {
         base.max_attempts = overlay.max_attempts;
     }
+    if let Some(retry_on) = &overlay.retry_on {
+        base.retry_on = retry_on.clone();
+    }
+    if let Some(no_retry_on) = &overlay.no_retry_on {
+        base.no_retry_on = no_retry_on.clone();
+    }
     if let Some(extra_args) = &overlay.extra_args {
         base.extra_args = extra_args.clone();
     }
@@ -1091,19 +1113,18 @@ retry_on:
 no_retry_on:
   - auth_error
 "#;
-        let cfg: PhaseRetryConfig = serde_yaml::from_str(yaml).expect("parse retry config");
-        assert_eq!(cfg.max_attempts, 5);
+        let cfg: AgentRuntimeOverrides = serde_yaml::from_str(yaml).expect("parse runtime overrides");
+        assert_eq!(cfg.max_attempts, Some(5));
         assert_eq!(cfg.retry_on, vec!["transient".to_string(), "rate_limit".to_string()]);
         assert_eq!(cfg.no_retry_on, vec!["auth_error".to_string()]);
-        assert!(cfg.backoff.is_none());
     }
 
     #[test]
     fn back_compat_config_without_classification_fields_parses() {
         // A pre-existing config that never heard of retry_on / no_retry_on.
         let yaml = "max_attempts: 2\n";
-        let cfg: PhaseRetryConfig = serde_yaml::from_str(yaml).expect("parse legacy retry config");
-        assert_eq!(cfg.max_attempts, 2);
+        let cfg: AgentRuntimeOverrides = serde_yaml::from_str(yaml).expect("parse legacy runtime overrides");
+        assert_eq!(cfg.max_attempts, Some(2));
         assert!(cfg.retry_on.is_empty(), "absent retry_on defaults to empty (retry-all behavior)");
         assert!(cfg.no_retry_on.is_empty(), "absent no_retry_on defaults to empty");
     }
@@ -1112,7 +1133,7 @@ no_retry_on:
     fn empty_classification_fields_are_skipped_on_serialize() {
         // Default config serializes without the additive fields so existing
         // round-trips and golden artifacts stay byte-stable.
-        let cfg = PhaseRetryConfig::default();
+        let cfg = AgentRuntimeOverrides::default();
         let json = serde_json::to_string(&cfg).expect("serialize default");
         assert!(!json.contains("retry_on"), "empty retry_on must be skipped: {json}");
         assert!(!json.contains("no_retry_on"), "empty no_retry_on must be skipped: {json}");
@@ -1120,17 +1141,45 @@ no_retry_on:
 
     #[test]
     fn round_trips_classification_fields() {
-        let cfg = PhaseRetryConfig {
-            max_attempts: 4,
-            backoff: Some(BackoffConfig { initial_secs: 2, factor: 2.0, max_secs: Some(60) }),
+        let cfg = AgentRuntimeOverrides {
+            max_attempts: Some(4),
             retry_on: vec!["network".to_string(), "timeout".to_string()],
             no_retry_on: vec!["validation".to_string()],
+            ..Default::default()
         };
         let json = serde_json::to_string(&cfg).expect("serialize");
-        let back: PhaseRetryConfig = serde_json::from_str(&json).expect("deserialize");
+        let back: AgentRuntimeOverrides = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.max_attempts, cfg.max_attempts);
         assert_eq!(back.retry_on, cfg.retry_on);
         assert_eq!(back.no_retry_on, cfg.no_retry_on);
-        assert_eq!(back.backoff.map(|b| b.initial_secs), Some(2));
+    }
+
+    #[test]
+    fn overlay_classification_fields_round_trip_and_merge() {
+        // An overlay declaring retry_on round-trips through serde and, when
+        // merged onto a base profile, replaces the profile-level default.
+        let yaml = r#"
+retry_on:
+  - network
+no_retry_on:
+  - validation
+"#;
+        let overlay: AgentProfileOverlay = serde_yaml::from_str(yaml).expect("parse overlay");
+        assert_eq!(overlay.retry_on, Some(vec!["network".to_string()]));
+        assert_eq!(overlay.no_retry_on, Some(vec!["validation".to_string()]));
+
+        let json = serde_json::to_string(&overlay).expect("serialize overlay");
+        let back: AgentProfileOverlay = serde_json::from_str(&json).expect("deserialize overlay");
+        assert_eq!(back.retry_on, overlay.retry_on);
+        assert_eq!(back.no_retry_on, overlay.no_retry_on);
+
+        let mut base = AgentProfile {
+            retry_on: vec!["stale".to_string()],
+            no_retry_on: Vec::new(),
+            ..Default::default()
+        };
+        merge_agent_profile(&mut base, &overlay);
+        assert_eq!(base.retry_on, vec!["network".to_string()], "overlay retry_on wins");
+        assert_eq!(base.no_retry_on, vec!["validation".to_string()]);
     }
 }
