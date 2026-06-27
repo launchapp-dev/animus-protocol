@@ -112,11 +112,38 @@ pub struct PhaseRetryConfig {
     pub max_attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backoff: Option<BackoffConfig>,
+    /// Failure-class tokens that SHOULD be retried. When empty (the default),
+    /// the runner keeps its current behavior of retrying all transient
+    /// failures. When non-empty, only failures whose classified token appears
+    /// in this list are eligible for retry.
+    ///
+    /// Precedence: [`Self::no_retry_on`] always wins — a token listed in
+    /// `no_retry_on` is never retried even if it also appears here.
+    ///
+    /// Tokens are free-form strings matched against the runner's failure
+    /// classifier. The authoritative token vocabulary is owned by the runner
+    /// (the consumer of this config); this crate treats them as opaque
+    /// strings and does no validation of the values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retry_on: Vec<String>,
+    /// Failure-class tokens that must NEVER be retried. Takes precedence over
+    /// [`Self::retry_on`]: a token present here is never retried regardless of
+    /// any other setting (fail-fast for known-permanent failures).
+    ///
+    /// Tokens are free-form strings matched against the runner's failure
+    /// classifier (vocabulary owned by the runner — see [`Self::retry_on`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub no_retry_on: Vec<String>,
 }
 
 impl Default for PhaseRetryConfig {
     fn default() -> Self {
-        Self { max_attempts: DEFAULT_MAX_REWORK_ATTEMPTS, backoff: None }
+        Self {
+            max_attempts: DEFAULT_MAX_REWORK_ATTEMPTS,
+            backoff: None,
+            retry_on: Vec::new(),
+            no_retry_on: Vec::new(),
+        }
     }
 }
 
@@ -1048,4 +1075,62 @@ pub(crate) fn default_command_cwd_mode() -> CommandCwdMode {
 
 pub(crate) fn default_success_exit_codes() -> Vec<i32> {
     vec![0]
+}
+
+#[cfg(test)]
+mod retry_classification_tests {
+    use super::*;
+
+    #[test]
+    fn parses_retry_on_and_no_retry_on() {
+        let yaml = r#"
+max_attempts: 5
+retry_on:
+  - transient
+  - rate_limit
+no_retry_on:
+  - auth_error
+"#;
+        let cfg: PhaseRetryConfig = serde_yaml::from_str(yaml).expect("parse retry config");
+        assert_eq!(cfg.max_attempts, 5);
+        assert_eq!(cfg.retry_on, vec!["transient".to_string(), "rate_limit".to_string()]);
+        assert_eq!(cfg.no_retry_on, vec!["auth_error".to_string()]);
+        assert!(cfg.backoff.is_none());
+    }
+
+    #[test]
+    fn back_compat_config_without_classification_fields_parses() {
+        // A pre-existing config that never heard of retry_on / no_retry_on.
+        let yaml = "max_attempts: 2\n";
+        let cfg: PhaseRetryConfig = serde_yaml::from_str(yaml).expect("parse legacy retry config");
+        assert_eq!(cfg.max_attempts, 2);
+        assert!(cfg.retry_on.is_empty(), "absent retry_on defaults to empty (retry-all behavior)");
+        assert!(cfg.no_retry_on.is_empty(), "absent no_retry_on defaults to empty");
+    }
+
+    #[test]
+    fn empty_classification_fields_are_skipped_on_serialize() {
+        // Default config serializes without the additive fields so existing
+        // round-trips and golden artifacts stay byte-stable.
+        let cfg = PhaseRetryConfig::default();
+        let json = serde_json::to_string(&cfg).expect("serialize default");
+        assert!(!json.contains("retry_on"), "empty retry_on must be skipped: {json}");
+        assert!(!json.contains("no_retry_on"), "empty no_retry_on must be skipped: {json}");
+    }
+
+    #[test]
+    fn round_trips_classification_fields() {
+        let cfg = PhaseRetryConfig {
+            max_attempts: 4,
+            backoff: Some(BackoffConfig { initial_secs: 2, factor: 2.0, max_secs: Some(60) }),
+            retry_on: vec!["network".to_string(), "timeout".to_string()],
+            no_retry_on: vec!["validation".to_string()],
+        };
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let back: PhaseRetryConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.max_attempts, cfg.max_attempts);
+        assert_eq!(back.retry_on, cfg.retry_on);
+        assert_eq!(back.no_retry_on, cfg.no_retry_on);
+        assert_eq!(back.backoff.map(|b| b.initial_secs), Some(2));
+    }
 }
