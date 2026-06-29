@@ -622,6 +622,26 @@ pub struct WorkflowSchedule {
     pub input: Option<Value>,
     #[serde(default = "default_schedule_enabled")]
     pub enabled: bool,
+    /// Optional config-declared owner. When set, the daemon scheduler mints a
+    /// system [`Actor`](animus_actor::Actor) for this `user_id` and runs the
+    /// dispatched workflow as that user (resolving their config partition and
+    /// integrations). `None` keeps the legacy global (actor-less) dispatch.
+    ///
+    /// TRUST BOUNDARY: the owner is asserted at config-authoring time — the
+    /// workflow config is itself owner-scoped / admin-authored (e.g. served by
+    /// `config-postgres` team_* rows or admin-curated YAML), never derived from
+    /// runtime or agent-generated content. Minting an actor here therefore
+    /// respects the transport-asserted-identity model: it is the one place the
+    /// kernel constructs an actor rather than relaying one, and the assertion
+    /// originates from a trusted, authored source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_id: Option<String>,
+    /// Optional advisory claims minted alongside [`owner_id`](Self::owner_id)
+    /// (e.g. `["admin"]`). Ignored when `owner_id` is `None`. Mirrors
+    /// [`Actor::claims`](animus_actor::Actor::claims): advisory only, the
+    /// kernel never branches on them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<String>,
 }
 
 pub(crate) fn default_schedule_enabled() -> bool {

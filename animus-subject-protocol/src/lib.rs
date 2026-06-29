@@ -38,6 +38,7 @@
 use std::collections::BTreeMap;
 use std::pin::Pin;
 
+use animus_actor::Actor;
 use animus_plugin_protocol::{error_codes, HealthCheckResult, RpcError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -1498,6 +1499,13 @@ pub struct SubjectDispatch {
     pub trigger_source: String,
     /// When the dispatch was created.
     pub requested_at: DateTime<Utc>,
+    /// Caller identity this dispatch runs as. `None` is a system/global run
+    /// (the legacy default). Owner-scoped schedules attach a kernel-minted
+    /// [`Actor`] here (see the schedule's `owner_id`); the daemon relays it to
+    /// the workflow runner so downstream provider + plugin channels scope to
+    /// the owner. Additive and back-compat: omitted from the wire when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Actor>,
 }
 
 impl SubjectDispatch {
@@ -1517,6 +1525,7 @@ impl SubjectDispatch {
             priority: None,
             trigger_source: trigger_source.into(),
             requested_at,
+            actor: None,
         }
     }
 
@@ -1560,6 +1569,13 @@ impl SubjectDispatch {
     /// Attach variables (fluent builder).
     pub fn with_vars(mut self, vars: std::collections::HashMap<String, String>) -> Self {
         self.vars = vars;
+        self
+    }
+
+    /// Attach the caller identity this dispatch runs as (fluent builder).
+    /// `None` leaves the dispatch as a system/global run.
+    pub fn with_actor(mut self, actor: Option<Actor>) -> Self {
+        self.actor = actor;
         self
     }
 }
