@@ -22,6 +22,7 @@
 
 #![warn(missing_docs)]
 
+pub use animus_actor::{Actor, CLAIM_ADMIN};
 use animus_subject_protocol::{SubjectDispatch, SubjectRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -190,6 +191,11 @@ pub struct WorkflowExecuteRequest {
     /// Opaque MCP runtime config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_config: Option<Value>,
+    /// Transport-asserted caller identity, relayed verbatim from the daemon so
+    /// the runner can pass it to subject/journal/config plugins for scoping.
+    /// `None` for system-initiated runs with no actor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Actor>,
 }
 
 /// Result of [`METHOD_WORKFLOW_EXECUTE`].
@@ -339,6 +345,9 @@ pub struct WorkflowPhaseRunRequest {
     /// pass MCP server config to the agent runner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_config: Option<Value>,
+    /// Transport-asserted caller identity (see [`WorkflowExecuteRequest::actor`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Actor>,
 }
 
 /// Result of [`METHOD_WORKFLOW_RUN_PHASE`].
@@ -445,11 +454,47 @@ mod tests {
             phase_filter: None,
             phase_routing: None,
             mcp_config: None,
+            actor: None,
         };
         let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("actor").is_none(), "actor must be omitted when None");
         let back: WorkflowExecuteRequest = serde_json::from_value(v).unwrap();
         assert_eq!(back.task_id.as_deref(), Some("TASK-1"));
         assert_eq!(back.workflow_ref.as_deref(), Some("standard"));
+        assert!(back.actor.is_none());
+    }
+
+    #[test]
+    fn execute_request_round_trips_with_actor() {
+        let req = WorkflowExecuteRequest {
+            workflow_id: None,
+            subject_dispatch: None,
+            subject_ref: None,
+            task_id: Some("TASK-1".into()),
+            requirement_id: None,
+            title: None,
+            description: None,
+            workflow_ref: Some("standard".into()),
+            input: None,
+            vars: HashMap::new(),
+            model: None,
+            tool: None,
+            phase_timeout_secs: None,
+            phase_filter: None,
+            phase_routing: None,
+            mcp_config: None,
+            actor: Some(Actor::new("u-1")),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("actor").is_some());
+        let back: WorkflowExecuteRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(back.actor, req.actor);
+    }
+
+    #[test]
+    fn execute_request_deserializes_without_actor() {
+        let back: WorkflowExecuteRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(back.actor.is_none());
     }
 
     #[test]
@@ -486,11 +531,47 @@ mod tests {
             schedule_input: None,
             phase_routing: None,
             mcp_config: Some(serde_json::json!({"servers": []})),
+            actor: None,
         };
         let v = serde_json::to_value(&req).unwrap();
         assert!(v.get("mcp_config").is_some());
+        assert!(v.get("actor").is_none(), "actor must be omitted when None");
         let back: WorkflowPhaseRunRequest = serde_json::from_value(v).unwrap();
         assert_eq!(back.mcp_config, req.mcp_config);
+        assert!(back.actor.is_none());
+    }
+
+    #[test]
+    fn phase_run_request_round_trips_with_actor() {
+        let req = WorkflowPhaseRunRequest {
+            execution_cwd: "/tmp".into(),
+            workflow_id: "wf_1".into(),
+            workflow_ref: "standard".into(),
+            subject_id: "TASK-1".into(),
+            subject_title: "t".into(),
+            subject_description: "d".into(),
+            phase_id: "impl".into(),
+            phase_attempt: 0,
+            phase_timeout_secs: None,
+            model_override: None,
+            tool_override: None,
+            task_complexity: None,
+            rework_context: None,
+            pipeline_vars: HashMap::new(),
+            dispatch_input: None,
+            schedule_input: None,
+            phase_routing: None,
+            mcp_config: None,
+            actor: Some(Actor {
+                user_id: "u-1".into(),
+                claims: vec![animus_actor::CLAIM_ADMIN.into()],
+                tenant_id: Some("t-1".into()),
+            }),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("actor").is_some());
+        let back: WorkflowPhaseRunRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(back.actor, req.actor);
     }
 
     #[test]

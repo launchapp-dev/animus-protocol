@@ -1,0 +1,16 @@
+[package]
+name = "animus-actor"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Launchapp.dev"]
+homepage = "https://github.com/launchapp-dev/animus-cli"
+repository = "https://github.com/launchapp-dev/animus-protocol"
+description = "Opaque, transport-asserted Actor identity for Animus 0.7 per-user scoping. Zero-dependency leaf crate (serde + schemars). The kernel relays it; plugins scope on it."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+schemars = "1.0"
+
+[dev-dependencies]
+serde_json = "1"

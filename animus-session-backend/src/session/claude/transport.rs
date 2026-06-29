@@ -888,6 +888,7 @@ mod reasoning_effort_tests {
             timeout_secs: None,
             env_vars: Vec::new(),
             extras,
+            actor: None,
         }
     }
 
