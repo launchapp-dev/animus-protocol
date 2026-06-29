@@ -49,6 +49,7 @@ pub use client::ControlClient;
 // Re-export the core types at the crate root so downstream code can write
 // `animus_control_protocol::ControlSurface` instead of reaching into the
 // modules directly.
+pub use animus_actor::{Actor, CLAIM_ADMIN};
 pub use control_trait::{ControlSurface, DaemonEventStream, DaemonLogStream, SubjectWatchStream};
 pub use error::ControlError;
 pub use types::{

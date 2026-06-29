@@ -670,6 +670,9 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
         timeout_secs: params.timeout_secs,
         env_vars: params.env.into_iter().collect(),
         extras: Value::Object(extras),
+        // Actor is not yet threaded through the provider-protocol AgentRunParams
+        // hop (a later 0.7 wave); the session carries no actor here for now.
+        actor: None,
     }
 }
 

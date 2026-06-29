@@ -158,6 +158,7 @@ fn request_round_trip_through_json() {
         task_id: "TASK-001".into(),
         definition: Some("default".into()),
         params: Default::default(),
+        actor: None,
     };
     let v = serde_json::to_value(&run).unwrap();
     let back: WorkflowRunRequest = serde_json::from_value(v).unwrap();

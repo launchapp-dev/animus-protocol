@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "animus-actor",
     "animus-plugin-protocol",
     "animus-subject-protocol",
     "animus-provider-protocol",

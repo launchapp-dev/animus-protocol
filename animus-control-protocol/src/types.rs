@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use animus_actor::Actor;
 use animus_log_storage_protocol::{LogEntry, LogLevel};
 use animus_subject_protocol::{Subject, SubjectFilter, SubjectId, SubjectPatch, SubjectStatus};
 
@@ -614,6 +615,11 @@ pub struct WorkflowRunRequest {
     /// Free-form parameters passed into the workflow template context.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, Value>,
+    /// Transport-asserted caller identity, relayed verbatim by the daemon to
+    /// the workflow runner and downstream plugins for scoping. `None` for
+    /// system/daemon-initiated runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Actor>,
 }
 
 /// Response for `workflow/run` and `workflow/execute`.
@@ -638,6 +644,9 @@ pub struct WorkflowExecuteRequest {
     /// Optional subject id to associate the run with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_id: Option<SubjectId>,
+    /// Transport-asserted caller identity (see [`WorkflowRunRequest::actor`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Actor>,
 }
 
 /// Request for `workflow/pause`.
@@ -1095,6 +1104,74 @@ mod tests {
         let v = serde_json::to_value(&s).unwrap();
         let back: WorkflowRunSummary = serde_json::from_value(v).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn workflow_run_request_actor_omitted_when_none() {
+        let req = WorkflowRunRequest {
+            task_id: "TASK-1".into(),
+            definition: None,
+            params: BTreeMap::new(),
+            actor: None,
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("actor").is_none(), "actor must be omitted when None");
+        let back: WorkflowRunRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn workflow_run_request_round_trips_with_actor() {
+        let req = WorkflowRunRequest {
+            task_id: "TASK-1".into(),
+            definition: Some("review".into()),
+            params: BTreeMap::new(),
+            actor: Some(Actor {
+                user_id: "u-1".into(),
+                claims: vec![animus_actor::CLAIM_ADMIN.into()],
+                tenant_id: Some("t-1".into()),
+            }),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("actor").is_some());
+        let back: WorkflowRunRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn workflow_run_request_deserializes_without_actor() {
+        let back: WorkflowRunRequest =
+            serde_json::from_value(serde_json::json!({ "task_id": "TASK-1" })).unwrap();
+        assert!(back.actor.is_none());
+    }
+
+    #[test]
+    fn workflow_execute_request_actor_round_trips() {
+        let none = WorkflowExecuteRequest {
+            definition: "default".into(),
+            params: BTreeMap::new(),
+            subject_id: None,
+            actor: None,
+        };
+        let v = serde_json::to_value(&none).unwrap();
+        assert!(v.get("actor").is_none());
+        assert_eq!(
+            serde_json::from_value::<WorkflowExecuteRequest>(v).unwrap(),
+            none
+        );
+
+        let some = WorkflowExecuteRequest {
+            definition: "default".into(),
+            params: BTreeMap::new(),
+            subject_id: None,
+            actor: Some(Actor::new("u-2")),
+        };
+        let v = serde_json::to_value(&some).unwrap();
+        assert!(v.get("actor").is_some());
+        assert_eq!(
+            serde_json::from_value::<WorkflowExecuteRequest>(v).unwrap(),
+            some
+        );
     }
 
     #[test]

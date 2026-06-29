@@ -77,6 +77,7 @@
 // at the item level where present and are otherwise self-describing; warning on
 // every nested config field would be noise.
 
+pub use animus_actor::{Actor, CLAIM_ADMIN};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -255,7 +256,11 @@ impl ConfigModel {
     /// Construct a [`ConfigModel`] tagged with the current schema id and
     /// version, wrapping an already-serialized canonical config payload.
     pub fn new(config: Value) -> Self {
-        Self { schema: CONFIG_MODEL_SCHEMA_ID.to_string(), version: CONFIG_MODEL_VERSION, config }
+        Self {
+            schema: CONFIG_MODEL_SCHEMA_ID.to_string(),
+            version: CONFIG_MODEL_VERSION,
+            config,
+        }
     }
 
     /// True when the carried [`Self::schema`] / [`Self::version`] match the
@@ -304,12 +309,18 @@ pub struct CacheToken {
 impl CacheToken {
     /// A token with the given version string and no external inputs.
     pub fn version(version: impl Into<String>) -> Self {
-        Self { version: version.into(), external_inputs: false }
+        Self {
+            version: version.into(),
+            external_inputs: false,
+        }
     }
 
     /// A token that forces the kernel to bypass its disk cache for this load.
     pub fn external(version: impl Into<String>) -> Self {
-        Self { version: version.into(), external_inputs: true }
+        Self {
+            version: version.into(),
+            external_inputs: true,
+        }
     }
 }
 
@@ -336,6 +347,12 @@ pub struct ConfigLoadRequest {
     /// resolve scoped credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo_scope: Option<String>,
+
+    /// Transport-asserted caller identity, relayed verbatim by the kernel. A
+    /// config source MAY use it to scope which config it returns (per-user or
+    /// per-tenant overlays). `None` for daemon/system loads with no actor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Actor>,
 }
 
 /// Response for [`METHOD_CONFIG_LOAD`].
@@ -434,6 +451,10 @@ pub struct ConfigValidateRequest {
     /// The `repo-scope` identifier (see [`ConfigLoadRequest::repo_scope`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo_scope: Option<String>,
+
+    /// Transport-asserted caller identity (see [`ConfigLoadRequest::actor`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Actor>,
 }
 
 /// Severity of a [`ConfigDiagnostic`].
@@ -485,7 +506,10 @@ pub struct ConfigValidateResponse {
 impl ConfigValidateResponse {
     /// True when no [`DiagnosticSeverity::Error`] diagnostics are present.
     pub fn is_ok(&self) -> bool {
-        !self.diagnostics.iter().any(|d| d.severity == DiagnosticSeverity::Error)
+        !self
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error)
     }
 }
 
@@ -498,10 +522,18 @@ mod tests {
         let model = ConfigModel::new(serde_json::json!({ "schema": CONFIG_MODEL_SCHEMA_ID }));
         assert!(model.is_compatible());
 
-        let future = ConfigModel { schema: CONFIG_MODEL_SCHEMA_ID.to_string(), version: 99, config: Value::Null };
+        let future = ConfigModel {
+            schema: CONFIG_MODEL_SCHEMA_ID.to_string(),
+            version: 99,
+            config: Value::Null,
+        };
         assert!(!future.is_compatible());
 
-        let foreign = ConfigModel { schema: "something.else".to_string(), version: 2, config: Value::Null };
+        let foreign = ConfigModel {
+            schema: "something.else".to_string(),
+            version: 2,
+            config: Value::Null,
+        };
         assert!(!foreign.is_compatible());
     }
 
@@ -519,7 +551,8 @@ mod tests {
 
     #[test]
     fn external_inputs_token_defaults_false_when_absent() {
-        let token: CacheToken = serde_json::from_value(serde_json::json!({ "version": "x" })).expect("deserialize");
+        let token: CacheToken =
+            serde_json::from_value(serde_json::json!({ "version": "x" })).expect("deserialize");
         assert!(!token.external_inputs);
     }
 
@@ -538,13 +571,72 @@ mod tests {
 
     #[test]
     fn write_response_token_optional() {
-        let empty: ConfigWriteResponse = serde_json::from_value(serde_json::json!({})).expect("deserialize");
+        let empty: ConfigWriteResponse =
+            serde_json::from_value(serde_json::json!({})).expect("deserialize");
         assert!(empty.cache_token.is_none());
 
-        let with_token = ConfigWriteResponse { cache_token: Some(CacheToken::version("v2")) };
+        let with_token = ConfigWriteResponse {
+            cache_token: Some(CacheToken::version("v2")),
+        };
         let v = serde_json::to_value(&with_token).expect("serialize");
         let back: ConfigWriteResponse = serde_json::from_value(v).expect("deserialize");
         assert_eq!(with_token, back);
+    }
+
+    #[test]
+    fn load_request_actor_omitted_when_none() {
+        let req = ConfigLoadRequest {
+            project_root: "/tmp/proj".to_string(),
+            repo_scope: None,
+            actor: None,
+        };
+        let v = serde_json::to_value(&req).expect("serialize");
+        assert!(v.get("actor").is_none(), "actor must be omitted when None");
+        let back: ConfigLoadRequest = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn load_request_round_trips_with_actor() {
+        let req = ConfigLoadRequest {
+            project_root: "/tmp/proj".to_string(),
+            repo_scope: Some("scope-1".to_string()),
+            actor: Some(Actor::new("user-1")),
+        };
+        let v = serde_json::to_value(&req).expect("serialize");
+        assert!(v.get("actor").is_some());
+        let back: ConfigLoadRequest = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn load_request_deserializes_without_actor_field() {
+        // An old peer that never serialized `actor`.
+        let back: ConfigLoadRequest =
+            serde_json::from_value(serde_json::json!({ "project_root": "/p" }))
+                .expect("deserialize");
+        assert!(back.actor.is_none());
+    }
+
+    #[test]
+    fn validate_request_actor_round_trips() {
+        let none = ConfigValidateRequest {
+            project_root: "/p".to_string(),
+            repo_scope: None,
+            actor: None,
+        };
+        let v = serde_json::to_value(&none).expect("serialize");
+        assert!(v.get("actor").is_none());
+        assert_eq!(none, serde_json::from_value(v).expect("deserialize"));
+
+        let some = ConfigValidateRequest {
+            project_root: "/p".to_string(),
+            repo_scope: None,
+            actor: Some(Actor::new("user-2")),
+        };
+        let v = serde_json::to_value(&some).expect("serialize");
+        assert!(v.get("actor").is_some());
+        assert_eq!(some, serde_json::from_value(v).expect("deserialize"));
     }
 
     #[test]

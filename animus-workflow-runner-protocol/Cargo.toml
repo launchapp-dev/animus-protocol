@@ -11,6 +11,7 @@ description = "Workflow runner plugin-kind protocol types for Animus v0.5 (`work
 [dependencies]
 animus-plugin-protocol = { path = "../animus-plugin-protocol" }
 animus-subject-protocol = { path = "../animus-subject-protocol" }
+animus-actor = { path = "../animus-actor" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1.0" }

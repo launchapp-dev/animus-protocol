@@ -871,6 +871,7 @@ mod imp {
                     task_id: "task:T1".into(),
                     definition: Some("default".into()),
                     params: Default::default(),
+                    actor: None,
                 })
                 .await
                 .unwrap();

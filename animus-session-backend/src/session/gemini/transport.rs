@@ -477,6 +477,7 @@ mod approvals_preamble_tests {
             timeout_secs: None,
             env_vars: Vec::new(),
             extras,
+            actor: None,
         }
     }
 
@@ -523,6 +524,7 @@ mod mcp_settings_tests {
             timeout_secs: None,
             env_vars: Vec::new(),
             extras: json!({}),
+            actor: None,
         }
     }
 

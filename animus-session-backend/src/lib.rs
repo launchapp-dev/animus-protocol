@@ -45,6 +45,7 @@ pub mod error;
 pub mod parser;
 pub mod session;
 
+pub use animus_actor::{Actor, CLAIM_ADMIN};
 pub use cli::{
     codex_exec_insert_index_json, ensure_codex_config_override, ensure_codex_config_override_json,
     ensure_flag, ensure_flag_value, ensure_flag_value_json, ensure_machine_json_output,
