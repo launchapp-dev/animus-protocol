@@ -33,7 +33,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The plugin kind string a `workflow_journal` backend declares in its manifest.
-pub const PLUGIN_KIND_WORKFLOW_JOURNAL: &str = "workflow_journal";
+///
+/// Re-exported from [`animus_plugin_protocol`] (single source of truth) so the
+/// `journal/*` crate and the core plugin-kind enum can never drift apart.
+pub use animus_plugin_protocol::PLUGIN_KIND_WORKFLOW_JOURNAL;
 
 pub const METHOD_JOURNAL_SAVE: &str = "journal/save";
 pub const METHOD_JOURNAL_LOAD: &str = "journal/load";

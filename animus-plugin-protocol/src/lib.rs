@@ -167,6 +167,17 @@ pub const PLUGIN_KIND_MEMORY_STORE: &str = "memory_store";
 /// older `agent_runner`-kind manifest still parses to a known kind.
 pub const PLUGIN_KIND_AGENT_RUNNER: &str = "agent_runner";
 
+/// Plugin kind for workflow-journal backend plugins (sqlite, Postgres, ...).
+///
+/// Workflow-journal backends persist workflow RUN STATE (the orchestrator
+/// workflow blob + checkpoints) and the lifecycle EVENT stream. The role is
+/// **optional**: with no plugin installed the kernel falls back to the in-tree
+/// SQLite `WorkflowStateManager` (`workflow.db`), so workflows run with zero
+/// plugins. A Postgres-backed implementation makes run history durable across
+/// redeploys (a disposable container loses `workflow.db` on every restart). See
+/// the `animus-journal-protocol` crate for the `journal/*` method family.
+pub const PLUGIN_KIND_WORKFLOW_JOURNAL: &str = "workflow_journal";
+
 /// Strongly typed enumeration of plugin roles.
 ///
 /// The set of well-known kinds is captured here so callers can pattern-match
@@ -214,6 +225,8 @@ pub enum PluginKind {
     MemoryStore,
     /// Agent-runner sidecar plugin (v0.5). See [`PLUGIN_KIND_AGENT_RUNNER`].
     AgentRunner,
+    /// Workflow-journal backend plugin. See [`PLUGIN_KIND_WORKFLOW_JOURNAL`].
+    WorkflowJournal,
     /// Any kind not understood by this crate version. Preserves the wire
     /// string so unknown roles round-trip and so hosts that recognize the
     /// role can still dispatch on the string.
@@ -238,6 +251,7 @@ impl PluginKind {
             PluginKind::DurableStore => PLUGIN_KIND_DURABLE_STORE,
             PluginKind::MemoryStore => PLUGIN_KIND_MEMORY_STORE,
             PluginKind::AgentRunner => PLUGIN_KIND_AGENT_RUNNER,
+            PluginKind::WorkflowJournal => PLUGIN_KIND_WORKFLOW_JOURNAL,
             PluginKind::Other(value) => value.as_str(),
         }
     }
@@ -275,6 +289,7 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_DURABLE_STORE => PluginKind::DurableStore,
             PLUGIN_KIND_MEMORY_STORE => PluginKind::MemoryStore,
             PLUGIN_KIND_AGENT_RUNNER => PluginKind::AgentRunner,
+            PLUGIN_KIND_WORKFLOW_JOURNAL => PluginKind::WorkflowJournal,
             _ => PluginKind::Other(value),
         }
     }
