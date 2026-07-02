@@ -138,6 +138,13 @@
           "description": "One of the `PLUGIN_KIND_*` constants. Prefer\n[`PluginInfo::plugin_kind`] to read this as a typed [`PluginKind`].",
           "type": "string"
         },
+        "plugin_kinds": {
+          "description": "Additional kinds this plugin ALSO serves (v0.7 multi-kind). One process\ncan fill several roles (e.g. a Postgres backend that is both\n`subject_backend` and `config_source`). `plugin_kind` stays the\nprimary/legacy kind; match against the full set via\n[`PluginInfo::serves_kind`]. Empty = single-kind (back-compat).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "version": {
           "description": "Plugin's semver.",
           "type": "string"
