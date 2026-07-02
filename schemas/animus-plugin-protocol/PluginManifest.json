@@ -40,6 +40,13 @@
       "description": "One of the `PLUGIN_KIND_*` constants. Prefer\n[`PluginManifest::kind`] to read this as a typed [`PluginKind`].",
       "type": "string"
     },
+    "plugin_kinds": {
+      "description": "Additional kinds this plugin ALSO serves (v0.7 multi-kind). One process\ncan fill several roles; discovery + preflight should match against the\nfull set via [`PluginManifest::serves_kind`]. `plugin_kind` stays the\nprimary/legacy kind. Empty = single-kind (back-compat).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "protocol_version": {
       "description": "Protocol version the plugin was built against.",
       "type": "string"

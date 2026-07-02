@@ -143,6 +143,11 @@ pub const PLUGIN_KIND_WORKFLOW_RUNNER: &str = "workflow_runner";
 /// RPC surface (`queue/enqueue`, `queue/lease`, `queue/list`, etc.).
 pub const PLUGIN_KIND_QUEUE: &str = "queue";
 
+/// Plugin kind for the durable workflow-journal backend: run state,
+/// checkpoints, and events that survive daemon restarts. See
+/// [`PluginKind::WorkflowJournal`].
+pub const PLUGIN_KIND_WORKFLOW_JOURNAL: &str = "workflow_journal";
+
 /// Plugin kind for durable execution / step checkpointing plugins (v0.5).
 ///
 /// Durable stores provide reservation-fenced step persistence so the daemon
@@ -207,6 +212,8 @@ pub enum PluginKind {
     WorkflowRunner,
     /// Queue backend plugin (v0.5). See [`PLUGIN_KIND_QUEUE`].
     Queue,
+    /// Durable workflow-journal backend. See [`PLUGIN_KIND_WORKFLOW_JOURNAL`].
+    WorkflowJournal,
     /// Durable execution / step checkpointing plugin (v0.5).
     /// See [`PLUGIN_KIND_DURABLE_STORE`].
     DurableStore,
@@ -235,6 +242,7 @@ impl PluginKind {
             PluginKind::Custom => PLUGIN_KIND_CUSTOM,
             PluginKind::WorkflowRunner => PLUGIN_KIND_WORKFLOW_RUNNER,
             PluginKind::Queue => PLUGIN_KIND_QUEUE,
+            PluginKind::WorkflowJournal => PLUGIN_KIND_WORKFLOW_JOURNAL,
             PluginKind::DurableStore => PLUGIN_KIND_DURABLE_STORE,
             PluginKind::MemoryStore => PLUGIN_KIND_MEMORY_STORE,
             PluginKind::AgentRunner => PLUGIN_KIND_AGENT_RUNNER,
@@ -272,6 +280,7 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_CUSTOM => PluginKind::Custom,
             PLUGIN_KIND_WORKFLOW_RUNNER => PluginKind::WorkflowRunner,
             PLUGIN_KIND_QUEUE => PluginKind::Queue,
+            PLUGIN_KIND_WORKFLOW_JOURNAL => PluginKind::WorkflowJournal,
             PLUGIN_KIND_DURABLE_STORE => PluginKind::DurableStore,
             PLUGIN_KIND_MEMORY_STORE => PluginKind::MemoryStore,
             PLUGIN_KIND_AGENT_RUNNER => PluginKind::AgentRunner,
@@ -487,12 +496,26 @@ pub struct PluginInfo {
     /// One of the `PLUGIN_KIND_*` constants. Prefer
     /// [`PluginInfo::plugin_kind`] to read this as a typed [`PluginKind`].
     pub plugin_kind: String,
+    /// Additional kinds this plugin ALSO serves (v0.7 multi-kind). One process
+    /// can fill several roles (e.g. a Postgres backend that is both
+    /// `subject_backend` and `config_source`). `plugin_kind` stays the
+    /// primary/legacy kind; match against the full set via
+    /// [`PluginInfo::serves_kind`]. Empty = single-kind (back-compat).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_kinds: Vec<String>,
     /// Human-readable description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
 impl PluginInfo {
+    /// Whether this plugin serves `kind` — its primary `plugin_kind` OR any of
+    /// its additional `plugin_kinds` (v0.7 multi-kind). Hosts should discover
+    /// and preflight against this, not a bare `plugin_kind ==` comparison.
+    pub fn serves_kind(&self, kind: &str) -> bool {
+        self.plugin_kind == kind || self.plugin_kinds.iter().any(|k| k == kind)
+    }
+
     /// Typed view of [`PluginInfo::plugin_kind`].
     ///
     /// Unknown wire values land in [`PluginKind::Other`] so unrecognized
@@ -658,6 +681,12 @@ pub struct PluginManifest {
     /// One of the `PLUGIN_KIND_*` constants. Prefer
     /// [`PluginManifest::kind`] to read this as a typed [`PluginKind`].
     pub plugin_kind: String,
+    /// Additional kinds this plugin ALSO serves (v0.7 multi-kind). One process
+    /// can fill several roles; discovery + preflight should match against the
+    /// full set via [`PluginManifest::serves_kind`]. `plugin_kind` stays the
+    /// primary/legacy kind. Empty = single-kind (back-compat).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_kinds: Vec<String>,
     /// Human-readable description.
     pub description: String,
     /// Protocol version the plugin was built against.
@@ -709,6 +738,13 @@ impl PluginManifest {
     /// string to the `PLUGIN_KIND_*` constants.
     pub fn kind(&self) -> PluginKind {
         PluginKind::from(self.plugin_kind.as_str())
+    }
+
+    /// Whether this plugin serves `kind` — its primary `plugin_kind` OR any of
+    /// its additional `plugin_kinds` (v0.7 multi-kind). Discovery + preflight
+    /// should use this instead of a bare `plugin_kind ==` comparison.
+    pub fn serves_kind(&self, kind: &str) -> bool {
+        self.plugin_kind == kind || self.plugin_kinds.iter().any(|k| k == kind)
     }
 }
 
