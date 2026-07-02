@@ -38,6 +38,8 @@ pub fn builtin_workflow_config_base() -> WorkflowConfig {
         triggers: Vec::new(),
         daemon: None,
         secrets: BTreeMap::new(),
+        workspaces: BTreeMap::new(),
+        environment_routing: None,
     }
 }
 

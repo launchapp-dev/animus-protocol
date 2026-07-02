@@ -487,6 +487,7 @@ impl Plugin {
             name: self.name.clone(),
             version: self.version.clone(),
             plugin_kind: self.plugin_kind.clone(),
+            plugin_kinds: Vec::new(),
             description: self.description.clone(),
             protocol_version: self.protocol_version.clone(),
             capabilities,
@@ -506,6 +507,7 @@ impl Plugin {
                 name: self.name.clone(),
                 version: self.version.clone(),
                 plugin_kind: self.plugin_kind.clone(),
+                plugin_kinds: Vec::new(),
                 description: if self.description.is_empty() {
                     None
                 } else {

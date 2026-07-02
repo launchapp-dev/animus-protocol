@@ -248,6 +248,8 @@ pub(super) fn workflow_phase_entry_to_yaml(entry: &WorkflowPhaseEntry) -> YamlPh
                     skip_if: config.skip_if.clone(),
                     on_verdict: config.on_verdict.clone(),
                     budget: config.budget.clone(),
+                    environment: config.environment.clone(),
+                    workspace: config.workspace.clone(),
                 },
             );
             YamlPhaseEntry::Rich(map)
@@ -264,6 +266,8 @@ pub(crate) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> Ya
         variables: definition.variables.clone(),
         worktree: definition.worktree.clone().map(YamlPhaseWorktree::Full),
         budget: definition.budget.clone(),
+        environment: definition.environment.clone(),
+        workspace: definition.workspace.clone(),
     }
 }
 
@@ -337,6 +341,8 @@ pub(crate) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkf
         triggers: config.triggers.clone(),
         daemon: config.daemon.clone(),
         secrets: config.secrets.clone(),
+        workspaces: config.workspaces.clone(),
+        environment_routing: config.environment_routing.clone(),
     }
 }
 
@@ -357,6 +363,8 @@ pub(super) fn yaml_phase_entry_to_workflow_phase_entry(entry: YamlPhaseEntry) ->
                 on_verdict: config.on_verdict,
                 skip_if: config.skip_if,
                 budget: config.budget,
+                environment: config.environment,
+                workspace: config.workspace,
             }))
         }
     }
@@ -373,6 +381,8 @@ pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition)
         variables: yaml.variables,
         worktree,
         budget: yaml.budget,
+        environment: yaml.environment,
+        workspace: yaml.workspace,
     })
 }
 
@@ -718,6 +728,10 @@ const KNOWN_FIELD_KEYS: &[&str] = &[
     "triggers",
     "daemon",
     "secrets",
+    "workspaces",
+    "environment_routing",
+    "environment",
+    "workspace",
     "workflow_ref",
     "mode",
     "agent",
@@ -1027,6 +1041,8 @@ fn parse_yaml_workflow_config_unredacted(
         triggers: yaml_file.triggers,
         daemon: yaml_file.daemon,
         secrets: yaml_file.secrets,
+        workspaces: yaml_file.workspaces,
+        environment_routing: yaml_file.environment_routing,
     };
 
     Ok(merge_yaml_into_config(base.clone(), overlay))

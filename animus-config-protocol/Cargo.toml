@@ -1,6 +1,6 @@
 [package]
 name = "animus-config-protocol"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Wire types for the Animus `config_source` plugin role (JSON-RPC 2.0). Defines the canonical config model envelope a config source returns and the kernel compiles."
 

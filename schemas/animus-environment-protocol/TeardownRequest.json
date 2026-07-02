@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TeardownRequest",
+  "description": "Request payload for [`METHOD_ENVIRONMENT_TEARDOWN`].",
+  "type": "object",
+  "properties": {
+    "handle": {
+      "description": "The prepared context to dispose of.",
+      "$ref": "#/$defs/EnvironmentHandle"
+    }
+  },
+  "required": [
+    "handle"
+  ],
+  "$defs": {
+    "EnvironmentHandle": {
+      "description": "Handle to a prepared execution context.\n\nThe kernel treats [`Self::id`] as opaque and passes the whole handle back on\nevery [`ExecRequest`] / [`TeardownRequest`]; only the originating plugin\ninterprets the id. [`Self::workspace_root`] is the absolute path (on the\nplugin's side of the world) that command `cwd`s resolve against.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Opaque, plugin-assigned identifier for this prepared context.",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Free-form plugin-specific metadata about the prepared context\n(container id, remote host, allocated ports, ...). Carried opaquely."
+        },
+        "workspace_root": {
+          "description": "Absolute path to the root of the materialized workspace. Command `cwd`s\n([`HarnessCommand::cwd`]) resolve relative to this path; for a\nmulti-repo workspace each [`RepoRef`] lives in a subdirectory under it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspace_root"
+      ]
+    }
+  }
+}

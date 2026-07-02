@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecRequest",
+  "description": "Request payload for [`METHOD_ENVIRONMENT_EXEC`] and\n[`METHOD_ENVIRONMENT_EXEC_STREAM`].",
+  "type": "object",
+  "properties": {
+    "command": {
+      "description": "The command to run.",
+      "$ref": "#/$defs/HarnessCommand"
+    },
+    "handle": {
+      "description": "The prepared context to run in.",
+      "$ref": "#/$defs/EnvironmentHandle"
+    },
+    "stdin": {
+      "description": "Bytes to feed to the command's stdin, up front, as a UTF-8 string.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timeout_secs": {
+      "description": "Hard wall-clock timeout in seconds. When exceeded the environment kills\nthe command and returns [`ExecResponse::timed_out`] = true. `None` means\nno explicit timeout (the environment may still impose its own).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "handle",
+    "command"
+  ],
+  "$defs": {
+    "EnvironmentHandle": {
+      "description": "Handle to a prepared execution context.\n\nThe kernel treats [`Self::id`] as opaque and passes the whole handle back on\nevery [`ExecRequest`] / [`TeardownRequest`]; only the originating plugin\ninterprets the id. [`Self::workspace_root`] is the absolute path (on the\nplugin's side of the world) that command `cwd`s resolve against.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Opaque, plugin-assigned identifier for this prepared context.",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Free-form plugin-specific metadata about the prepared context\n(container id, remote host, allocated ports, ...). Carried opaquely."
+        },
+        "workspace_root": {
+          "description": "Absolute path to the root of the materialized workspace. Command `cwd`s\n([`HarnessCommand::cwd`]) resolve relative to this path; for a\nmulti-repo workspace each [`RepoRef`] lives in a subdirectory under it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspace_root"
+      ]
+    },
+    "HarnessCommand": {
+      "description": "A command to run inside a prepared environment.\n\nThis is the harness invocation the provider layer would otherwise run\ndirectly on the host; the environment plugin runs it inside the prepared\ncontext instead.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Arguments passed to [`Self::program`], not including `argv[0]`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "description": "Working directory for the command, relative to\n[`EnvironmentHandle::workspace_root`]. When unset, runs in the primary\nrepo's directory (or the workspace root when there is no primary repo).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "description": "Extra environment variables for this command, merged over (and\noverriding) [`EnvironmentSpec::env`].",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "program": {
+          "description": "Executable to run (looked up on the environment's `PATH` unless\nabsolute).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "program"
+      ]
+    }
+  }
+}

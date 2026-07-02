@@ -1,0 +1,295 @@
+{
+  "$defs": {
+    "EnvironmentHandle": {
+      "description": "Handle to a prepared execution context.\n\nThe kernel treats [`Self::id`] as opaque and passes the whole handle back on\nevery [`ExecRequest`] / [`TeardownRequest`]; only the originating plugin\ninterprets the id. [`Self::workspace_root`] is the absolute path (on the\nplugin's side of the world) that command `cwd`s resolve against.",
+      "properties": {
+        "id": {
+          "description": "Opaque, plugin-assigned identifier for this prepared context.",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Free-form plugin-specific metadata about the prepared context\n(container id, remote host, allocated ports, ...). Carried opaquely."
+        },
+        "workspace_root": {
+          "description": "Absolute path to the root of the materialized workspace. Command `cwd`s\n([`HarnessCommand::cwd`]) resolve relative to this path; for a\nmulti-repo workspace each [`RepoRef`] lives in a subdirectory under it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspace_root"
+      ],
+      "title": "EnvironmentHandle",
+      "type": "object"
+    },
+    "EnvironmentSpec": {
+      "description": "Declarative description of the execution context to materialize.\n\n[`Self::kind`] names the environment plugin id (e.g. `\"worktree\"`,\n`\"container\"`, `\"railway\"`) so the kernel can route a `prepare` call to the\nright plugin. The rest of the spec is intentionally open: [`Self::image`],\n[`Self::resources`], and [`Self::metadata`] carry plugin-specific knobs that\nthe kernel passes through opaquely.",
+      "properties": {
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables to inject into every command run in this context.\nNon-secret config only — secrets flow through the kernel's secret store,\nnot this field.",
+          "type": "object"
+        },
+        "image": {
+          "description": "Container/VM image reference for image-based environments (Docker tag,\nOCI ref, AMI id, ...). Ignored by the worktree environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Environment plugin id that should service this spec (the plugin's\ndeclared environment kind, not [`animus_plugin_protocol::PluginKind`]).",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Free-form plugin-specific metadata (labels, base_ref, network mode,\nmounts, ...). Carried opaquely by the kernel."
+        },
+        "repos": {
+          "description": "The repo set / workspace to materialize. May be empty for a\nrepo-less environment (e.g. a scratch container).",
+          "items": {
+            "$ref": "#/$defs/RepoRef"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "description": "Resource requests/limits for the environment (cpu, memory, disk,\ntimeout, region, ...). Shape is plugin-defined; carried opaquely."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "EnvironmentSpec",
+      "type": "object"
+    },
+    "ExecNotification": {
+      "description": "A streaming notification an environment plugin emits mid-exec during a\n[`METHOD_ENVIRONMENT_EXEC_STREAM`] call.\n\nThe runtime wraps these into [`NOTIFICATION_ENVIRONMENT_OUTPUT`] JSON-RPC\nnotifications and forwards them to the host on the same channel as the\neventual [`ExecResponse`] reply. This mirrors\n`animus-provider-protocol`'s `AgentNotification` server-streaming surface.",
+      "oneOf": [
+        {
+          "description": "Incremental stdout/stderr the command has produced. Maps to\n[`NOTIFICATION_ENVIRONMENT_OUTPUT`].",
+          "properties": {
+            "handle_id": {
+              "description": "Handle id of the environment this exec runs in.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "output",
+              "type": "string"
+            },
+            "stream": {
+              "$ref": "#/$defs/ExecStream",
+              "description": "Which stream this delta belongs to."
+            },
+            "text": {
+              "description": "The output delta (UTF-8).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "handle_id",
+            "stream",
+            "text"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ExecNotification"
+    },
+    "ExecRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_EXEC`] and\n[`METHOD_ENVIRONMENT_EXEC_STREAM`].",
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/HarnessCommand",
+          "description": "The command to run."
+        },
+        "handle": {
+          "$ref": "#/$defs/EnvironmentHandle",
+          "description": "The prepared context to run in."
+        },
+        "stdin": {
+          "description": "Bytes to feed to the command's stdin, up front, as a UTF-8 string.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout_secs": {
+          "description": "Hard wall-clock timeout in seconds. When exceeded the environment kills\nthe command and returns [`ExecResponse::timed_out`] = true. `None` means\nno explicit timeout (the environment may still impose its own).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "handle",
+        "command"
+      ],
+      "title": "ExecRequest",
+      "type": "object"
+    },
+    "ExecResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_EXEC`] /\n[`METHOD_ENVIRONMENT_EXEC_STREAM`].\n\nFor [`METHOD_ENVIRONMENT_EXEC_STREAM`], [`Self::stdout`] / [`Self::stderr`]\ncarry the aggregated output already delivered incrementally via\n[`ExecNotification`]s; a client that consumed the stream can ignore them.",
+      "properties": {
+        "exit_code": {
+          "description": "Process exit code. `None` when the process was terminated by a signal or\nkilled on timeout without producing an exit code.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "description": "Aggregated stderr captured from the command.",
+          "type": "string"
+        },
+        "stdout": {
+          "description": "Aggregated stdout captured from the command.",
+          "type": "string"
+        },
+        "timed_out": {
+          "description": "True when the command was killed because it exceeded\n[`ExecRequest::timeout_secs`].",
+          "type": "boolean"
+        }
+      },
+      "title": "ExecResponse",
+      "type": "object"
+    },
+    "ExecStream": {
+      "description": "Which output stream an [`ExecNotification`] delta belongs to.",
+      "oneOf": [
+        {
+          "const": "stdout",
+          "description": "Standard output.",
+          "type": "string"
+        },
+        {
+          "const": "stderr",
+          "description": "Standard error.",
+          "type": "string"
+        }
+      ],
+      "title": "ExecStream"
+    },
+    "HarnessCommand": {
+      "description": "A command to run inside a prepared environment.\n\nThis is the harness invocation the provider layer would otherwise run\ndirectly on the host; the environment plugin runs it inside the prepared\ncontext instead.",
+      "properties": {
+        "args": {
+          "description": "Arguments passed to [`Self::program`], not including `argv[0]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "description": "Working directory for the command, relative to\n[`EnvironmentHandle::workspace_root`]. When unset, runs in the primary\nrepo's directory (or the workspace root when there is no primary repo).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra environment variables for this command, merged over (and\noverriding) [`EnvironmentSpec::env`].",
+          "type": "object"
+        },
+        "program": {
+          "description": "Executable to run (looked up on the environment's `PATH` unless\nabsolute).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "program"
+      ],
+      "title": "HarnessCommand",
+      "type": "object"
+    },
+    "PrepareRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_PREPARE`].",
+      "properties": {
+        "spec": {
+          "$ref": "#/$defs/EnvironmentSpec",
+          "description": "The environment to materialize."
+        }
+      },
+      "required": [
+        "spec"
+      ],
+      "title": "PrepareRequest",
+      "type": "object"
+    },
+    "PrepareResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_PREPARE`].",
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/EnvironmentHandle",
+          "description": "Handle to the materialized context, used for subsequent `exec` and\n`teardown` calls."
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "title": "PrepareResponse",
+      "type": "object"
+    },
+    "RepoRef": {
+      "description": "A single repository in an environment's workspace (repo set).\n\nA multi-repo workspace (see the top-level `workspace:` config) checks out\nmore than one `RepoRef` under [`EnvironmentHandle::workspace_root`], each in\nits own subdirectory named by [`RepoRef::name`] (or derived from\n[`RepoRef::url`] when `name` is unset).",
+      "properties": {
+        "git_ref": {
+          "description": "Git ref (branch, tag, or commit) to check out. When unset, the plugin\nuses the remote's default branch.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Subdirectory name to check the repo out under, relative to\n[`EnvironmentHandle::workspace_root`]. When unset, the plugin derives it\nfrom the last path segment of [`Self::url`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "primary": {
+          "description": "True when this repo is the primary workspace repo (the one a\nsingle-repo subject maps to, and the default `cwd` for\n[`HarnessCommand`]). At most one repo in a set should be primary; when\nnone is marked, the first entry is primary.",
+          "type": "boolean"
+        },
+        "url": {
+          "description": "Clone URL or local path for the repository. The originating environment\nplugin interprets the value (an `https://`/`git@` remote for the\nworktree/container/remote runners, or a local path for a bind-mount).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "RepoRef",
+      "type": "object"
+    },
+    "TeardownRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_TEARDOWN`].",
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/EnvironmentHandle",
+          "description": "The prepared context to dispose of."
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "title": "TeardownRequest",
+      "type": "object"
+    },
+    "TeardownResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_TEARDOWN`]. Empty on success; the\nwire-level error shape is `animus_plugin_protocol::RpcError`.",
+      "title": "TeardownResponse",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-environment-protocol"
+}

@@ -43,6 +43,10 @@ pub(super) struct YamlPhaseRichConfig {
     pub(super) on_verdict: HashMap<String, PhaseTransitionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) budget: Option<BudgetConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +258,10 @@ pub(super) struct YamlWorkflowDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) worktree: Option<YamlPhaseWorktree>,
     pub(super) budget: Option<BudgetConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,6 +418,12 @@ pub(super) struct YamlWorkflowFile {
     /// `${secret.<name>}` in any YAML scalar.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) secrets: BTreeMap<String, SecretRef>,
+    /// Named repo sets (workspaces) workflows/phases reference by name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) workspaces: BTreeMap<String, Workspace>,
+    /// Config-level environment routing (default + match rules).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) environment_routing: Option<EnvironmentRouting>,
 }
 
 /// Title-case a phase id (`code-review` -> `Code Review`) for default UI labels.

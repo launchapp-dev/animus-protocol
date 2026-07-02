@@ -164,6 +164,14 @@ pub const PLUGIN_KIND_DURABLE_STORE: &str = "durable_store";
 /// (`memory/put`, `memory/get`, `memory/query`, etc.).
 pub const PLUGIN_KIND_MEMORY_STORE: &str = "memory_store";
 
+/// Plugin kind for execution-environment plugins (v0.7).
+///
+/// Environment plugins prepare an execution context (git worktree, container,
+/// or remote host), run provider harness commands inside it, and tear it down.
+/// See `animus-environment-protocol` for the typed RPC surface
+/// (`environment/prepare`, `environment/exec`, `environment/teardown`).
+pub const PLUGIN_KIND_ENVIRONMENT: &str = "environment";
+
 /// Plugin kind for the legacy agent-runner sidecar.
 ///
 /// The agent-runner sidecar (and its `animus-agent-runner-protocol` crate)
@@ -219,6 +227,8 @@ pub enum PluginKind {
     DurableStore,
     /// Agent memory store plugin (v0.5). See [`PLUGIN_KIND_MEMORY_STORE`].
     MemoryStore,
+    /// Execution-environment plugin (v0.7). See [`PLUGIN_KIND_ENVIRONMENT`].
+    Environment,
     /// Agent-runner sidecar plugin (v0.5). See [`PLUGIN_KIND_AGENT_RUNNER`].
     AgentRunner,
     /// Any kind not understood by this crate version. Preserves the wire
@@ -245,6 +255,7 @@ impl PluginKind {
             PluginKind::WorkflowJournal => PLUGIN_KIND_WORKFLOW_JOURNAL,
             PluginKind::DurableStore => PLUGIN_KIND_DURABLE_STORE,
             PluginKind::MemoryStore => PLUGIN_KIND_MEMORY_STORE,
+            PluginKind::Environment => PLUGIN_KIND_ENVIRONMENT,
             PluginKind::AgentRunner => PLUGIN_KIND_AGENT_RUNNER,
             PluginKind::Other(value) => value.as_str(),
         }
@@ -283,6 +294,7 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_WORKFLOW_JOURNAL => PluginKind::WorkflowJournal,
             PLUGIN_KIND_DURABLE_STORE => PluginKind::DurableStore,
             PLUGIN_KIND_MEMORY_STORE => PluginKind::MemoryStore,
+            PLUGIN_KIND_ENVIRONMENT => PluginKind::Environment,
             PLUGIN_KIND_AGENT_RUNNER => PluginKind::AgentRunner,
             _ => PluginKind::Other(value),
         }
@@ -1487,6 +1499,7 @@ mod tests {
             name: "x".to_string(),
             version: "0.1.0".to_string(),
             plugin_kind: PluginKind::Custom.to_string(),
+            plugin_kinds: Vec::new(),
             description: "x".to_string(),
             protocol_version: "1.0.0".to_string(),
             capabilities: vec![],

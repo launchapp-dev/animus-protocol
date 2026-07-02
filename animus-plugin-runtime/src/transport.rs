@@ -277,6 +277,7 @@ fn print_manifest_and_exit(info: &PluginInfo, capabilities: &PluginCapabilities)
         name: info.name.clone(),
         version: info.version.clone(),
         plugin_kind: info.plugin_kind.clone(),
+        plugin_kinds: info.plugin_kinds.clone(),
         description: info.description.clone().unwrap_or_default(),
         protocol_version: PROTOCOL_VERSION.to_string(),
         capabilities: capabilities.methods.clone(),

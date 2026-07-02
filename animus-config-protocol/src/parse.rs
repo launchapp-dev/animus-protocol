@@ -274,6 +274,13 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         secrets.insert(key, value);
     }
 
+    let mut workspaces = base.workspaces;
+    for (name, workspace) in yaml.workspaces {
+        workspaces.insert(name, workspace);
+    }
+
+    let environment_routing = yaml.environment_routing.or(base.environment_routing);
+
     WorkflowConfig {
         schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
         version: WORKFLOW_CONFIG_VERSION,
@@ -293,5 +300,7 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         triggers,
         daemon,
         secrets,
+        workspaces,
+        environment_routing,
     }
 }

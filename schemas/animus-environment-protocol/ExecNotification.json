@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecNotification",
+  "description": "A streaming notification an environment plugin emits mid-exec during a\n[`METHOD_ENVIRONMENT_EXEC_STREAM`] call.\n\nThe runtime wraps these into [`NOTIFICATION_ENVIRONMENT_OUTPUT`] JSON-RPC\nnotifications and forwards them to the host on the same channel as the\neventual [`ExecResponse`] reply. This mirrors\n`animus-provider-protocol`'s `AgentNotification` server-streaming surface.",
+  "oneOf": [
+    {
+      "description": "Incremental stdout/stderr the command has produced. Maps to\n[`NOTIFICATION_ENVIRONMENT_OUTPUT`].",
+      "type": "object",
+      "properties": {
+        "handle_id": {
+          "description": "Handle id of the environment this exec runs in.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "output"
+        },
+        "stream": {
+          "description": "Which stream this delta belongs to.",
+          "$ref": "#/$defs/ExecStream"
+        },
+        "text": {
+          "description": "The output delta (UTF-8).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "handle_id",
+        "stream",
+        "text"
+      ]
+    }
+  ],
+  "$defs": {
+    "ExecStream": {
+      "description": "Which output stream an [`ExecNotification`] delta belongs to.",
+      "oneOf": [
+        {
+          "description": "Standard output.",
+          "type": "string",
+          "const": "stdout"
+        },
+        {
+          "description": "Standard error.",
+          "type": "string",
+          "const": "stderr"
+        }
+      ]
+    }
+  }
+}

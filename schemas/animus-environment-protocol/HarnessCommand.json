@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HarnessCommand",
+  "description": "A command to run inside a prepared environment.\n\nThis is the harness invocation the provider layer would otherwise run\ndirectly on the host; the environment plugin runs it inside the prepared\ncontext instead.",
+  "type": "object",
+  "properties": {
+    "args": {
+      "description": "Arguments passed to [`Self::program`], not including `argv[0]`.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cwd": {
+      "description": "Working directory for the command, relative to\n[`EnvironmentHandle::workspace_root`]. When unset, runs in the primary\nrepo's directory (or the workspace root when there is no primary repo).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "env": {
+      "description": "Extra environment variables for this command, merged over (and\noverriding) [`EnvironmentSpec::env`].",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "program": {
+      "description": "Executable to run (looked up on the environment's `PATH` unless\nabsolute).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "program"
+  ]
+}
