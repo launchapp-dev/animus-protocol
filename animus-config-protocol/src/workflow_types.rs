@@ -964,6 +964,10 @@ impl Default for WorkflowConfig {
 pub enum WorkflowConfigSource {
     Json,
     Yaml,
+    /// Base config acquired from an installed `config_source` plugin
+    /// (e.g. animus-config-postgres). The on-disk `path` is just the
+    /// project root, not a real YAML file. See TASK-177.
+    Plugin,
     Builtin,
     BuiltinFallback,
 }
@@ -973,6 +977,7 @@ impl WorkflowConfigSource {
         match self {
             Self::Json => "json",
             Self::Yaml => "yaml",
+            Self::Plugin => "plugin",
             Self::Builtin => "builtin",
             Self::BuiltinFallback => "builtin_fallback",
         }
