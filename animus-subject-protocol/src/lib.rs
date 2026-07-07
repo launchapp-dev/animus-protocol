@@ -1481,8 +1481,13 @@ fn subject_metadata_is_empty(value: &Value) -> bool {
 /// ao-cli's `protocol` crate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SubjectDispatch {
-    /// The subject this dispatch targets.
-    pub subject: SubjectRef,
+    /// The subject this dispatch targets, or `None` for a genuinely
+    /// subjectless run — a workflow dispatched with NO bound subject (subject
+    /// template vars are simply absent downstream). Omitted from the wire when
+    /// absent; older payloads always carry a subject, so this stays
+    /// backward-tolerant on deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<SubjectRef>,
     /// Workflow YAML ref to execute (e.g., `"standard"`, `"quick-fix"`).
     pub workflow_ref: String,
     /// Optional initial input JSON for workflow variables.
@@ -1518,7 +1523,7 @@ impl SubjectDispatch {
         requested_at: DateTime<Utc>,
     ) -> Self {
         Self {
-            subject,
+            subject: Some(subject),
             workflow_ref: workflow_ref.into(),
             input: None,
             vars: std::collections::HashMap::new(),
@@ -1529,35 +1534,61 @@ impl SubjectDispatch {
         }
     }
 
-    /// Borrow the subject id.
-    pub fn subject_id(&self) -> &str {
-        self.subject.id()
+    /// Construct a genuinely subjectless dispatch (no bound subject). The run
+    /// carries NO subject identity; downstream subject template vars are simply
+    /// absent.
+    pub fn subjectless(
+        workflow_ref: impl Into<String>,
+        trigger_source: impl Into<String>,
+        requested_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            subject: None,
+            workflow_ref: workflow_ref.into(),
+            input: None,
+            vars: std::collections::HashMap::new(),
+            priority: None,
+            trigger_source: trigger_source.into(),
+            requested_at,
+            actor: None,
+        }
     }
 
-    /// Borrow the subject kind.
-    pub fn subject_kind(&self) -> &str {
-        self.subject.kind()
+    /// Borrow the subject, or `None` for a subjectless dispatch.
+    pub fn subject(&self) -> Option<&SubjectRef> {
+        self.subject.as_ref()
     }
 
-    /// Return the stable queue-key form for this dispatch.
-    pub fn subject_key(&self) -> String {
-        self.subject.subject_key()
+    /// Borrow the subject id, or `None` for a subjectless dispatch.
+    pub fn subject_id(&self) -> Option<&str> {
+        self.subject.as_ref().map(SubjectRef::id)
+    }
+
+    /// Borrow the subject kind, or `None` for a subjectless dispatch.
+    pub fn subject_kind(&self) -> Option<&str> {
+        self.subject.as_ref().map(SubjectRef::kind)
+    }
+
+    /// Return the stable queue-key form for this dispatch, or `None` for a
+    /// subjectless dispatch (nothing to key/dedup on).
+    pub fn subject_key(&self) -> Option<String> {
+        self.subject.as_ref().map(SubjectRef::subject_key)
     }
 
     /// Return the task id if this dispatch's subject is a built-in task.
     pub fn task_id(&self) -> Option<&str> {
-        self.subject.task_id()
+        self.subject.as_ref().and_then(SubjectRef::task_id)
     }
 
     /// Return the requirement id if this dispatch's subject is a built-in
     /// requirement.
     pub fn requirement_id(&self) -> Option<&str> {
-        self.subject.requirement_id()
+        self.subject.as_ref().and_then(SubjectRef::requirement_id)
     }
 
     /// Return the schedule id if this dispatch's subject is schedule-driven.
     pub fn schedule_id(&self) -> Option<&str> {
-        self.subject.schedule_id()
+        self.subject.as_ref().and_then(SubjectRef::schedule_id)
     }
 
     /// Attach input JSON (fluent builder).
@@ -1614,10 +1645,28 @@ mod subject_ref_dispatch_tests {
             "ready-queue",
             Utc::now(),
         );
-        assert_eq!(d.subject_id(), "TASK-1");
-        assert_eq!(d.subject_kind(), SUBJECT_KIND_TASK);
+        assert_eq!(d.subject_id(), Some("TASK-1"));
+        assert_eq!(d.subject_kind(), Some(SUBJECT_KIND_TASK));
         assert_eq!(d.task_id(), Some("TASK-1"));
         assert_eq!(d.requirement_id(), None);
+    }
+
+    #[test]
+    fn subjectless_dispatch_has_absent_subject() {
+        let d = SubjectDispatch::subjectless("relate", "manual", Utc::now());
+        assert!(d.subject().is_none());
+        assert_eq!(d.subject_id(), None);
+        assert_eq!(d.subject_kind(), None);
+        assert_eq!(d.subject_key(), None);
+        assert_eq!(d.task_id(), None);
+
+        // Subjectless dispatch omits `subject` from the wire entirely.
+        let v = serde_json::to_value(&d).unwrap();
+        assert!(v.get("subject").is_none(), "subject must be absent: {v}");
+
+        // ... and round-trips back to an absent subject.
+        let back: SubjectDispatch = serde_json::from_value(v).unwrap();
+        assert!(back.subject().is_none());
     }
 
     #[test]
