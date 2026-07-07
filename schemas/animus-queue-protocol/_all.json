@@ -1,5 +1,32 @@
 {
   "$defs": {
+    "Actor": {
+      "description": "An opaque, transport-asserted caller identity.\n\nConstructed by the transport after it authenticates the caller, relayed\nverbatim by the kernel, and consumed only by plugins for data scoping. See\nthe [crate-level docs](crate) for the full contract.",
+      "properties": {
+        "claims": {
+          "description": "Transport-asserted claims (e.g. `[\"admin\"]`). Advisory only: the kernel\nnever branches on these. A plugin MAY consult them for its own\nauthorization decisions. Omitted from the wire when empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tenant_id": {
+          "description": "Optional tenant / organization partition the user belongs to. Plugins\nuse it for multi-tenant data isolation. Omitted from the wire when\nabsent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_id": {
+          "description": "Stable identifier for the authenticated user. Opaque to the kernel;\nplugins use it to scope owned rows to a user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id"
+      ],
+      "type": "object"
+    },
     "QueueCapabilities": {
       "description": "Capability flags for queue plugins.",
       "properties": {
@@ -526,6 +553,17 @@
     "SubjectDispatch": {
       "description": "Full dispatch envelope handed off from queue / scheduler / trigger to the\nworkflow runner.\n\nCarries the subject identity (`subject`), the workflow ref to run, and\noptional input + variables + priority + trigger source + requested-at\ntimestamp. The shape is wire-compatible with the previous home in\nao-cli's `protocol` crate.",
       "properties": {
+        "actor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Actor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Caller identity this dispatch runs as. `None` is a system/global run\n(the legacy default). Owner-scoped schedules attach a kernel-minted\n[`Actor`] here (see the schedule's `owner_id`); the daemon relays it to\nthe workflow runner so downstream provider + plugin channels scope to\nthe owner. Additive and back-compat: omitted from the wire when absent."
+        },
         "input": {
           "description": "Optional initial input JSON for workflow variables."
         },
@@ -542,8 +580,15 @@
           "type": "string"
         },
         "subject": {
-          "$ref": "#/$defs/SubjectRef",
-          "description": "The subject this dispatch targets."
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The subject this dispatch targets, or `None` for a genuinely\nsubjectless run — a workflow dispatched with NO bound subject (subject\ntemplate vars are simply absent downstream). Omitted from the wire when\nabsent; older payloads always carry a subject, so this stays\nbackward-tolerant on deserialize."
         },
         "trigger_source": {
           "description": "Tag identifying which subsystem produced this dispatch\n(e.g., `\"ready-queue\"`, `\"trigger:slack\"`, `\"schedule:nightly\"`).",
@@ -562,7 +607,6 @@
         }
       },
       "required": [
-        "subject",
         "workflow_ref",
         "trigger_source",
         "requested_at"
