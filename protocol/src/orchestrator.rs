@@ -1338,6 +1338,13 @@ pub struct PhaseDecision {
     pub commit_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_phase: Option<String>,
+    /// Custom routing key emitted by an agent or command phase when the
+    /// verdict string is not one of the built-in `advance`/`rework`/`skip`/
+    /// `fail` values. Carries the raw verdict verbatim (e.g. `needs-research`)
+    /// so the workflow executor can route it through the phase's `on_verdict`
+    /// map to an arbitrary target phase. `None` for built-in verdicts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
