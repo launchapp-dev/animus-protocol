@@ -5,6 +5,25 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
+## Unreleased — declared `supports_mcp` manifest capability
+
+### Added
+
+`animus-plugin-protocol` (0.1.18): `PluginManifest.supports_mcp: Option<bool>`
+— a first-class, plugin-DECLARED capability field the kernel reads instead of
+hardcoding per-tool MCP behavior in a name table (REQUIREMENT-039 / TASK-277).
+
+- `PROTOCOL_VERSION` bumped `1.1.0` -> `1.2.0` (backward-compatible minor: the
+  field is optional and `#[serde(default, skip_serializing_if = "Option::is_none")]`).
+- Back-compat: absent = undeclared; the kernel keeps its historical default
+  (provider plugins are MCP-capable). Only an explicit `false` opts a provider out.
+- `animus-plugin-runtime` (0.2.2): `Plugin::supports_mcp(bool)` builder so a Rust
+  plugin author can declare the flag. The provider runtime (`provider_main`) emits
+  `None` for now — auto-mapping from `ProviderCapabilities.mcp` is deferred because
+  that flag defaults `false` and would regress providers relying on the default.
+- This is the proof-of-pattern field for the wider REQUIREMENT-039 cleanup
+  (launch template, permission-mode flag, reasoning-effort, default model, ...).
+
 ## v0.1.21 — config_source write-back (`config/write`)
 
 ### Added

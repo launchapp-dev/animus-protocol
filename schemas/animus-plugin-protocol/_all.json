@@ -908,6 +908,13 @@
           "description": "Protocol version the plugin was built against.",
           "type": "string"
         },
+        "supports_mcp": {
+          "description": "Whether this plugin consumes host-injected MCP servers.\n\nFirst-class, plugin-DECLARED capability the kernel reads instead of\nhardcoding per-tool behavior in name tables (REQUIREMENT-039). A\nprovider plugin sets this to advertise whether it accepts the\nhost-supplied MCP server set (profile/skill MCP endpoints injected via\nthe run request); the kernel gates MCP injection on the declared value\nrather than a built-in allow-list keyed on the tool name.\n\nThis is the proof-of-pattern field for a growing family of declared\nkernel-behavior capabilities (launch template, permission-mode flag,\nreasoning-effort, default model, ...) that will migrate off the kernel's\nhardcoded name tables onto the manifest over subsequent slices.\n\nBack-compat: `None` means \"undeclared\" — plugins built against earlier\nprotocol versions omit the field entirely, and the kernel applies its\nhistorical default (MCP-capable for provider plugins). Only an explicit\n`Some(false)` opts a provider out of MCP injection.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "version": {
           "description": "Plugin semver.",
           "type": "string"

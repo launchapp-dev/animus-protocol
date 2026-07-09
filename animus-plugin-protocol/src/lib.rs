@@ -37,7 +37,7 @@ use serde_json::Value;
 /// declares its own in [`InitializeParams::protocol_version`]. A plugin and
 /// host with the same major version are compatible. See `spec.md` for the
 /// full versioning policy.
-pub const PROTOCOL_VERSION: &str = "1.1.0";
+pub const PROTOCOL_VERSION: &str = "1.2.0";
 
 /// Plugin kind for LLM provider plugins (Claude, Codex, Gemini, OpenAI-compat,
 /// on-prem, ...).
@@ -740,6 +740,26 @@ pub struct PluginManifest {
     /// up the new hint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification_buffer_size: Option<usize>,
+    /// Whether this plugin consumes host-injected MCP servers.
+    ///
+    /// First-class, plugin-DECLARED capability the kernel reads instead of
+    /// hardcoding per-tool behavior in name tables (REQUIREMENT-039). A
+    /// provider plugin sets this to advertise whether it accepts the
+    /// host-supplied MCP server set (profile/skill MCP endpoints injected via
+    /// the run request); the kernel gates MCP injection on the declared value
+    /// rather than a built-in allow-list keyed on the tool name.
+    ///
+    /// This is the proof-of-pattern field for a growing family of declared
+    /// kernel-behavior capabilities (launch template, permission-mode flag,
+    /// reasoning-effort, default model, ...) that will migrate off the kernel's
+    /// hardcoded name tables onto the manifest over subsequent slices.
+    ///
+    /// Back-compat: `None` means "undeclared" — plugins built against earlier
+    /// protocol versions omit the field entirely, and the kernel applies its
+    /// historical default (MCP-capable for provider plugins). Only an explicit
+    /// `Some(false)` opts a provider out of MCP injection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_mcp: Option<bool>,
 }
 
 impl PluginManifest {
@@ -1505,6 +1525,7 @@ mod tests {
             capabilities: vec![],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let value = serde_json::to_value(&manifest).unwrap();
         assert!(
@@ -1514,6 +1535,10 @@ mod tests {
         assert!(
             value.get("notification_buffer_size").is_none(),
             "unset notification_buffer_size must not be serialized for back-compat"
+        );
+        assert!(
+            value.get("supports_mcp").is_none(),
+            "unset supports_mcp must not be serialized for back-compat"
         );
         assert_eq!(value.get("plugin_kind"), Some(&serde_json::json!("custom")));
         assert_eq!(manifest.kind(), PluginKind::Custom);
@@ -1533,6 +1558,44 @@ mod tests {
         let manifest: PluginManifest =
             serde_json::from_value(value).expect("manifest should parse");
         assert_eq!(manifest.notification_buffer_size, Some(1024));
+    }
+
+    #[test]
+    fn manifest_supports_mcp_round_trips() {
+        // Explicit opt-out parses to Some(false).
+        let value = serde_json::json!({
+            "name": "animus-provider-portal",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "Out-of-tree provider",
+            "protocol_version": "1.2.0",
+            "capabilities": ["agent/run"],
+            "supports_mcp": false
+        });
+        let manifest: PluginManifest =
+            serde_json::from_value(value).expect("manifest should parse");
+        assert_eq!(manifest.supports_mcp, Some(false));
+
+        // A manifest that sets it serializes the field back out.
+        let encoded = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(encoded.get("supports_mcp"), Some(&serde_json::json!(false)));
+    }
+
+    #[test]
+    fn manifest_absent_supports_mcp_is_none() {
+        // Older plugins omit the field entirely -> undeclared (None), so the
+        // kernel keeps its historical default.
+        let value = serde_json::json!({
+            "name": "animus-provider-legacy",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "Legacy provider",
+            "protocol_version": "1.0.0",
+            "capabilities": ["agent/run"]
+        });
+        let manifest: PluginManifest =
+            serde_json::from_value(value).expect("manifest should parse");
+        assert_eq!(manifest.supports_mcp, None);
     }
 
     #[test]
