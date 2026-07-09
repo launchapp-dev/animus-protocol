@@ -535,6 +535,19 @@ The `--manifest` output:
 }
 ```
 
+Optional fields (omitted for back-compat when unset):
+
+- `plugin_kinds` (`string[]`) — additional kinds a multi-kind plugin also serves.
+- `env_required` (`EnvRequirement[]`) — environment variables the host must forward at spawn.
+- `notification_buffer_size` (`integer`) — author hint for the broadcast channel capacity.
+- `supports_mcp` (`boolean`) — since protocol **1.2.0**. First-class, plugin-DECLARED
+  capability: whether the plugin consumes host-injected MCP servers. The kernel reads this
+  instead of hardcoding per-tool MCP behavior in a name table (REQUIREMENT-039). **Absent =
+  undeclared**: the kernel applies its historical default (provider plugins are MCP-capable);
+  only an explicit `false` opts a provider out. This is the proof-of-pattern field for a
+  growing family of declared kernel-behavior capabilities (launch template, permission-mode
+  flag, reasoning-effort, default model, ...) migrating off the kernel's hardcoded name tables.
+
 ### 8.3 `RpcRequest` / `RpcNotification` / `RpcResponse` / `RpcError`
 
 See §2.

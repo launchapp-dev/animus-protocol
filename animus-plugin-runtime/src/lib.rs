@@ -98,6 +98,7 @@ impl ProviderInfo {
             ],
             env_required: Vec::new(),
             notification_buffer_size: None,
+            supports_mcp: None,
         }
     }
 

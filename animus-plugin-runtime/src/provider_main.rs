@@ -416,6 +416,11 @@ fn print_manifest_and_exit(info: &PluginInfo, capabilities: &PluginCapabilities)
         capabilities: capabilities.methods.clone(),
         env_required: Vec::new(),
         notification_buffer_size: None,
+        // Undeclared: the kernel applies its historical default (provider
+        // plugins are MCP-capable). Auto-mapping from `ProviderCapabilities.mcp`
+        // is deferred because that flag defaults `false` and would regress
+        // providers relying on the implicit default (REQUIREMENT-039).
+        supports_mcp: None,
     };
     let mut stdout = io::stdout().lock();
     let _ = writeln!(

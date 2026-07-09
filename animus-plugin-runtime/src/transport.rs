@@ -283,6 +283,7 @@ fn print_manifest_and_exit(info: &PluginInfo, capabilities: &PluginCapabilities)
         capabilities: capabilities.methods.clone(),
         env_required: Vec::new(),
         notification_buffer_size: None,
+        supports_mcp: None,
     };
     let mut stdout = io::stdout().lock();
     let _ = writeln!(
