@@ -407,6 +407,8 @@ pub(crate) fn codex_invocation_for_request(
     }
 
     let mut args = vec!["exec".to_string()];
+    args.push("--sandbox".to_string());
+    args.push("workspace-write".to_string());
     if let Some(raw) = resume_session_id {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -418,21 +420,16 @@ pub(crate) fn codex_invocation_for_request(
         args.push(trimmed.to_string());
     }
     args.push("--json".to_string());
-    args.push("--full-auto".to_string());
     args.push("--skip-git-repo-check".to_string());
 
-    if let Some(permission_mode) = request
+    let approval_policy = request
         .permission_mode
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        ensure_codex_config_override(
-            &mut args,
-            "approval_policy",
-            &format!("\"{permission_mode}\""),
-        );
-    }
+        .map(|value| format!("\"{value}\""))
+        .unwrap_or_else(|| "\"never\"".to_string());
+    ensure_codex_config_override(&mut args, "approval_policy", &approval_policy);
 
     ensure_codex_config_override(&mut args, "sandbox_workspace_write.network_access", "true");
 
@@ -633,7 +630,7 @@ mod reasoning_effort_tests {
         }
     }
 
-    fn override_value(args: &[String], key: &str) -> Option<String> {
+    pub(super) fn override_value(args: &[String], key: &str) -> Option<String> {
         let prefix = format!("{key}=");
         let mut index = 0usize;
         while index + 1 < args.len() {
@@ -783,6 +780,93 @@ mod approvals_preamble_tests {
             .expect("invocation");
         let unchanged = codex_invocation_for_request(&request, None).expect("invocation");
         assert_eq!(baseline.args, unchanged.args);
+    }
+}
+
+#[cfg(test)]
+mod sandbox_flag_tests {
+    use super::*;
+    use serde_json::json;
+
+    use super::reasoning_effort_tests::{override_value, request_with_extras};
+
+    fn arg_pair_present(args: &[String], flag: &str, value: &str) -> bool {
+        args.windows(2)
+            .any(|pair| pair[0] == flag && pair[1] == value)
+    }
+
+    #[test]
+    fn bare_args_use_sandbox_workspace_write_not_full_auto() {
+        let request = request_with_extras(json!({}));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert!(
+            !invocation.args.iter().any(|a| a == "--full-auto"),
+            "deprecated --full-auto must not be emitted; got {:?}",
+            invocation.args
+        );
+        assert!(
+            arg_pair_present(&invocation.args, "--sandbox", "workspace-write"),
+            "expected --sandbox workspace-write; got {:?}",
+            invocation.args
+        );
+    }
+
+    #[test]
+    fn bare_args_preserve_network_access_and_auto_approve() {
+        let request = request_with_extras(json!({}));
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            override_value(&invocation.args, "sandbox_workspace_write.network_access"),
+            Some("true".to_string()),
+            "network access must stay enabled; got {:?}",
+            invocation.args
+        );
+        assert_eq!(
+            override_value(&invocation.args, "approval_policy"),
+            Some("\"never\"".to_string()),
+            "headless auto-run must default approval_policy to never; got {:?}",
+            invocation.args
+        );
+    }
+
+    #[test]
+    fn resume_places_sandbox_before_resume_subcommand() {
+        let request = request_with_extras(json!({}));
+        let invocation =
+            codex_invocation_for_request(&request, Some("sess-123")).expect("invocation");
+        let sandbox_pos = invocation
+            .args
+            .iter()
+            .position(|a| a == "--sandbox")
+            .expect("--sandbox present");
+        let resume_pos = invocation
+            .args
+            .iter()
+            .position(|a| a == "resume")
+            .expect("resume subcommand present");
+        assert!(
+            sandbox_pos < resume_pos,
+            "--sandbox is an exec-level option and must precede the resume subcommand; got {:?}",
+            invocation.args
+        );
+        assert!(
+            arg_pair_present(&invocation.args, "--sandbox", "workspace-write"),
+            "expected --sandbox workspace-write; got {:?}",
+            invocation.args
+        );
+    }
+
+    #[test]
+    fn permission_mode_overrides_default_approval_policy() {
+        let mut request = request_with_extras(json!({}));
+        request.permission_mode = Some("on-request".to_string());
+        let invocation = codex_invocation_for_request(&request, None).expect("invocation");
+        assert_eq!(
+            override_value(&invocation.args, "approval_policy"),
+            Some("\"on-request\"".to_string()),
+            "caller permission_mode must win over the never default; got {:?}",
+            invocation.args
+        );
     }
 }
 

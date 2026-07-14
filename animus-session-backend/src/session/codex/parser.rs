@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn codex_parser_emits_tool_call_and_result_for_command_execution_item() {
         // The real shape codex emits for a sandbox shell run (captured from
-        // `codex exec --json --full-auto`).
+        // `codex exec --json --sandbox workspace-write`).
         let line = r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo hi'","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}"#;
         let events = parse(&[line]);
         assert_eq!(
