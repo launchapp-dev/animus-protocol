@@ -549,6 +549,9 @@ pub struct WorkflowListRequest {
     /// Page size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// Restrict to runs of this workflow definition (the "type" filter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_ref: Option<String>,
 }
 
 /// Response for `workflow/list`.
@@ -559,6 +562,10 @@ pub struct WorkflowListResponse {
     /// Next-page cursor, or `None` if exhausted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// Total matching runs across ALL pages, so the UI can show a count +
+    /// numbered pages. `None` for backends that don.t count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u32>,
 }
 
 /// One row of `workflow/list`.
