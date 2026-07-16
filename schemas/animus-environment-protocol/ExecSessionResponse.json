@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecSessionResponse",
+  "description": "Response payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`]: the node-local run\nid the dispatch spawned and its terminal status.",
+  "type": "object",
+  "properties": {
+    "status": {
+      "description": "Terminal status of the node-local run (e.g. `completed`, `failed`,\n`escalated`, `cancelled`, or `no-run` when nothing was dispatched).",
+      "type": "string"
+    },
+    "workflow_id": {
+      "description": "The node-local workflow run id, when one was spawned.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "status"
+  ]
+}

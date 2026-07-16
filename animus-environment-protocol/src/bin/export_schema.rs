@@ -23,8 +23,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use animus_environment_protocol::{
-    EnvironmentHandle, EnvironmentSpec, ExecNotification, ExecRequest, ExecResponse, ExecStream,
-    HarnessCommand, PrepareRequest, PrepareResponse, RepoRef, TeardownRequest, TeardownResponse,
+    EnvironmentHandle, EnvironmentSpec, ExecNotification, ExecRequest, ExecResponse,
+    ExecSessionRequest, ExecSessionResponse, ExecStream, HarnessCommand, PrepareRequest,
+    PrepareResponse, RepoRef, TeardownRequest, TeardownResponse,
 };
 use schemars::{schema_for, Schema};
 
@@ -66,6 +67,8 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("HarnessCommand", schema_for!(HarnessCommand)),
         ("ExecRequest", schema_for!(ExecRequest)),
         ("ExecResponse", schema_for!(ExecResponse)),
+        ("ExecSessionRequest", schema_for!(ExecSessionRequest)),
+        ("ExecSessionResponse", schema_for!(ExecSessionResponse)),
         ("ExecStream", schema_for!(ExecStream)),
         ("ExecNotification", schema_for!(ExecNotification)),
         ("TeardownRequest", schema_for!(TeardownRequest)),

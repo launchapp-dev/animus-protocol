@@ -72,6 +72,15 @@ pub const METHOD_ENVIRONMENT_EXEC: &str = "environment/exec";
 /// [`animus_plugin_protocol::error_codes::METHOD_NOT_SUPPORTED`].
 pub const METHOD_ENVIRONMENT_EXEC_STREAM: &str = "environment/exec_stream";
 
+/// `environment/exec_session` — dispatch a SUBJECT to the environment's own
+/// animus (REQ-052 remote-animus): the plugin hands the subject to the node's
+/// in-container animus, which runs the workflow through its own provider/session
+/// layer and streams rich [`NOTIFICATION_ENVIRONMENT_JOURNAL`] events back;
+/// the final reply is an [`ExecSessionResponse`]. Optional; plugins that do not
+/// run a remote animus respond with
+/// [`animus_plugin_protocol::error_codes::METHOD_NOT_SUPPORTED`].
+pub const METHOD_ENVIRONMENT_EXEC_SESSION: &str = "environment/exec_session";
+
 /// `environment/teardown` — dispose of a prepared context by handle.
 pub const METHOD_ENVIRONMENT_TEARDOWN: &str = "environment/teardown";
 
@@ -79,6 +88,11 @@ pub const METHOD_ENVIRONMENT_TEARDOWN: &str = "environment/teardown";
 /// [`ExecNotification`] for an in-flight [`METHOD_ENVIRONMENT_EXEC_STREAM`]
 /// call.
 pub const NOTIFICATION_ENVIRONMENT_OUTPUT: &str = "environment/output";
+
+/// `environment/journal` — server-streaming notification carrying a journal
+/// event from an in-flight [`METHOD_ENVIRONMENT_EXEC_SESSION`] call (the node's
+/// own workflow journal, forwarded verbatim).
+pub const NOTIFICATION_ENVIRONMENT_JOURNAL: &str = "environment/journal";
 
 // =====================================================================
 // Repo set / workspace
@@ -281,6 +295,39 @@ pub struct ExecResponse {
     pub timed_out: bool,
 }
 
+/// Request payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`] — dispatch a subject
+/// to the environment's own animus (REQ-052 remote-animus).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExecSessionRequest {
+    /// The prepared context (whose in-container animus runs the subject).
+    pub handle: EnvironmentHandle,
+
+    /// The subject to dispatch, qualified `kind:id` (e.g. `task:TASK-1`).
+    pub subject_id: String,
+
+    /// Workflow to run the subject through. `None` uses the node's default
+    /// routing for the subject's kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_ref: Option<String>,
+
+    /// Optional dispatch input forwarded to the node's run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_input: Option<String>,
+}
+
+/// Response payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`]: the node-local run
+/// id the dispatch spawned and its terminal status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExecSessionResponse {
+    /// The node-local workflow run id, when one was spawned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
+
+    /// Terminal status of the node-local run (e.g. `completed`, `failed`,
+    /// `escalated`, `cancelled`, or `no-run` when nothing was dispatched).
+    pub status: String,
+}
+
 /// Which output stream an [`ExecNotification`] delta belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -311,6 +358,33 @@ pub enum ExecNotification {
         /// The output delta (UTF-8).
         text: String,
     },
+    /// One journal event from an in-flight [`METHOD_ENVIRONMENT_EXEC_SESSION`],
+    /// forwarded verbatim from the node's own workflow journal. Maps to
+    /// [`NOTIFICATION_ENVIRONMENT_JOURNAL`].
+    Journal {
+        /// Handle id of the environment this session runs in.
+        handle_id: String,
+        /// The node-local run id this event belongs to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workflow_id: Option<String>,
+        /// The journal event kind (e.g. `phase_started`, `output_chunk`,
+        /// `tool_call`, `run_failed`).
+        event_kind: String,
+        /// Phase this event belongs to, when phase-scoped.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase_id: Option<String>,
+        /// Event status discriminator, when present.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        /// Event timestamp (RFC 3339).
+        ts: String,
+        /// The event's full payload, forwarded verbatim.
+        payload: Value,
+        /// True on the final event of the session (the run reached a terminal
+        /// status), signalling the host to settle.
+        #[serde(default, skip_serializing_if = "is_false")]
+        terminal: bool,
+    },
 }
 
 impl ExecNotification {
@@ -318,6 +392,7 @@ impl ExecNotification {
     pub fn method(&self) -> &'static str {
         match self {
             ExecNotification::Output { .. } => NOTIFICATION_ENVIRONMENT_OUTPUT,
+            ExecNotification::Journal { .. } => NOTIFICATION_ENVIRONMENT_JOURNAL,
         }
     }
 
@@ -332,6 +407,25 @@ impl ExecNotification {
                 "handle_id": handle_id,
                 "stream": stream,
                 "text": text,
+            }),
+            ExecNotification::Journal {
+                handle_id,
+                workflow_id,
+                event_kind,
+                phase_id,
+                status,
+                ts,
+                payload,
+                terminal,
+            } => serde_json::json!({
+                "handle_id": handle_id,
+                "workflow_id": workflow_id,
+                "event_kind": event_kind,
+                "phase_id": phase_id,
+                "status": status,
+                "ts": ts,
+                "payload": payload,
+                "terminal": terminal,
             }),
         }
     }

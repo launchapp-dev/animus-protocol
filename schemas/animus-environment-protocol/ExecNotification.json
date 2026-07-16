@@ -30,6 +30,63 @@
         "stream",
         "text"
       ]
+    },
+    {
+      "description": "One journal event from an in-flight [`METHOD_ENVIRONMENT_EXEC_SESSION`],\nforwarded verbatim from the node's own workflow journal. Maps to\n[`NOTIFICATION_ENVIRONMENT_JOURNAL`].",
+      "type": "object",
+      "properties": {
+        "event_kind": {
+          "description": "The journal event kind (e.g. `phase_started`, `output_chunk`,\n`tool_call`, `run_failed`).",
+          "type": "string"
+        },
+        "handle_id": {
+          "description": "Handle id of the environment this session runs in.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "journal"
+        },
+        "payload": {
+          "description": "The event's full payload, forwarded verbatim."
+        },
+        "phase_id": {
+          "description": "Phase this event belongs to, when phase-scoped.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Event status discriminator, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "terminal": {
+          "description": "True on the final event of the session (the run reached a terminal\nstatus), signalling the host to settle.",
+          "type": "boolean"
+        },
+        "ts": {
+          "description": "Event timestamp (RFC 3339).",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The node-local run id this event belongs to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "handle_id",
+        "event_kind",
+        "ts",
+        "payload"
+      ]
     }
   ],
   "$defs": {

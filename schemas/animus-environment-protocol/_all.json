@@ -93,6 +93,63 @@
             "text"
           ],
           "type": "object"
+        },
+        {
+          "description": "One journal event from an in-flight [`METHOD_ENVIRONMENT_EXEC_SESSION`],\nforwarded verbatim from the node's own workflow journal. Maps to\n[`NOTIFICATION_ENVIRONMENT_JOURNAL`].",
+          "properties": {
+            "event_kind": {
+              "description": "The journal event kind (e.g. `phase_started`, `output_chunk`,\n`tool_call`, `run_failed`).",
+              "type": "string"
+            },
+            "handle_id": {
+              "description": "Handle id of the environment this session runs in.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "journal",
+              "type": "string"
+            },
+            "payload": {
+              "description": "The event's full payload, forwarded verbatim."
+            },
+            "phase_id": {
+              "description": "Phase this event belongs to, when phase-scoped.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "description": "Event status discriminator, when present.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "terminal": {
+              "description": "True on the final event of the session (the run reached a terminal\nstatus), signalling the host to settle.",
+              "type": "boolean"
+            },
+            "ts": {
+              "description": "Event timestamp (RFC 3339).",
+              "type": "string"
+            },
+            "workflow_id": {
+              "description": "The node-local run id this event belongs to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "handle_id",
+            "event_kind",
+            "ts",
+            "payload"
+          ],
+          "type": "object"
         }
       ],
       "title": "ExecNotification"
@@ -157,6 +214,60 @@
         }
       },
       "title": "ExecResponse",
+      "type": "object"
+    },
+    "ExecSessionRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`] — dispatch a subject\nto the environment's own animus (REQ-052 remote-animus).",
+      "properties": {
+        "dispatch_input": {
+          "description": "Optional dispatch input forwarded to the node's run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "handle": {
+          "$ref": "#/$defs/EnvironmentHandle",
+          "description": "The prepared context (whose in-container animus runs the subject)."
+        },
+        "subject_id": {
+          "description": "The subject to dispatch, qualified `kind:id` (e.g. `task:TASK-1`).",
+          "type": "string"
+        },
+        "workflow_ref": {
+          "description": "Workflow to run the subject through. `None` uses the node's default\nrouting for the subject's kind.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "handle",
+        "subject_id"
+      ],
+      "title": "ExecSessionRequest",
+      "type": "object"
+    },
+    "ExecSessionResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`]: the node-local run\nid the dispatch spawned and its terminal status.",
+      "properties": {
+        "status": {
+          "description": "Terminal status of the node-local run (e.g. `completed`, `failed`,\n`escalated`, `cancelled`, or `no-run` when nothing was dispatched).",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The node-local workflow run id, when one was spawned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "ExecSessionResponse",
       "type": "object"
     },
     "ExecStream": {
