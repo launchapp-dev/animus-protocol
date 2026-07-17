@@ -313,6 +313,14 @@ pub struct ExecSessionRequest {
     /// Optional dispatch input forwarded to the node's run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch_input: Option<String>,
+
+    /// The DELEGATING run's workflow id (REQ-052 one-id). When set, the node
+    /// MUST execute INTO this already-bootstrapped run (resume-existing) rather
+    /// than minting its own, so exactly ONE journal row exists for the dispatch
+    /// and the node's transcript lands on the id the portal reads. `None` keeps
+    /// the legacy behavior (the node mints its own run id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
 }
 
 /// Response payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`]: the node-local run
