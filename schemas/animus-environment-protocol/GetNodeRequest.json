@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GetNodeRequest",
+  "description": "Request payload for [`METHOD_ENVIRONMENT_GET`].",
+  "type": "object",
+  "properties": {
+    "id": {
+      "description": "Substrate id or name of the node to describe.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ]
+}

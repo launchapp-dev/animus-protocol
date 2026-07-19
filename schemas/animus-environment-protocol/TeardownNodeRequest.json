@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TeardownNodeRequest",
+  "description": "Request payload for [`METHOD_ENVIRONMENT_TEARDOWN_NODE`].",
+  "type": "object",
+  "properties": {
+    "id": {
+      "description": "Substrate id or name of the node to destroy.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ]
+}

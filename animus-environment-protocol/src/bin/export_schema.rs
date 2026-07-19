@@ -23,9 +23,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use animus_environment_protocol::{
-    EnvironmentHandle, EnvironmentSpec, ExecNotification, ExecRequest, ExecResponse,
-    ExecSessionRequest, ExecSessionResponse, ExecStream, HarnessCommand, PrepareRequest,
-    PrepareResponse, RepoRef, TeardownRequest, TeardownResponse,
+    EnvironmentHandle, EnvironmentNode, EnvironmentSpec, ExecNotification, ExecRequest,
+    ExecResponse, ExecSessionRequest, ExecSessionResponse, ExecStream, GetNodeRequest,
+    GetNodeResponse, HarnessCommand, ListNodesRequest, ListNodesResponse, PrepareRequest,
+    PrepareResponse, ReapRequest, ReapResponse, RepoRef, TeardownNodeRequest, TeardownNodeResponse,
+    TeardownRequest, TeardownResponse,
 };
 use schemars::{schema_for, Schema};
 
@@ -73,6 +75,15 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("ExecNotification", schema_for!(ExecNotification)),
         ("TeardownRequest", schema_for!(TeardownRequest)),
         ("TeardownResponse", schema_for!(TeardownResponse)),
+        ("EnvironmentNode", schema_for!(EnvironmentNode)),
+        ("ListNodesRequest", schema_for!(ListNodesRequest)),
+        ("ListNodesResponse", schema_for!(ListNodesResponse)),
+        ("GetNodeRequest", schema_for!(GetNodeRequest)),
+        ("GetNodeResponse", schema_for!(GetNodeResponse)),
+        ("TeardownNodeRequest", schema_for!(TeardownNodeRequest)),
+        ("TeardownNodeResponse", schema_for!(TeardownNodeResponse)),
+        ("ReapRequest", schema_for!(ReapRequest)),
+        ("ReapResponse", schema_for!(ReapResponse)),
     ]
 }
 

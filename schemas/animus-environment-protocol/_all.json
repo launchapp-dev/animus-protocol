@@ -22,6 +22,56 @@
       "title": "EnvironmentHandle",
       "type": "object"
     },
+    "EnvironmentNode": {
+      "description": "A managed environment instance (a \"node\") as reported by the node-management\nsurface. Substrate-agnostic: a Railway service, a Docker container, a k8s pod.",
+      "properties": {
+        "created_at": {
+          "description": "Creation timestamp (ISO 8601) when the substrate exposes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Substrate-native id (railway service id, container id, ...).",
+          "type": "string"
+        },
+        "image": {
+          "description": "Image / impl ref backing the node, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Human-facing name (e.g. `animus-run-<hash>`).",
+          "type": "string"
+        },
+        "orphan": {
+          "description": "True when the node has no live owning run (a reap candidate).",
+          "type": "boolean"
+        },
+        "run_id": {
+          "description": "The animus run id this node serves, when recoverable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "Lifecycle state as the substrate reports it (`SUCCESS`, `FAILED`,\n`CRASHED`, `unknown`, ...).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "state",
+        "orphan"
+      ],
+      "title": "EnvironmentNode",
+      "type": "object"
+    },
     "EnvironmentSpec": {
       "description": "Declarative description of the execution context to materialize.\n\n[`Self::kind`] names the environment plugin id (e.g. `\"worktree\"`,\n`\"container\"`, `\"railway\"`) so the kernel can route a `prepare` call to the\nright plugin. The rest of the spec is intentionally open: [`Self::image`],\n[`Self::resources`], and [`Self::metadata`] carry plugin-specific knobs that\nthe kernel passes through opaquely.",
       "properties": {
@@ -234,6 +284,13 @@
           "description": "The subject to dispatch, qualified `kind:id` (e.g. `task:TASK-1`).",
           "type": "string"
         },
+        "workflow_id": {
+          "description": "The DELEGATING run's workflow id (REQ-052 one-id). When set, the node\nMUST execute INTO this already-bootstrapped run (resume-existing) rather\nthan minting its own, so exactly ONE journal row exists for the dispatch\nand the node's transcript lands on the id the portal reads. `None` keeps\nthe legacy behavior (the node mints its own run id).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "workflow_ref": {
           "description": "Workflow to run the subject through. `None` uses the node's default\nrouting for the subject's kind.",
           "type": [
@@ -286,6 +343,39 @@
       ],
       "title": "ExecStream"
     },
+    "GetNodeRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_GET`].",
+      "properties": {
+        "id": {
+          "description": "Substrate id or name of the node to describe.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "GetNodeRequest",
+      "type": "object"
+    },
+    "GetNodeResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_GET`].",
+      "properties": {
+        "node": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentNode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The node, or null when no node matched."
+        }
+      },
+      "title": "GetNodeResponse",
+      "type": "object"
+    },
     "HarnessCommand": {
       "description": "A command to run inside a prepared environment.\n\nThis is the harness invocation the provider layer would otherwise run\ndirectly on the host; the environment plugin runs it inside the prepared\ncontext instead.",
       "properties": {
@@ -321,6 +411,26 @@
       "title": "HarnessCommand",
       "type": "object"
     },
+    "ListNodesRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_LIST`] (no parameters).",
+      "title": "ListNodesRequest",
+      "type": "object"
+    },
+    "ListNodesResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_LIST`].",
+      "properties": {
+        "nodes": {
+          "default": [],
+          "description": "Every known environment node.",
+          "items": {
+            "$ref": "#/$defs/EnvironmentNode"
+          },
+          "type": "array"
+        }
+      },
+      "title": "ListNodesResponse",
+      "type": "object"
+    },
     "PrepareRequest": {
       "description": "Request payload for [`METHOD_ENVIRONMENT_PREPARE`].",
       "properties": {
@@ -347,6 +457,62 @@
         "handle"
       ],
       "title": "PrepareResponse",
+      "type": "object"
+    },
+    "ReapRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_REAP`]. With no fields set, reap\ndeletes only dead nodes (always safe — a live node is never dead).",
+      "properties": {
+        "all": {
+          "description": "Also reap non-dead nodes that have no live owning run (needs `force`).",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "description": "Report what WOULD be reaped without deleting anything.",
+          "type": "boolean"
+        },
+        "force": {
+          "description": "Required alongside `all` — guards a fresh (no-liveness) reaper from\ntreating every healthy node as an orphan.",
+          "type": "boolean"
+        },
+        "older_than_secs": {
+          "description": "Only reap nodes at least this many seconds old.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "title": "ReapRequest",
+      "type": "object"
+    },
+    "ReapResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_REAP`].",
+      "properties": {
+        "deleted": {
+          "default": [],
+          "description": "Substrate ids deleted (or that WOULD be deleted, when `dry_run`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Echoes the request's `dry_run`.",
+          "type": "boolean"
+        },
+        "kept": {
+          "default": [],
+          "description": "Nodes spared.",
+          "items": {
+            "$ref": "#/$defs/EnvironmentNode"
+          },
+          "type": "array"
+        }
+      },
+      "title": "ReapResponse",
       "type": "object"
     },
     "RepoRef": {
@@ -379,6 +545,35 @@
         "url"
       ],
       "title": "RepoRef",
+      "type": "object"
+    },
+    "TeardownNodeRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_TEARDOWN_NODE`].",
+      "properties": {
+        "id": {
+          "description": "Substrate id or name of the node to destroy.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "TeardownNodeRequest",
+      "type": "object"
+    },
+    "TeardownNodeResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_TEARDOWN_NODE`]. Idempotent — an\nalready-gone node yields an empty `deleted`.",
+      "properties": {
+        "deleted": {
+          "default": [],
+          "description": "Substrate ids actually deleted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "TeardownNodeResponse",
       "type": "object"
     },
     "TeardownRequest": {

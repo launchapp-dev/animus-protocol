@@ -84,6 +84,23 @@ pub const METHOD_ENVIRONMENT_EXEC_SESSION: &str = "environment/exec_session";
 /// `environment/teardown` — dispose of a prepared context by handle.
 pub const METHOD_ENVIRONMENT_TEARDOWN: &str = "environment/teardown";
 
+/// `environment/list` — list every managed node (instance) the plugin owns,
+/// each an [`EnvironmentNode`]. Part of the node-management surface, which lets
+/// an operator inspect + reap environment instances uniformly across substrates.
+pub const METHOD_ENVIRONMENT_LIST: &str = "environment/list";
+
+/// `environment/get` — describe one managed node by substrate id or name.
+pub const METHOD_ENVIRONMENT_GET: &str = "environment/get";
+
+/// `environment/teardown_node` — destroy ONE managed node by substrate id or
+/// name. Distinct from [`METHOD_ENVIRONMENT_TEARDOWN`], which disposes a
+/// prepared context by its [`EnvironmentHandle`].
+pub const METHOD_ENVIRONMENT_TEARDOWN_NODE: &str = "environment/teardown_node";
+
+/// `environment/reap` — destroy orphaned/dead managed nodes (see
+/// [`ReapRequest`]). The cleanup that keeps leaked instances from accumulating.
+pub const METHOD_ENVIRONMENT_REAP: &str = "environment/reap";
+
 /// `environment/output` — server-streaming notification carrying an
 /// [`ExecNotification`] for an in-flight [`METHOD_ENVIRONMENT_EXEC_STREAM`]
 /// call.
@@ -455,6 +472,110 @@ pub struct TeardownRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct TeardownResponse {}
 
+// =====================================================================
+// Node management (list / get / teardown_node / reap)
+// =====================================================================
+
+/// A managed environment instance (a "node") as reported by the node-management
+/// surface. Substrate-agnostic: a Railway service, a Docker container, a k8s pod.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct EnvironmentNode {
+    /// Substrate-native id (railway service id, container id, ...).
+    pub id: String,
+    /// Human-facing name (e.g. `animus-run-<hash>`).
+    pub name: String,
+    /// Lifecycle state as the substrate reports it (`SUCCESS`, `FAILED`,
+    /// `CRASHED`, `unknown`, ...).
+    pub state: String,
+    /// The animus run id this node serves, when recoverable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Image / impl ref backing the node, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Creation timestamp (ISO 8601) when the substrate exposes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// True when the node has no live owning run (a reap candidate).
+    pub orphan: bool,
+}
+
+/// Request payload for [`METHOD_ENVIRONMENT_LIST`] (no parameters).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListNodesRequest {}
+
+/// Response payload for [`METHOD_ENVIRONMENT_LIST`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListNodesResponse {
+    /// Every known environment node.
+    #[serde(default)]
+    pub nodes: Vec<EnvironmentNode>,
+}
+
+/// Request payload for [`METHOD_ENVIRONMENT_GET`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GetNodeRequest {
+    /// Substrate id or name of the node to describe.
+    pub id: String,
+}
+
+/// Response payload for [`METHOD_ENVIRONMENT_GET`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GetNodeResponse {
+    /// The node, or null when no node matched.
+    #[serde(default)]
+    pub node: Option<EnvironmentNode>,
+}
+
+/// Request payload for [`METHOD_ENVIRONMENT_TEARDOWN_NODE`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TeardownNodeRequest {
+    /// Substrate id or name of the node to destroy.
+    pub id: String,
+}
+
+/// Response payload for [`METHOD_ENVIRONMENT_TEARDOWN_NODE`]. Idempotent — an
+/// already-gone node yields an empty `deleted`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TeardownNodeResponse {
+    /// Substrate ids actually deleted.
+    #[serde(default)]
+    pub deleted: Vec<String>,
+}
+
+/// Request payload for [`METHOD_ENVIRONMENT_REAP`]. With no fields set, reap
+/// deletes only dead nodes (always safe — a live node is never dead).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReapRequest {
+    /// Also reap non-dead nodes that have no live owning run (needs `force`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all: bool,
+    /// Required alongside `all` — guards a fresh (no-liveness) reaper from
+    /// treating every healthy node as an orphan.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub force: bool,
+    /// Report what WOULD be reaped without deleting anything.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dry_run: bool,
+    /// Only reap nodes at least this many seconds old.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older_than_secs: Option<u64>,
+}
+
+/// Response payload for [`METHOD_ENVIRONMENT_REAP`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReapResponse {
+    /// Substrate ids deleted (or that WOULD be deleted, when `dry_run`).
+    #[serde(default)]
+    pub deleted: Vec<String>,
+    /// Nodes spared.
+    #[serde(default)]
+    pub kept: Vec<EnvironmentNode>,
+    /// Echoes the request's `dry_run`.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -469,7 +590,44 @@ mod tests {
         assert_eq!(METHOD_ENVIRONMENT_EXEC, "environment/exec");
         assert_eq!(METHOD_ENVIRONMENT_EXEC_STREAM, "environment/exec_stream");
         assert_eq!(METHOD_ENVIRONMENT_TEARDOWN, "environment/teardown");
+        assert_eq!(METHOD_ENVIRONMENT_LIST, "environment/list");
+        assert_eq!(METHOD_ENVIRONMENT_GET, "environment/get");
+        assert_eq!(METHOD_ENVIRONMENT_TEARDOWN_NODE, "environment/teardown_node");
+        assert_eq!(METHOD_ENVIRONMENT_REAP, "environment/reap");
         assert_eq!(NOTIFICATION_ENVIRONMENT_OUTPUT, "environment/output");
+    }
+
+    #[test]
+    fn reap_request_omits_default_flags() {
+        let value = serde_json::to_value(ReapRequest::default()).expect("serializes");
+        assert_eq!(value, serde_json::json!({}));
+        let full = ReapRequest {
+            all: true,
+            force: true,
+            dry_run: true,
+            older_than_secs: Some(60),
+        };
+        let decoded: ReapRequest =
+            serde_json::from_value(serde_json::to_value(&full).expect("ser")).expect("round-trips");
+        assert_eq!(decoded, full);
+    }
+
+    #[test]
+    fn environment_node_round_trips_and_omits_none() {
+        let node = EnvironmentNode {
+            id: "svc-1".to_string(),
+            name: "animus-run-abc".to_string(),
+            state: "FAILED".to_string(),
+            run_id: None,
+            image: None,
+            created_at: None,
+            orphan: true,
+        };
+        let value = serde_json::to_value(&node).expect("serializes");
+        assert!(value.get("run_id").is_none());
+        assert_eq!(value.get("orphan"), Some(&serde_json::json!(true)));
+        let decoded: EnvironmentNode = serde_json::from_value(value).expect("round-trips");
+        assert_eq!(decoded, node);
     }
 
     #[test]

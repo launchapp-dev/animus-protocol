@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ListNodesRequest",
+  "description": "Request payload for [`METHOD_ENVIRONMENT_LIST`] (no parameters).",
+  "type": "object"
+}
