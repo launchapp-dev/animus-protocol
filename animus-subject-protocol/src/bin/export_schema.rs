@@ -26,8 +26,10 @@ use std::process::ExitCode;
 
 use animus_subject_protocol::{
     ChangeKind, CustomFieldKind, CustomFieldSpec, DeleteSubjectRequest, DeleteSubjectResponse,
-    StatusDispatchHint, Subject, SubjectAttachment, SubjectChangedEvent, SubjectFilter, SubjectId,
-    SubjectList, SubjectPatch, SubjectSchema, SubjectStatus, SubjectUnwatchRequest,
+    StatusDispatchHint, Subject, SubjectAttachment, SubjectChangedEvent, SubjectCreateRequestV2,
+    SubjectDeleteRequestV2, SubjectFilter, SubjectGetRequestV2, SubjectId, SubjectList,
+    SubjectListRequestV2, SubjectPatch, SubjectRequestContext, SubjectSchema, SubjectStatus,
+    SubjectStatusRequestV2, SubjectUnwatchRequest, SubjectUpdateRequestV2,
 };
 use schemars::{schema_for, Schema};
 
@@ -67,6 +69,25 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("SubjectAttachment", schema_for!(SubjectAttachment)),
         ("SubjectFilter", schema_for!(SubjectFilter)),
         ("SubjectList", schema_for!(SubjectList)),
+        ("SubjectRequestContext", schema_for!(SubjectRequestContext)),
+        ("SubjectListRequestV2", schema_for!(SubjectListRequestV2)),
+        ("SubjectGetRequestV2", schema_for!(SubjectGetRequestV2)),
+        (
+            "SubjectCreateRequestV2",
+            schema_for!(SubjectCreateRequestV2),
+        ),
+        (
+            "SubjectUpdateRequestV2",
+            schema_for!(SubjectUpdateRequestV2),
+        ),
+        (
+            "SubjectStatusRequestV2",
+            schema_for!(SubjectStatusRequestV2),
+        ),
+        (
+            "SubjectDeleteRequestV2",
+            schema_for!(SubjectDeleteRequestV2),
+        ),
         ("SubjectPatch", schema_for!(SubjectPatch)),
         ("DeleteSubjectRequest", schema_for!(DeleteSubjectRequest)),
         ("DeleteSubjectResponse", schema_for!(DeleteSubjectResponse)),

@@ -1,5 +1,32 @@
 {
   "$defs": {
+    "Actor": {
+      "description": "An opaque, transport-asserted caller identity.\n\nConstructed by the transport after it authenticates the caller, relayed\nverbatim by the kernel, and consumed only by plugins for data scoping. See\nthe [crate-level docs](crate) for the full contract.",
+      "properties": {
+        "claims": {
+          "description": "Transport-asserted claims (e.g. `[\"admin\"]`). Advisory only: the kernel\nnever branches on these. A plugin MAY consult them for its own\nauthorization decisions. Omitted from the wire when empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tenant_id": {
+          "description": "Optional tenant / organization partition the user belongs to. Plugins\nuse it for multi-tenant data isolation. Omitted from the wire when\nabsent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_id": {
+          "description": "Stable identifier for the authenticated user. Opaque to the kernel;\nplugins use it to scope owned rows to a user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id"
+      ],
+      "type": "object"
+    },
     "ChangeKind": {
       "description": "Categorization of a subject change event.",
       "oneOf": [
@@ -360,6 +387,50 @@
       "title": "SubjectChangedEvent",
       "type": "object"
     },
+    "SubjectCreateRequestV2": {
+      "description": "Actor-scoped v2 create request.\n\n`payload` is backend-defined so dynamic subject kinds retain their\nschema-driven fields while the authentication envelope stays typed.",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/SubjectRequestContext",
+          "description": "Authenticated request context."
+        },
+        "kind": {
+          "description": "Kind for the canonical `subject/v2/create` form. A kind-prefixed\nmethod may omit this and derive it from the method.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": {
+          "default": null,
+          "description": "Backend-defined create fields."
+        }
+      },
+      "required": [
+        "context"
+      ],
+      "title": "SubjectCreateRequestV2",
+      "type": "object"
+    },
+    "SubjectDeleteRequestV2": {
+      "description": "Actor-scoped v2 delete request.",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/SubjectRequestContext",
+          "description": "Authenticated request context."
+        },
+        "id": {
+          "$ref": "#/$defs/SubjectId",
+          "description": "Subject identifier."
+        }
+      },
+      "required": [
+        "context",
+        "id"
+      ],
+      "title": "SubjectDeleteRequestV2",
+      "type": "object"
+    },
     "SubjectFilter": {
       "description": "Filter passed to `subject/list`.\n\nAll fields are optional and combined with AND semantics. Empty `Vec`\nfields mean \"no constraint on this dimension\". `cursor` is opaque to the\ndaemon — backends issue and accept their own pagination tokens.",
       "properties": {
@@ -447,6 +518,25 @@
       "title": "SubjectFilter",
       "type": "object"
     },
+    "SubjectGetRequestV2": {
+      "description": "Actor-scoped v2 get request.",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/SubjectRequestContext",
+          "description": "Authenticated request context."
+        },
+        "id": {
+          "$ref": "#/$defs/SubjectId",
+          "description": "Subject identifier."
+        }
+      },
+      "required": [
+        "context",
+        "id"
+      ],
+      "title": "SubjectGetRequestV2",
+      "type": "object"
+    },
     "SubjectId": {
       "description": "Backend-qualified identifier for a subject.\n\nConvention is `\"<backend>:<native_id>\"`, e.g. `\"linear:ENG-123\"`,\n`\"jira:PROJ-456\"`, `\"github:owner/repo#789\"`, `\"native:TASK-001\"`. The\ndaemon treats the value as opaque; only the originating backend\ninterprets the native portion.\n\nThe `backend:` prefix is reserved. Plugin authors should always emit\nprefixed ids so cross-backend collisions are impossible.",
       "title": "SubjectId",
@@ -480,6 +570,25 @@
         "fetched_at"
       ],
       "title": "SubjectList",
+      "type": "object"
+    },
+    "SubjectListRequestV2": {
+      "description": "Actor-scoped v2 list request.",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/SubjectRequestContext",
+          "description": "Authenticated request context."
+        },
+        "filter": {
+          "$ref": "#/$defs/SubjectFilter",
+          "default": {},
+          "description": "Subject filters. Ownership is always an additional backend-enforced\npredicate and cannot be overridden by this filter."
+        }
+      },
+      "required": [
+        "context"
+      ],
+      "title": "SubjectListRequestV2",
       "type": "object"
     },
     "SubjectPatch": {
@@ -531,6 +640,41 @@
         }
       },
       "title": "SubjectPatch",
+      "type": "object"
+    },
+    "SubjectRequestContext": {
+      "description": "Authenticated request context asserted by the application transport.\n\nThe actor is required on every v2 subject call. Correlation and\nidempotency values are opaque transport identifiers: the kernel relays\nthem and the owning backend decides how to record or enforce them.",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/Actor",
+          "description": "Authenticated caller. Claims remain advisory; ownership is the stable\n`(user_id, tenant_id)` pair."
+        },
+        "correlation_id": {
+          "description": "Optional correlation identifier spanning related requests.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idempotency_key": {
+          "description": "Optional idempotency key for a mutation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "description": "Optional request identifier for tracing one transport request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "actor"
+      ],
+      "title": "SubjectRequestContext",
       "type": "object"
     },
     "SubjectSchema": {
@@ -630,6 +774,30 @@
       ],
       "title": "SubjectStatus"
     },
+    "SubjectStatusRequestV2": {
+      "description": "Actor-scoped v2 status mutation request.",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/SubjectRequestContext",
+          "description": "Authenticated request context."
+        },
+        "id": {
+          "$ref": "#/$defs/SubjectId",
+          "description": "Subject identifier."
+        },
+        "status": {
+          "description": "Backend-native or normalized status token.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "id",
+        "status"
+      ],
+      "title": "SubjectStatusRequestV2",
+      "type": "object"
+    },
     "SubjectUnwatchRequest": {
       "description": "Request payload for [`METHOD_SUBJECT_UNWATCH`]. Added in v0.1.16.\n\nCarries the `watch_id` correlating with the JSON-RPC request id the\ndaemon used when it issued the original `subject/watch` call, so the\nbackend can cancel the matching watch task.",
       "properties": {
@@ -642,6 +810,29 @@
         "watch_id"
       ],
       "title": "SubjectUnwatchRequest",
+      "type": "object"
+    },
+    "SubjectUpdateRequestV2": {
+      "description": "Actor-scoped v2 update request.",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/SubjectRequestContext",
+          "description": "Authenticated request context."
+        },
+        "id": {
+          "$ref": "#/$defs/SubjectId",
+          "description": "Subject identifier."
+        },
+        "patch": {
+          "default": null,
+          "description": "Backend-defined update patch."
+        }
+      },
+      "required": [
+        "context",
+        "id"
+      ],
+      "title": "SubjectUpdateRequestV2",
       "type": "object"
     }
   },
