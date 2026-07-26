@@ -553,7 +553,7 @@ pub enum ApplicationChatPermissionIntent {
 /// `None` on an agent profile preserves the pre-policy config contract. Within
 /// a declared policy, omitted lists inherit the canonical application defaults
 /// while explicitly empty lists deny that control.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Default, PartialEq, Eq)]
 pub struct ApplicationChatControlsPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approvals: Option<bool>,
@@ -565,6 +565,43 @@ pub struct ApplicationChatControlsPolicy {
     pub allow_permissive_intents: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_refs: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationChatControlsPolicyWire {
+    #[serde(default)]
+    approvals: Option<bool>,
+    #[serde(default)]
+    reasoning_efforts: Option<Vec<ApplicationChatReasoningEffort>>,
+    #[serde(default)]
+    permission_intents: Option<Vec<ApplicationChatPermissionIntent>>,
+    #[serde(default)]
+    allow_permissive_intents: bool,
+    #[serde(default)]
+    skill_refs: Option<Vec<String>>,
+}
+
+impl<'de> Deserialize<'de> for ApplicationChatControlsPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = ApplicationChatControlsPolicyWire::deserialize(deserializer)?;
+        let policy = Self {
+            approvals: wire.approvals,
+            reasoning_efforts: wire.reasoning_efforts,
+            permission_intents: wire.permission_intents,
+            allow_permissive_intents: wire.allow_permissive_intents,
+            skill_refs: wire.skill_refs,
+        };
+        if !policy.within_bounds() {
+            return Err(serde::de::Error::custom(
+                "application_chat_controls exceeds bounds, contains duplicates, or has an invalid configured reference",
+            ));
+        }
+        Ok(policy)
+    }
 }
 
 impl ApplicationChatControlsPolicy {
@@ -1391,7 +1428,9 @@ mod application_chat_controls_policy_tests {
         assert_eq!(cleared.application_chat_controls, AgentProfilePatch::Clear);
 
         let mut layered = AgentProfileOverlay {
-            application_chat_controls: AgentProfilePatch::Set(ApplicationChatControlsPolicy::default()),
+            application_chat_controls: AgentProfilePatch::Set(
+                ApplicationChatControlsPolicy::default(),
+            ),
             ..Default::default()
         };
         layered.merge_from(&omitted);
@@ -1408,7 +1447,10 @@ mod application_chat_controls_policy_tests {
         };
         merge_agent_profile(&mut profile, &cleared);
         assert!(profile.application_chat_controls.is_none());
-        assert_eq!(serde_json::to_value(&cleared).unwrap()["application_chat_controls"], serde_json::Value::Null);
+        assert_eq!(
+            serde_json::to_value(&cleared).unwrap()["application_chat_controls"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]
@@ -1432,7 +1474,27 @@ mod application_chat_controls_policy_tests {
             vec!["not/allowed".to_string()],
             vec!["é".to_string()],
         ] {
-            assert!(!ApplicationChatControlsPolicy { skill_refs: Some(refs), ..Default::default() }.within_bounds());
+            assert!(!ApplicationChatControlsPolicy {
+                skill_refs: Some(refs),
+                ..Default::default()
+            }
+            .within_bounds());
+        }
+    }
+
+    #[test]
+    fn policy_deserialization_fails_closed_on_unknown_or_invalid_input() {
+        for value in [
+            serde_json::json!({ "approval": true }),
+            serde_json::json!({ "reasoning_efforts": ["high", "high"] }),
+            serde_json::json!({ "permission_intents": ["review", "review"] }),
+            serde_json::json!({ "skill_refs": ["../escape"] }),
+            serde_json::json!({ "skill_refs": ["duplicate", "duplicate"] }),
+        ] {
+            assert!(
+                serde_json::from_value::<ApplicationChatControlsPolicy>(value.clone()).is_err(),
+                "policy must reject {value}"
+            );
         }
     }
 }
