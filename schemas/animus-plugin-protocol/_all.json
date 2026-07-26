@@ -79,6 +79,17 @@
           "$ref": "#/$defs/ChatMessage",
           "description": "The turn to append."
         },
+        "operation_fence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationOperationAppendFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required for assistant messages produced by a keyed operation on a\nshared backend. Omitted for ordinary messages and legacy/local\nstores. Supporting backends advertise\n[`CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1`]."
+        },
         "project_root": {
           "description": "Absolute project root path of the calling CLI/daemon.",
           "type": [
@@ -630,6 +641,30 @@
         "user_seq"
       ],
       "title": "ConversationOperationAcceptUserRequest",
+      "type": "object"
+    },
+    "ConversationOperationAppendFence": {
+      "description": "Lease identity required when a shared-authority runtime persists the\nassistant message produced by a keyed operation.\n\nA backend advertising\n[`CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1`] MUST append the\nmessage in one transaction whose predicate matches the authenticated\ntenant and actor, repository and conversation, caller key, operation\nid, lease token, unexpired backend-clock lease, `user_accepted` state,\nand the conversation's active operation reservation. A stale fence is\nrejected without inserting a message or changing conversation meta.",
+      "properties": {
+        "caller_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "caller_key",
+        "operation_id",
+        "lease_token"
+      ],
+      "title": "ConversationOperationAppendFence",
       "type": "object"
     },
     "ConversationOperationBeginOutcome": {

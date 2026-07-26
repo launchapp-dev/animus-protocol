@@ -566,6 +566,17 @@ pending operation before user acceptance. Terminalization is permitted only
 after user acceptance and is immutable; callers MUST reconcile a failed write
 by loading the durable receipt and MUST NOT blindly repeat provider execution.
 
+A shared backend used for keyed sends MUST also advertise
+`conversation_operation_fenced_append_v1`. The assistant
+`conversation/append_message` carries `operation_fence` with the caller key,
+operation id, and opaque lease token. The backend MUST atomically predicate the
+message insert on the authenticated tenant and actor, repository and
+conversation, exact operation and caller key, exact lease token, an unexpired
+backend-clock lease, `user_accepted` operation state, and the conversation's
+matching `active_operation_id`. A stale or terminalized holder is rejected
+without inserting the message. A preflight check followed by an ordinary
+append is not conformant because it leaves a check/write race.
+
 ## 8. Plugin protocol types
 
 ### 8.1 `PROTOCOL_VERSION`

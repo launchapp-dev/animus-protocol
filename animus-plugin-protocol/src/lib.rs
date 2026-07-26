@@ -1201,6 +1201,13 @@ pub mod conversation_store {
     /// hosts using this conversation backend.
     pub const CAPABILITY_CONVERSATION_OPERATIONS_SHARED_V1: &str =
         "conversation_operations_shared_v1";
+    /// Capability proving that an assistant message carrying
+    /// [`ConversationOperationAppendFence`] is appended only while that exact
+    /// shared operation lease is active. Backends MUST enforce the predicate
+    /// atomically with the message insert; a check followed by a separate
+    /// insert does not satisfy this capability.
+    pub const CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1: &str =
+        "conversation_operation_fenced_append_v1";
 
     /// Durable lifecycle state for an idempotent application chat send.
     #[allow(missing_docs)]
@@ -1249,7 +1256,7 @@ pub mod conversation_store {
 
     /// Lease-bearing claim returned only to the host that owns shared authority.
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
     pub struct ConversationOperationClaim {
         #[serde(flatten)]
         pub operation: ConversationOperation,
@@ -1257,6 +1264,18 @@ pub mod conversation_store {
         pub lease_expires_at: i64,
         #[serde(default)]
         pub recovered: bool,
+    }
+
+    impl std::fmt::Debug for ConversationOperationClaim {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("ConversationOperationClaim")
+                .field("operation", &self.operation)
+                .field("lease_token", &"[REDACTED]")
+                .field("lease_expires_at", &self.lease_expires_at)
+                .field("recovered", &self.recovered)
+                .finish()
+        }
     }
 
     #[allow(missing_docs)]
@@ -1384,6 +1403,36 @@ pub mod conversation_store {
         pub changed: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub operation: Option<ConversationOperation>,
+    }
+
+    /// Lease identity required when a shared-authority runtime persists the
+    /// assistant message produced by a keyed operation.
+    ///
+    /// A backend advertising
+    /// [`CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1`] MUST append the
+    /// message in one transaction whose predicate matches the authenticated
+    /// tenant and actor, repository and conversation, caller key, operation
+    /// id, lease token, unexpired backend-clock lease, `user_accepted` state,
+    /// and the conversation's active operation reservation. A stale fence is
+    /// rejected without inserting a message or changing conversation meta.
+    #[allow(missing_docs)]
+    #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationAppendFence {
+        #[schemars(length(min = 1, max = 128), regex(pattern = r"^[A-Za-z0-9._:-]+$"))]
+        pub caller_key: String,
+        pub operation_id: String,
+        pub lease_token: String,
+    }
+
+    impl std::fmt::Debug for ConversationOperationAppendFence {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("ConversationOperationAppendFence")
+                .field("caller_key", &self.caller_key)
+                .field("operation_id", &self.operation_id)
+                .field("lease_token", &"[REDACTED]")
+                .finish()
+        }
     }
 
     /// Visibility of a conversation. Controls whether [`ConversationListRequest::as_user`]
@@ -1633,6 +1682,12 @@ pub mod conversation_store {
         pub id: String,
         /// The turn to append.
         pub message: ChatMessage,
+        /// Required for assistant messages produced by a keyed operation on a
+        /// shared backend. Omitted for ordinary messages and legacy/local
+        /// stores. Supporting backends advertise
+        /// [`CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub operation_fence: Option<ConversationOperationAppendFence>,
         /// Acting user id, when known. A backend MAY use it to authorize the
         /// mutation. `None` for unscoped/admin access.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2129,6 +2184,95 @@ mod tests {
             serde_json::to_value(Visibility::Private).unwrap(),
             serde_json::json!("private")
         );
+    }
+
+    #[test]
+    fn conversation_append_operation_fence_is_additive_and_exact() {
+        use conversation_store::{
+            ChatMessage, ConversationAppendMessageRequest, ConversationOperationAppendFence,
+            ConversationScope,
+        };
+
+        let legacy: ConversationAppendMessageRequest = serde_json::from_value(serde_json::json!({
+            "tenant_id": "tenant-1",
+            "repo_scope": "scope-1",
+            "id": "conv-1",
+            "message": {
+                "seq": 1,
+                "role": "assistant",
+                "content": "answer",
+                "recorded_at": "2026-07-26T00:00:00Z"
+            }
+        }))
+        .expect("legacy append remains parseable");
+        assert_eq!(legacy.operation_fence, None);
+
+        let fenced = ConversationAppendMessageRequest {
+            scope: ConversationScope {
+                tenant_id: Some("tenant-1".to_string()),
+                project_root: None,
+                repo_scope: Some("scope-1".to_string()),
+            },
+            id: "conv-1".to_string(),
+            message: ChatMessage {
+                seq: 1,
+                role: "assistant".to_string(),
+                content: "answer".to_string(),
+                recorded_at: "2026-07-26T00:00:00Z".to_string(),
+                tool: None,
+                model: None,
+                usage: None,
+                cost_usd: None,
+                blocks: Vec::new(),
+            },
+            operation_fence: Some(ConversationOperationAppendFence {
+                caller_key: "request-42".to_string(),
+                operation_id: "operation-7".to_string(),
+                lease_token: "secret-token".to_string(),
+            }),
+            as_user: Some("user-1".to_string()),
+        };
+        let encoded = serde_json::to_value(fenced).unwrap();
+        assert_eq!(encoded["operation_fence"]["caller_key"], "request-42");
+        assert_eq!(encoded["operation_fence"]["operation_id"], "operation-7");
+        assert_eq!(encoded["operation_fence"]["lease_token"], "secret-token");
+
+        let fence = ConversationOperationAppendFence {
+            caller_key: "request-42".to_string(),
+            operation_id: "operation-7".to_string(),
+            lease_token: "never-debug-this-fence".to_string(),
+        };
+        let debug = format!("{fence:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("never-debug-this-fence"));
+    }
+
+    #[test]
+    fn conversation_operation_claim_debug_redacts_lease_token() {
+        use conversation_store::{
+            ConversationOperation, ConversationOperationClaim, ConversationOperationStatus,
+        };
+        let claim = ConversationOperationClaim {
+            operation: ConversationOperation {
+                operation_id: "operation-7".to_string(),
+                conversation_id: "conv-1".to_string(),
+                caller_key: "request-42".to_string(),
+                user_message_id: "user-message-1".to_string(),
+                assistant_message_id: "assistant-message-1".to_string(),
+                status: ConversationOperationStatus::UserAccepted,
+                execution_hash: None,
+                user_seq: Some(0),
+                assistant_seq: None,
+                error_code: None,
+                error_message: None,
+            },
+            lease_token: "never-print-this-token".to_string(),
+            lease_expires_at: 1_800_000_000,
+            recovered: false,
+        };
+        let debug = format!("{claim:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("never-print-this-token"));
     }
 
     #[test]

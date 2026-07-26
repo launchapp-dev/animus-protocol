@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationOperationAppendFence",
+  "description": "Lease identity required when a shared-authority runtime persists the\nassistant message produced by a keyed operation.\n\nA backend advertising\n[`CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1`] MUST append the\nmessage in one transaction whose predicate matches the authenticated\ntenant and actor, repository and conversation, caller key, operation\nid, lease token, unexpired backend-clock lease, `user_accepted` state,\nand the conversation's active operation reservation. A stale fence is\nrejected without inserting a message or changing conversation meta.",
+  "type": "object",
+  "properties": {
+    "caller_key": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "lease_token": {
+      "type": "string"
+    },
+    "operation_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "caller_key",
+    "operation_id",
+    "lease_token"
+  ]
+}

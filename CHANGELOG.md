@@ -9,6 +9,13 @@ source of truth for individual crate bumps. Tags map roughly to
 
 ### Added
 
+`animus-plugin-protocol`: additive
+`conversation_operation_fenced_append_v1` capability and
+`ConversationAppendMessageRequest.operation_fence`. Shared backends validate
+the exact operation lease and active conversation reservation atomically with
+assistant-message insertion, preventing a provider result from a reclaimed or
+terminalized runtime from becoming canonical.
+
 `animus-subject-protocol` 0.2.0 adds a non-downgradable authenticated subject
 surface:
 

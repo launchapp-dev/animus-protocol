@@ -29,14 +29,14 @@ use animus_plugin_protocol::conversation_store::{
     ConversationDeleteResponse, ConversationListRequest, ConversationListResponse,
     ConversationLoadMessagesRequest, ConversationLoadMessagesResponse, ConversationLoadMetaRequest,
     ConversationLoadMetaResponse, ConversationMeta, ConversationOperationAcceptUserRequest,
-    ConversationOperationBeginOutcome, ConversationOperationBeginRequest,
-    ConversationOperationBeginResponse, ConversationOperationBindExecutionRequest,
-    ConversationOperationClaim, ConversationOperationKey, ConversationOperationLoadRequest,
-    ConversationOperationLoadResponse, ConversationOperationMutationResponse,
-    ConversationOperationReleaseRequest, ConversationOperationRenewRequest,
-    ConversationOperationStatus, ConversationOperationTerminalizeRequest,
-    ConversationSaveMetaRequest, ConversationSaveMetaResponse, ConversationScope,
-    ConversationSummary, Visibility,
+    ConversationOperationAppendFence, ConversationOperationBeginOutcome,
+    ConversationOperationBeginRequest, ConversationOperationBeginResponse,
+    ConversationOperationBindExecutionRequest, ConversationOperationClaim,
+    ConversationOperationKey, ConversationOperationLoadRequest, ConversationOperationLoadResponse,
+    ConversationOperationMutationResponse, ConversationOperationReleaseRequest,
+    ConversationOperationRenewRequest, ConversationOperationStatus,
+    ConversationOperationTerminalizeRequest, ConversationSaveMetaRequest,
+    ConversationSaveMetaResponse, ConversationScope, ConversationSummary, Visibility,
 };
 use animus_plugin_protocol::{
     EnvRequirement, HealthCheckResult, HealthStatus, HostCapabilities, HostInfo, InitializeParams,
@@ -216,6 +216,10 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         (
             "ConversationOperationMutationResponse",
             schema_for!(ConversationOperationMutationResponse),
+        ),
+        (
+            "ConversationOperationAppendFence",
+            schema_for!(ConversationOperationAppendFence),
         ),
     ]
 }
