@@ -9,6 +9,17 @@ source of truth for individual crate bumps. Tags map roughly to
 
 ### Added
 
+`animus-subject-protocol` 0.2.0 adds a non-downgradable authenticated subject
+surface:
+
+- Required `SubjectRequestContext` carrying a typed `Actor` plus optional
+  request, correlation, and idempotency identifiers.
+- Typed v2 list/get/create/update/status/delete request shapes and distinct
+  `subject/v2/<verb>` / `<kind>/v2/<verb>` method names.
+- `ActorScopedSubjectBackend`, separate from the legacy global
+  `SubjectBackend`, so a v2 request can never silently fall through to v1.
+- JSON Schema exports and compatibility tests for the new wire types.
+
 `animus-plugin-protocol`: shared multi-host chat operation authority via the
 additive `conversation/operation_*` reserve, load, renew, execution-bind,
 release, user-accept, and terminalize RPCs. The authenticated tenant/actor plus

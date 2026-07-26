@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubjectListRequestV2",
+  "description": "Actor-scoped v2 list request.",
+  "type": "object",
+  "properties": {
+    "context": {
+      "description": "Authenticated request context.",
+      "$ref": "#/$defs/SubjectRequestContext"
+    },
+    "filter": {
+      "description": "Subject filters. Ownership is always an additional backend-enforced\npredicate and cannot be overridden by this filter.",
+      "$ref": "#/$defs/SubjectFilter",
+      "default": {}
+    }
+  },
+  "required": [
+    "context"
+  ],
+  "$defs": {
+    "Actor": {
+      "description": "An opaque, transport-asserted caller identity.\n\nConstructed by the transport after it authenticates the caller, relayed\nverbatim by the kernel, and consumed only by plugins for data scoping. See\nthe [crate-level docs](crate) for the full contract.",
+      "type": "object",
+      "properties": {
+        "claims": {
+          "description": "Transport-asserted claims (e.g. `[\"admin\"]`). Advisory only: the kernel\nnever branches on these. A plugin MAY consult them for its own\nauthorization decisions. Omitted from the wire when empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tenant_id": {
+          "description": "Optional tenant / organization partition the user belongs to. Plugins\nuse it for multi-tenant data isolation. Omitted from the wire when\nabsent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_id": {
+          "description": "Stable identifier for the authenticated user. Opaque to the kernel;\nplugins use it to scope owned rows to a user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id"
+      ]
+    },
+    "SubjectFilter": {
+      "description": "Filter passed to `subject/list`.\n\nAll fields are optional and combined with AND semantics. Empty `Vec`\nfields mean \"no constraint on this dimension\". `cursor` is opaque to the\ndaemon — backends issue and accept their own pagination tokens.",
+      "type": "object",
+      "properties": {
+        "assignee": {
+          "description": "Match subjects assigned to one of these identifiers.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cursor": {
+          "description": "Pagination cursor returned by a prior `subject/list` call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dispatch_label": {
+          "description": "Match subjects whose dispatch label (resolved by the backend from\nits [`SubjectSchema::status_dispatch_hints`] table) equals this\nvalue. Workflow YAML can use this to gate a phase on a label like\n`\"code-review\"` without coupling to any one backend's vocabulary.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "has_attachment_kind": {
+          "description": "Match subjects that carry at least one [`SubjectAttachment`] whose\n`kind` equals this value. Useful for `requires_document_attachment`\nstyle gates.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Match subjects whose `kind` is one of these.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels_all": {
+          "description": "Match subjects that have all of these labels.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels_any": {
+          "description": "Match subjects that have at least one of these labels.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limit": {
+          "description": "Suggested page size. Backends are free to clamp this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "native_status": {
+          "description": "Match subjects whose backend-raw [`Subject::native_status`] equals\nthis value. Use when the normalized [`SubjectStatus`] is too coarse\n— e.g. match Linear `\"In Review\"` but not `\"In Progress\"`, which\nboth map to [`SubjectStatus::InProgress`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Match subjects whose status is one of these.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubjectStatus"
+          }
+        },
+        "updated_since": {
+          "description": "Match subjects updated at or after this timestamp.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "SubjectRequestContext": {
+      "description": "Authenticated request context asserted by the application transport.\n\nThe actor is required on every v2 subject call. Correlation and\nidempotency values are opaque transport identifiers: the kernel relays\nthem and the owning backend decides how to record or enforce them.",
+      "type": "object",
+      "properties": {
+        "actor": {
+          "description": "Authenticated caller. Claims remain advisory; ownership is the stable\n`(user_id, tenant_id)` pair.",
+          "$ref": "#/$defs/Actor"
+        },
+        "correlation_id": {
+          "description": "Optional correlation identifier spanning related requests.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idempotency_key": {
+          "description": "Optional idempotency key for a mutation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "description": "Optional request identifier for tracing one transport request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "actor"
+      ]
+    },
+    "SubjectStatus": {
+      "description": "Normalized cross-backend subject status.\n\nBackend-native states (`\"Backlog\"`, `\"In Review\"`, `\"Won't Fix\"`, ...) map\ninto one of these five via the `status_map` declared per-subject in\nworkflow YAML. The mapping lives in configuration, not code, so adding a\nnew backend never requires extending this enum.",
+      "oneOf": [
+        {
+          "description": "Eligible for dispatch.",
+          "type": "string",
+          "const": "ready"
+        },
+        {
+          "description": "Currently being worked by a workflow run (or by a human, in the\nupstream system).",
+          "type": "string",
+          "const": "in-progress"
+        },
+        {
+          "description": "Cannot proceed; awaiting unblock.",
+          "type": "string",
+          "const": "blocked"
+        },
+        {
+          "description": "Successfully completed.",
+          "type": "string",
+          "const": "done"
+        },
+        {
+          "description": "Abandoned without completion.",
+          "type": "string",
+          "const": "cancelled"
+        }
+      ]
+    }
+  }
+}
