@@ -9,6 +9,13 @@ source of truth for individual crate bumps. Tags map roughly to
 
 ### Added
 
+`animus-plugin-protocol`: shared multi-host chat operation authority via the
+additive `conversation/operation_*` reserve, load, renew, execution-bind,
+release, user-accept, and terminalize RPCs. The authenticated tenant/actor plus
+repository, conversation, and caller key form the durable partition. Opaque
+leases fence every mutation by token and expiry; reclaims rotate authority,
+terminal receipts are immutable, and replay/load never expose lease tokens.
+
 `animus-plugin-protocol`: `ConversationScope.tenant_id`, an optional-on-wire,
 1..=128-character opaque server-selected workspace/tenant partition key carried
 by every conversation-store request. Shared backends include it in every

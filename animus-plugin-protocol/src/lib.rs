@@ -1085,6 +1085,13 @@ impl From<TriggerAckStatus> for String {
 /// | [`METHOD_CONVERSATION_LOAD_MESSAGES`] | [`ConversationLoadMessagesRequest`]  | [`ConversationLoadMessagesResponse`]  |
 /// | [`METHOD_CONVERSATION_LIST`]          | [`ConversationListRequest`]          | [`ConversationListResponse`]          |
 /// | [`METHOD_CONVERSATION_DELETE`]        | [`ConversationDeleteRequest`]        | [`ConversationDeleteResponse`]        |
+/// | [`METHOD_CONVERSATION_OPERATION_BEGIN`]| [`ConversationOperationBeginRequest`]| [`ConversationOperationBeginResponse`]|
+/// | [`METHOD_CONVERSATION_OPERATION_LOAD`]| [`ConversationOperationLoadRequest`]  | [`ConversationOperationLoadResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_RENEW`]| [`ConversationOperationRenewRequest`]| [`ConversationOperationMutationResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_BIND_EXECUTION`]| [`ConversationOperationBindExecutionRequest`]| [`ConversationOperationMutationResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_RELEASE`]| [`ConversationOperationReleaseRequest`]| [`ConversationOperationMutationResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_ACCEPT_USER`]| [`ConversationOperationAcceptUserRequest`]| [`ConversationOperationMutationResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_TERMINALIZE`]| [`ConversationOperationTerminalizeRequest`]| [`ConversationOperationMutationResponse`] |
 ///
 /// Cross-process serialization of concurrent turns (the in-tree store's
 /// `try_lock_conversation`) is intentionally **NOT** on the wire — it is a
@@ -1173,6 +1180,211 @@ pub mod conversation_store {
     pub const METHOD_CONVERSATION_LIST: &str = "conversation/list";
     /// `conversation/delete` — permanently remove a conversation (idempotent).
     pub const METHOD_CONVERSATION_DELETE: &str = "conversation/delete";
+    /// `conversation/operation_begin` — atomically admit, replay, or reject a keyed turn.
+    pub const METHOD_CONVERSATION_OPERATION_BEGIN: &str = "conversation/operation_begin";
+    /// `conversation/operation_load` — load the durable operation receipt.
+    pub const METHOD_CONVERSATION_OPERATION_LOAD: &str = "conversation/operation_load";
+    /// `conversation/operation_renew` — renew lease ownership.
+    pub const METHOD_CONVERSATION_OPERATION_RENEW: &str = "conversation/operation_renew";
+    /// `conversation/operation_bind_execution` — bind the resolved execution snapshot.
+    pub const METHOD_CONVERSATION_OPERATION_BIND_EXECUTION: &str =
+        "conversation/operation_bind_execution";
+    /// `conversation/operation_release` — release an unaccepted pending admission.
+    pub const METHOD_CONVERSATION_OPERATION_RELEASE: &str = "conversation/operation_release";
+    /// `conversation/operation_accept_user` — record canonical user-message acceptance.
+    pub const METHOD_CONVERSATION_OPERATION_ACCEPT_USER: &str =
+        "conversation/operation_accept_user";
+    /// `conversation/operation_terminalize` — record one immutable terminal outcome.
+    pub const METHOD_CONVERSATION_OPERATION_TERMINALIZE: &str =
+        "conversation/operation_terminalize";
+    /// Capability proving that operation receipts and leases are shared by all
+    /// hosts using this conversation backend.
+    pub const CAPABILITY_CONVERSATION_OPERATIONS_SHARED_V1: &str =
+        "conversation_operations_shared_v1";
+
+    /// Durable lifecycle state for an idempotent application chat send.
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ConversationOperationStatus {
+        Pending,
+        UserAccepted,
+        Completed,
+        AssistantFailed,
+        AssistantInterrupted,
+    }
+
+    impl ConversationOperationStatus {
+        /// Whether no provider execution may ever be admitted for this operation again.
+        pub fn is_terminal(self) -> bool {
+            matches!(
+                self,
+                Self::Completed | Self::AssistantFailed | Self::AssistantInterrupted
+            )
+        }
+    }
+
+    /// Canonical durable operation state. Lease credentials are returned only
+    /// on an acquired begin and are not part of replay/load receipts.
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperation {
+        pub operation_id: String,
+        pub conversation_id: String,
+        pub caller_key: String,
+        pub user_message_id: String,
+        pub assistant_message_id: String,
+        pub status: ConversationOperationStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub execution_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub user_seq: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub assistant_seq: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error_message: Option<String>,
+    }
+
+    /// Lease-bearing claim returned only to the host that owns shared authority.
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationClaim {
+        #[serde(flatten)]
+        pub operation: ConversationOperation,
+        pub lease_token: String,
+        pub lease_expires_at: i64,
+        #[serde(default)]
+        pub recovered: bool,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ConversationOperationBeginOutcome {
+        Acquired,
+        Replay,
+        InProgress,
+        Conflict,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationBeginRequest {
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        pub conversation_id: String,
+        #[schemars(length(min = 1, max = 128), regex(pattern = r"^[A-Za-z0-9._:-]+$"))]
+        pub caller_key: String,
+        pub request_hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationBeginResponse {
+        pub outcome: ConversationOperationBeginOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub claim: Option<ConversationOperationClaim>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub operation: Option<ConversationOperation>,
+    }
+
+    /// Shared key used by load and all lease-owned mutations. The backend
+    /// still derives actor and tenant authority from the authenticated context.
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationKey {
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        pub conversation_id: String,
+        #[schemars(length(min = 1, max = 128), regex(pattern = r"^[A-Za-z0-9._:-]+$"))]
+        pub caller_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationLoadRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationLoadResponse {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub operation: Option<ConversationOperation>,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationRenewRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationBindExecutionRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+        pub execution_hash: String,
+        /// Rebinding is permitted only for a reclaimed pending lease before
+        /// canonical user acceptance; ordinary claims may only bind once.
+        #[serde(default)]
+        pub allow_rebind: bool,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationReleaseRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationAcceptUserRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+        pub user_seq: u64,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationTerminalizeRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+        pub status: ConversationOperationStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub assistant_seq: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error_message: Option<String>,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationMutationResponse {
+        pub changed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub operation: Option<ConversationOperation>,
+    }
 
     /// Visibility of a conversation. Controls whether [`ConversationListRequest::as_user`]
     /// filtering surfaces it to users other than its `owner`.
@@ -1312,7 +1524,7 @@ pub mod conversation_store {
     /// Fields common to every conversation-store request: tenant, project, and
     /// repository identity a shared backend partitions on. Flattened into each
     /// request so the wire payload stays flat.
-    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
     pub struct ConversationScope {
         /// Opaque server-selected tenant/workspace partition key.
         ///

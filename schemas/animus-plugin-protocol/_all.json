@@ -502,6 +502,720 @@
       "title": "ConversationMeta",
       "type": "object"
     },
+    "ConversationOperation": {
+      "description": "Canonical durable operation state. Lease credentials are returned only\non an acquired begin and are not part of replay/load receipts.",
+      "properties": {
+        "assistant_message_id": {
+          "type": "string"
+        },
+        "assistant_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ConversationOperationStatus"
+        },
+        "user_message_id": {
+          "type": "string"
+        },
+        "user_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "conversation_id",
+        "caller_key",
+        "user_message_id",
+        "assistant_message_id",
+        "status"
+      ],
+      "title": "ConversationOperation",
+      "type": "object"
+    },
+    "ConversationOperationAcceptUserRequest": {
+      "description": "Shared key used by load and all lease-owned mutations. The backend\nstill derives actor and tenant authority from the authenticated context.",
+      "properties": {
+        "as_user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "conversation_id",
+        "caller_key",
+        "operation_id",
+        "lease_token",
+        "user_seq"
+      ],
+      "title": "ConversationOperationAcceptUserRequest",
+      "type": "object"
+    },
+    "ConversationOperationBeginOutcome": {
+      "enum": [
+        "acquired",
+        "replay",
+        "in_progress",
+        "conflict"
+      ],
+      "title": "ConversationOperationBeginOutcome",
+      "type": "string"
+    },
+    "ConversationOperationBeginRequest": {
+      "description": "Fields common to every conversation-store request: tenant, project, and\nrepository identity a shared backend partitions on. Flattened into each\nrequest so the wire payload stays flat.",
+      "properties": {
+        "as_user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_hash": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "conversation_id",
+        "caller_key",
+        "request_hash"
+      ],
+      "title": "ConversationOperationBeginRequest",
+      "type": "object"
+    },
+    "ConversationOperationBeginResponse": {
+      "properties": {
+        "claim": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationOperationClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationOperation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/ConversationOperationBeginOutcome"
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "title": "ConversationOperationBeginResponse",
+      "type": "object"
+    },
+    "ConversationOperationBindExecutionRequest": {
+      "description": "Shared key used by load and all lease-owned mutations. The backend\nstill derives actor and tenant authority from the authenticated context.",
+      "properties": {
+        "allow_rebind": {
+          "default": false,
+          "description": "Rebinding is permitted only for a reclaimed pending lease before\ncanonical user acceptance; ordinary claims may only bind once.",
+          "type": "boolean"
+        },
+        "as_user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "execution_hash": {
+          "type": "string"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "conversation_id",
+        "caller_key",
+        "operation_id",
+        "lease_token",
+        "execution_hash"
+      ],
+      "title": "ConversationOperationBindExecutionRequest",
+      "type": "object"
+    },
+    "ConversationOperationClaim": {
+      "description": "Lease-bearing claim returned only to the host that owns shared authority.",
+      "properties": {
+        "assistant_message_id": {
+          "type": "string"
+        },
+        "assistant_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lease_expires_at": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "recovered": {
+          "default": false,
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/ConversationOperationStatus"
+        },
+        "user_message_id": {
+          "type": "string"
+        },
+        "user_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "conversation_id",
+        "caller_key",
+        "user_message_id",
+        "assistant_message_id",
+        "status",
+        "lease_token",
+        "lease_expires_at"
+      ],
+      "title": "ConversationOperationClaim",
+      "type": "object"
+    },
+    "ConversationOperationKey": {
+      "description": "Shared key used by load and all lease-owned mutations. The backend\nstill derives actor and tenant authority from the authenticated context.",
+      "properties": {
+        "as_user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "conversation_id",
+        "caller_key"
+      ],
+      "title": "ConversationOperationKey",
+      "type": "object"
+    },
+    "ConversationOperationLoadRequest": {
+      "description": "Shared key used by load and all lease-owned mutations. The backend\nstill derives actor and tenant authority from the authenticated context.",
+      "properties": {
+        "as_user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "conversation_id",
+        "caller_key"
+      ],
+      "title": "ConversationOperationLoadRequest",
+      "type": "object"
+    },
+    "ConversationOperationLoadResponse": {
+      "properties": {
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationOperation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "title": "ConversationOperationLoadResponse",
+      "type": "object"
+    },
+    "ConversationOperationMutationResponse": {
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationOperation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "changed"
+      ],
+      "title": "ConversationOperationMutationResponse",
+      "type": "object"
+    },
+    "ConversationOperationReleaseRequest": {
+      "description": "Shared key used by load and all lease-owned mutations. The backend\nstill derives actor and tenant authority from the authenticated context.",
+      "properties": {
+        "as_user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "conversation_id",
+        "caller_key",
+        "operation_id",
+        "lease_token"
+      ],
+      "title": "ConversationOperationReleaseRequest",
+      "type": "object"
+    },
+    "ConversationOperationRenewRequest": {
+      "description": "Shared key used by load and all lease-owned mutations. The backend\nstill derives actor and tenant authority from the authenticated context.",
+      "properties": {
+        "as_user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "conversation_id",
+        "caller_key",
+        "operation_id",
+        "lease_token"
+      ],
+      "title": "ConversationOperationRenewRequest",
+      "type": "object"
+    },
+    "ConversationOperationStatus": {
+      "description": "Durable lifecycle state for an idempotent application chat send.",
+      "enum": [
+        "pending",
+        "user_accepted",
+        "completed",
+        "assistant_failed",
+        "assistant_interrupted"
+      ],
+      "title": "ConversationOperationStatus",
+      "type": "string"
+    },
+    "ConversationOperationTerminalizeRequest": {
+      "description": "Shared key used by load and all lease-owned mutations. The backend\nstill derives actor and tenant authority from the authenticated context.",
+      "properties": {
+        "as_user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "assistant_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "caller_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ConversationOperationStatus"
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "conversation_id",
+        "caller_key",
+        "operation_id",
+        "lease_token",
+        "status"
+      ],
+      "title": "ConversationOperationTerminalizeRequest",
+      "type": "object"
+    },
     "ConversationSaveMetaRequest": {
       "description": "`conversation/save_meta` request.",
       "properties": {
