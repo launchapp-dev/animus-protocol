@@ -9,6 +9,13 @@ source of truth for individual crate bumps. Tags map roughly to
 
 ### Added
 
+`animus-config-protocol` 0.1.2: optional, typed
+`AgentProfile.application_chat_controls` policy with bounded control enums and
+configured references. Profile omission remains backward-compatible; overlay
+omission inherits, explicit `null` revokes, and a concrete object replaces.
+Unknown fields, duplicate or oversized lists, and invalid configured references
+fail during canonical deserialization.
+
 `animus-plugin-protocol`: additive
 `conversation_operation_fenced_append_v1` capability and
 `ConversationAppendMessageRequest.operation_fence`. Shared backends validate
