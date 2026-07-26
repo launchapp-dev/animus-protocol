@@ -20,6 +20,7 @@ cd "${WORKSPACE_ROOT}"
 # Each entry is "<crate>" — the bin name is "<crate>-export-schema" by
 # convention.
 CRATES=(
+    "animus-application-protocol"
     "animus-plugin-protocol"
     "animus-subject-protocol"
     "animus-provider-protocol"
