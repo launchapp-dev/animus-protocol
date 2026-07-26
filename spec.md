@@ -549,6 +549,23 @@ The field is not accepted by `conversation/create` and is intentionally omitted
 from `ConversationSummary` / `conversation/list`, because callers do not select
 reservation ownership and list views do not need the internal identifier.
 
+Shared multi-host stores additionally advertise `conversation_operations_shared_v1`
+and implement the `conversation/operation_*` methods. The durable operation key
+is the transport-authenticated tenant and actor plus `repo_scope`,
+`conversation_id`, and `caller_key`; `as_user` and `tenant_id` in the request
+remain consistency assertions only. `operation_begin` atomically returns one of
+`acquired`, `replay`, `in_progress`, or `conflict`. Only `acquired` returns the
+opaque lease token. A terminal replay or load never exposes lease credentials.
+
+Every lease-owned mutation (`renew`, execution binding, pending release, user
+acceptance, and terminalization) MUST atomically compare the operation id and
+lease token and MUST reject an expired lease, even when no replacement claimant
+has reclaimed it yet. Reclaim rotates the lease token while preserving the
+operation and message ids. Execution rebind is permitted only on a reclaimed
+pending operation before user acceptance. Terminalization is permitted only
+after user acceptance and is immutable; callers MUST reconcile a failed write
+by loading the durable receipt and MUST NOT blindly repeat provider execution.
+
 ## 8. Plugin protocol types
 
 ### 8.1 `PROTOCOL_VERSION`

@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationOperationBeginResponse",
+  "type": "object",
+  "properties": {
+    "claim": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConversationOperationClaim"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "operation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConversationOperation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "outcome": {
+      "$ref": "#/$defs/ConversationOperationBeginOutcome"
+    }
+  },
+  "required": [
+    "outcome"
+  ],
+  "$defs": {
+    "ConversationOperation": {
+      "description": "Canonical durable operation state. Lease credentials are returned only\non an acquired begin and are not part of replay/load receipts.",
+      "type": "object",
+      "properties": {
+        "assistant_message_id": {
+          "type": "string"
+        },
+        "assistant_seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "caller_key": {
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ConversationOperationStatus"
+        },
+        "user_message_id": {
+          "type": "string"
+        },
+        "user_seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "operation_id",
+        "conversation_id",
+        "caller_key",
+        "user_message_id",
+        "assistant_message_id",
+        "status"
+      ]
+    },
+    "ConversationOperationBeginOutcome": {
+      "type": "string",
+      "enum": [
+        "acquired",
+        "replay",
+        "in_progress",
+        "conflict"
+      ]
+    },
+    "ConversationOperationClaim": {
+      "description": "Lease-bearing claim returned only to the host that owns shared authority.",
+      "type": "object",
+      "properties": {
+        "assistant_message_id": {
+          "type": "string"
+        },
+        "assistant_seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "caller_key": {
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lease_expires_at": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "recovered": {
+          "type": "boolean",
+          "default": false
+        },
+        "status": {
+          "$ref": "#/$defs/ConversationOperationStatus"
+        },
+        "user_message_id": {
+          "type": "string"
+        },
+        "user_seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "operation_id",
+        "conversation_id",
+        "caller_key",
+        "user_message_id",
+        "assistant_message_id",
+        "status",
+        "lease_token",
+        "lease_expires_at"
+      ]
+    },
+    "ConversationOperationStatus": {
+      "description": "Durable lifecycle state for an idempotent application chat send.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "user_accepted",
+        "completed",
+        "assistant_failed",
+        "assistant_interrupted"
+      ]
+    }
+  }
+}

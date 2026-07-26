@@ -28,8 +28,15 @@ use animus_plugin_protocol::conversation_store::{
     ConversationCreateRequest, ConversationCreateResponse, ConversationDeleteRequest,
     ConversationDeleteResponse, ConversationListRequest, ConversationListResponse,
     ConversationLoadMessagesRequest, ConversationLoadMessagesResponse, ConversationLoadMetaRequest,
-    ConversationLoadMetaResponse, ConversationMeta, ConversationSaveMetaRequest,
-    ConversationSaveMetaResponse, ConversationScope, ConversationSummary, Visibility,
+    ConversationLoadMetaResponse, ConversationMeta, ConversationOperationAcceptUserRequest,
+    ConversationOperationBeginOutcome, ConversationOperationBeginRequest,
+    ConversationOperationBeginResponse, ConversationOperationBindExecutionRequest,
+    ConversationOperationClaim, ConversationOperationKey, ConversationOperationLoadRequest,
+    ConversationOperationLoadResponse, ConversationOperationMutationResponse,
+    ConversationOperationReleaseRequest, ConversationOperationRenewRequest,
+    ConversationOperationStatus, ConversationOperationTerminalizeRequest,
+    ConversationSaveMetaRequest, ConversationSaveMetaResponse, ConversationScope,
+    ConversationSummary, Visibility,
 };
 use animus_plugin_protocol::{
     EnvRequirement, HealthCheckResult, HealthStatus, HostCapabilities, HostInfo, InitializeParams,
@@ -149,6 +156,66 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         (
             "ConversationDeleteResponse",
             schema_for!(ConversationDeleteResponse),
+        ),
+        (
+            "ConversationOperationStatus",
+            schema_for!(ConversationOperationStatus),
+        ),
+        (
+            "ConversationOperation",
+            schema_for!(animus_plugin_protocol::conversation_store::ConversationOperation),
+        ),
+        (
+            "ConversationOperationClaim",
+            schema_for!(ConversationOperationClaim),
+        ),
+        (
+            "ConversationOperationBeginOutcome",
+            schema_for!(ConversationOperationBeginOutcome),
+        ),
+        (
+            "ConversationOperationBeginRequest",
+            schema_for!(ConversationOperationBeginRequest),
+        ),
+        (
+            "ConversationOperationBeginResponse",
+            schema_for!(ConversationOperationBeginResponse),
+        ),
+        (
+            "ConversationOperationKey",
+            schema_for!(ConversationOperationKey),
+        ),
+        (
+            "ConversationOperationLoadRequest",
+            schema_for!(ConversationOperationLoadRequest),
+        ),
+        (
+            "ConversationOperationLoadResponse",
+            schema_for!(ConversationOperationLoadResponse),
+        ),
+        (
+            "ConversationOperationRenewRequest",
+            schema_for!(ConversationOperationRenewRequest),
+        ),
+        (
+            "ConversationOperationBindExecutionRequest",
+            schema_for!(ConversationOperationBindExecutionRequest),
+        ),
+        (
+            "ConversationOperationReleaseRequest",
+            schema_for!(ConversationOperationReleaseRequest),
+        ),
+        (
+            "ConversationOperationAcceptUserRequest",
+            schema_for!(ConversationOperationAcceptUserRequest),
+        ),
+        (
+            "ConversationOperationTerminalizeRequest",
+            schema_for!(ConversationOperationTerminalizeRequest),
+        ),
+        (
+            "ConversationOperationMutationResponse",
+            schema_for!(ConversationOperationMutationResponse),
         ),
     ]
 }
