@@ -4,6 +4,13 @@
   "description": "`conversation/create` request.",
   "type": "object",
   "properties": {
+    "agent_id": {
+      "description": "Canonical agent binding to stamp atomically at creation time.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "id": {
       "description": "Explicit conversation id; the backend assigns one when `None`.",
       "type": [
@@ -12,7 +19,7 @@
       ]
     },
     "owner": {
-      "description": "Owner to stamp onto the new conversation's meta.",
+      "description": "Legacy owner compatibility assertion.\n\nAuthenticated stores MUST stamp the owner from their call context;\nwhen this field is present they may require it to match, but MUST\nnever treat it as caller authority.",
       "type": [
         "string",
         "null"
@@ -31,6 +38,15 @@
         "string",
         "null"
       ]
+    },
+    "tenant_id": {
+      "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128,
+      "minLength": 1
     },
     "visibility": {
       "description": "Initial visibility for the new conversation.",

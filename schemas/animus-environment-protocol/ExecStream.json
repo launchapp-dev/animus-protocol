@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecStream",
+  "description": "Which output stream an [`ExecNotification`] delta belongs to.",
+  "oneOf": [
+    {
+      "description": "Standard output.",
+      "type": "string",
+      "const": "stdout"
+    },
+    {
+      "description": "Standard error.",
+      "type": "string",
+      "const": "stderr"
+    }
+  ]
+}

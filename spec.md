@@ -508,6 +508,64 @@ When [`NotifierSchema.supports_flush`](#125-notifier-types) is `true`, the daemo
 
 Returns a [`NotifierSchema`](#125-notifier-types) capability declaration (advertised `connector_kinds` plus the `supports_flush` flag). SHOULD be cheap (constant or one-shot at startup).
 
+### 7.10 Conversation store methods
+
+Conversation stores persist chat metadata and messages behind the
+`conversation_store` plugin kind. The canonical metadata RPCs are:
+
+- `conversation/load_meta` — returns `{ "meta": ConversationMeta | null }`.
+- `conversation/save_meta` — accepts `{ "meta": ConversationMeta,
+  "expected_revision": integer | null, ...scope }`; the backend MUST compare
+  `expected_revision` and write the metadata atomically.
+
+Every conversation method carries `ConversationScope.tenant_id`, an opaque
+server-selected workspace/tenant partition key of 1 through 128 characters.
+The authenticated application layer selects it from the session; it is not a
+user-controlled filter. A shared backend MUST include it in every conversation
+and message key and MUST compare it with the transport-asserted actor tenant.
+Missing or mismatched tenant context fails closed. An omitted `tenant_id` is
+permitted only when an operator has explicitly configured a fixed legacy tenant;
+backends MUST NOT infer a tenant from `project_root`, `repo_scope`, owner, or
+conversation id.
+
+On `conversation/create`, authenticated backends stamp `ConversationMeta.owner`
+from the transport-asserted caller. The request's legacy `owner` field is at
+most a matching assertion and is never authority. `conversation/save_meta`
+MUST NOT change or clear the stored owner; owner transfer requires a separate
+privileged operation rather than an ordinary metadata update.
+
+`ConversationMeta.active_operation_id` is optional internal concurrency state.
+A keyed turn sets it when reserving a revision, which lets that same durable
+operation prove ownership and continue if the host crashes before appending the
+user message. A backend MUST return it from `conversation/load_meta` and MUST
+persist updates supplied through `conversation/save_meta` in the same atomic
+compare-and-swap as `revision`.
+
+When present, `active_operation_id` MUST be 1 through 128 ASCII characters and
+every character MUST be an ASCII letter, digit, `.`, `_`, `:`, or `-`
+(`^[A-Za-z0-9._:-]+$`). Backends MUST reject invalid values. Absence means no
+operation owns a revision reservation and is the default for legacy metadata.
+The field is not accepted by `conversation/create` and is intentionally omitted
+from `ConversationSummary` / `conversation/list`, because callers do not select
+reservation ownership and list views do not need the internal identifier.
+
+Shared multi-host stores additionally advertise `conversation_operations_shared_v1`
+and implement the `conversation/operation_*` methods. The durable operation key
+is the transport-authenticated tenant and actor plus `repo_scope`,
+`conversation_id`, and `caller_key`; `as_user` and `tenant_id` in the request
+remain consistency assertions only. `operation_begin` atomically returns one of
+`acquired`, `replay`, `in_progress`, or `conflict`. Only `acquired` returns the
+opaque lease token. A terminal replay or load never exposes lease credentials.
+
+Every lease-owned mutation (`renew`, execution binding, pending release, user
+acceptance, and terminalization) MUST atomically compare the operation id and
+lease token and MUST reject an expired lease, even when no replacement claimant
+has reclaimed it yet. Reclaim rotates the lease token while preserving the
+operation and message ids. Execution rebind is permitted only on a reclaimed
+pending operation before user acceptance. Terminalization is permitted only
+after user acceptance and is immutable; callers MUST reconcile a failed write
+by loading the durable receipt and MUST NOT blindly repeat provider execution.
+
 ## 8. Plugin protocol types
 
 ### 8.1 `PROTOCOL_VERSION`
@@ -534,6 +592,19 @@ The `--manifest` output:
   "capabilities": ["subject/list", "subject/get", "subject/update", "subject/schema", "health/check"]
 }
 ```
+
+Optional fields (omitted for back-compat when unset):
+
+- `plugin_kinds` (`string[]`) — additional kinds a multi-kind plugin also serves.
+- `env_required` (`EnvRequirement[]`) — environment variables the host must forward at spawn.
+- `notification_buffer_size` (`integer`) — author hint for the broadcast channel capacity.
+- `supports_mcp` (`boolean`) — since protocol **1.2.0**. First-class, plugin-DECLARED
+  capability: whether the plugin consumes host-injected MCP servers. The kernel reads this
+  instead of hardcoding per-tool MCP behavior in a name table (REQUIREMENT-039). **Absent =
+  undeclared**: the kernel applies its historical default (provider plugins are MCP-capable);
+  only an explicit `false` opts a provider out. This is the proof-of-pattern field for a
+  growing family of declared kernel-behavior capabilities (launch template, permission-mode
+  flag, reasoning-effort, default model, ...) migrating off the kernel's hardcoded name tables.
 
 ### 8.3 `RpcRequest` / `RpcNotification` / `RpcResponse` / `RpcError`
 

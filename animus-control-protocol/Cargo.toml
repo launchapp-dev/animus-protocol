@@ -19,7 +19,7 @@ client = ["dep:tokio", "dep:anyhow"]
 
 [dependencies]
 animus-plugin-protocol      = { path = "../animus-plugin-protocol",      version = "0.1.12" }
-animus-subject-protocol     = { path = "../animus-subject-protocol",     version = "0.1.12" }
+animus-subject-protocol     = { path = "../animus-subject-protocol",     version = "0.2.0" }
 animus-log-storage-protocol = { path = "../animus-log-storage-protocol", version = "0.1.12" }
 animus-trigger-protocol     = { path = "../animus-trigger-protocol",     version = "0.1.12" }
 animus-actor                = { path = "../animus-actor",                version = "0.1.0" }

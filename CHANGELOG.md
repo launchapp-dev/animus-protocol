@@ -5,6 +5,59 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
+## Unreleased
+
+### Added
+
+`animus-subject-protocol` 0.2.0 adds a non-downgradable authenticated subject
+surface:
+
+- Required `SubjectRequestContext` carrying a typed `Actor` plus optional
+  request, correlation, and idempotency identifiers.
+- Typed v2 list/get/create/update/status/delete request shapes and distinct
+  `subject/v2/<verb>` / `<kind>/v2/<verb>` method names.
+- `ActorScopedSubjectBackend`, separate from the legacy global
+  `SubjectBackend`, so a v2 request can never silently fall through to v1.
+- JSON Schema exports and compatibility tests for the new wire types.
+
+`animus-plugin-protocol`: shared multi-host chat operation authority via the
+additive `conversation/operation_*` reserve, load, renew, execution-bind,
+release, user-accept, and terminalize RPCs. The authenticated tenant/actor plus
+repository, conversation, and caller key form the durable partition. Opaque
+leases fence every mutation by token and expiry; reclaims rotate authority,
+terminal receipts are immutable, and replay/load never expose lease tokens.
+
+`animus-plugin-protocol`: `ConversationScope.tenant_id`, an optional-on-wire,
+1..=128-character opaque server-selected workspace/tenant partition key carried
+by every conversation-store request. Shared backends include it in every
+conversation/message key and validate it against the authenticated transport
+actor, failing closed unless an operator explicitly pins a legacy tenant.
+Conversation creation stamps owner from that authenticated call context, and
+ordinary metadata saves cannot transfer or clear ownership.
+
+`animus-plugin-protocol`: optional
+`ConversationMeta.active_operation_id` on the canonical load/save-meta path.
+The field durably identifies which keyed chat operation owns a revision
+reservation so that operation can recover after a crash. It is absent by
+default for backward compatibility, constrained to 1..=128 ASCII alphanumeric
+or `._:-` characters, writable only through `conversation/save_meta`, and
+intentionally omitted from create requests and list summaries.
+
+`animus-plugin-protocol` (0.1.18): `PluginManifest.supports_mcp: Option<bool>`
+— a first-class, plugin-DECLARED capability field the kernel reads instead of
+hardcoding per-tool MCP behavior in a name table (REQUIREMENT-039 / TASK-277).
+
+- `PROTOCOL_VERSION` bumped `1.1.0` -> `1.2.0` (backward-compatible minor: the
+  field is optional and `#[serde(default, skip_serializing_if = "Option::is_none")]`).
+- Back-compat: absent = undeclared; the kernel keeps its historical default
+  (provider plugins are MCP-capable). Only an explicit `false` opts a provider out.
+- `animus-plugin-runtime` (0.2.2): `Plugin::supports_mcp(bool)` builder so a Rust
+  plugin author can declare the flag. The provider runtime (`provider_main`) emits
+  `None` for now — auto-mapping from `ProviderCapabilities.mcp` is deferred because
+  that flag defaults `false` and would regress providers relying on the default.
+- This is the proof-of-pattern field for the wider REQUIREMENT-039 cleanup
+  (launch template, permission-mode flag, reasoning-effort, default model, ...).
+
 ## v0.1.21 — config_source write-back (`config/write`)
 
 ### Added

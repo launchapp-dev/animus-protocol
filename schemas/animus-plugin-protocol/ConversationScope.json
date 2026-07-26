@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ConversationScope",
-  "description": "Fields common to every conversation-store request: the project + scope\nidentity a multi-tenant backend partitions on. Flattened into each\nrequest so the wire payload stays flat.",
+  "description": "Fields common to every conversation-store request: tenant, project, and\nrepository identity a shared backend partitions on. Flattened into each\nrequest so the wire payload stays flat.",
   "type": "object",
   "properties": {
     "project_root": {
@@ -17,6 +17,15 @@
         "string",
         "null"
       ]
+    },
+    "tenant_id": {
+      "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128,
+      "minLength": 1
     }
   }
 }

@@ -410,11 +410,17 @@ fn print_manifest_and_exit(info: &PluginInfo, capabilities: &PluginCapabilities)
         name: info.name.clone(),
         version: info.version.clone(),
         plugin_kind: info.plugin_kind.clone(),
+        plugin_kinds: info.plugin_kinds.clone(),
         description: info.description.clone().unwrap_or_default(),
         protocol_version: PROTOCOL_VERSION.to_string(),
         capabilities: capabilities.methods.clone(),
         env_required: Vec::new(),
         notification_buffer_size: None,
+        // Undeclared: the kernel applies its historical default (provider
+        // plugins are MCP-capable). Auto-mapping from `ProviderCapabilities.mcp`
+        // is deferred because that flag defaults `false` and would regress
+        // providers relying on the implicit default (REQUIREMENT-039).
+        supports_mcp: None,
     };
     let mut stdout = io::stdout().lock();
     let _ = writeln!(
@@ -1100,6 +1106,7 @@ mod tests {
             name: "stub".into(),
             version: "0".into(),
             plugin_kind: "provider".into(),
+            plugin_kinds: Vec::new(),
             description: None,
         };
         let extras = vec!["$harness/oai-style".to_string()];

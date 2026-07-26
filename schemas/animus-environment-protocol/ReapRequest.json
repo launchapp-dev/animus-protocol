@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReapRequest",
+  "description": "Request payload for [`METHOD_ENVIRONMENT_REAP`]. With no fields set, reap\ndeletes only dead nodes (always safe — a live node is never dead).",
+  "type": "object",
+  "properties": {
+    "all": {
+      "description": "Also reap non-dead nodes that have no live owning run (needs `force`).",
+      "type": "boolean"
+    },
+    "dry_run": {
+      "description": "Report what WOULD be reaped without deleting anything.",
+      "type": "boolean"
+    },
+    "force": {
+      "description": "Required alongside `all` — guards a fresh (no-liveness) reaper from\ntreating every healthy node as an orphan.",
+      "type": "boolean"
+    },
+    "older_than_secs": {
+      "description": "Only reap nodes at least this many seconds old.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    }
+  }
+}

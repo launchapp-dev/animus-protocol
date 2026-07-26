@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecNotification",
+  "description": "A streaming notification an environment plugin emits mid-exec during a\n[`METHOD_ENVIRONMENT_EXEC_STREAM`] call.\n\nThe runtime wraps these into [`NOTIFICATION_ENVIRONMENT_OUTPUT`] JSON-RPC\nnotifications and forwards them to the host on the same channel as the\neventual [`ExecResponse`] reply. This mirrors\n`animus-provider-protocol`'s `AgentNotification` server-streaming surface.",
+  "oneOf": [
+    {
+      "description": "Incremental stdout/stderr the command has produced. Maps to\n[`NOTIFICATION_ENVIRONMENT_OUTPUT`].",
+      "type": "object",
+      "properties": {
+        "handle_id": {
+          "description": "Handle id of the environment this exec runs in.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "output"
+        },
+        "stream": {
+          "description": "Which stream this delta belongs to.",
+          "$ref": "#/$defs/ExecStream"
+        },
+        "text": {
+          "description": "The output delta (UTF-8).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "handle_id",
+        "stream",
+        "text"
+      ]
+    },
+    {
+      "description": "One journal event from an in-flight [`METHOD_ENVIRONMENT_EXEC_SESSION`],\nforwarded verbatim from the node's own workflow journal. Maps to\n[`NOTIFICATION_ENVIRONMENT_JOURNAL`].",
+      "type": "object",
+      "properties": {
+        "event_kind": {
+          "description": "The journal event kind (e.g. `phase_started`, `output_chunk`,\n`tool_call`, `run_failed`).",
+          "type": "string"
+        },
+        "handle_id": {
+          "description": "Handle id of the environment this session runs in.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "journal"
+        },
+        "payload": {
+          "description": "The event's full payload, forwarded verbatim."
+        },
+        "phase_id": {
+          "description": "Phase this event belongs to, when phase-scoped.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Event status discriminator, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "terminal": {
+          "description": "True on the final event of the session (the run reached a terminal\nstatus), signalling the host to settle.",
+          "type": "boolean"
+        },
+        "ts": {
+          "description": "Event timestamp (RFC 3339).",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The node-local run id this event belongs to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "handle_id",
+        "event_kind",
+        "ts",
+        "payload"
+      ]
+    }
+  ],
+  "$defs": {
+    "ExecStream": {
+      "description": "Which output stream an [`ExecNotification`] delta belongs to.",
+      "oneOf": [
+        {
+          "description": "Standard output.",
+          "type": "string",
+          "const": "stdout"
+        },
+        {
+          "description": "Standard error.",
+          "type": "string",
+          "const": "stderr"
+        }
+      ]
+    }
+  }
+}

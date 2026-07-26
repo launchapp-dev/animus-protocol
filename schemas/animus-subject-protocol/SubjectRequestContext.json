@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubjectRequestContext",
+  "description": "Authenticated request context asserted by the application transport.\n\nThe actor is required on every v2 subject call. Correlation and\nidempotency values are opaque transport identifiers: the kernel relays\nthem and the owning backend decides how to record or enforce them.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "description": "Authenticated caller. Claims remain advisory; ownership is the stable\n`(user_id, tenant_id)` pair.",
+      "$ref": "#/$defs/Actor"
+    },
+    "correlation_id": {
+      "description": "Optional correlation identifier spanning related requests.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "idempotency_key": {
+      "description": "Optional idempotency key for a mutation.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "request_id": {
+      "description": "Optional request identifier for tracing one transport request.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "actor"
+  ],
+  "$defs": {
+    "Actor": {
+      "description": "An opaque, transport-asserted caller identity.\n\nConstructed by the transport after it authenticates the caller, relayed\nverbatim by the kernel, and consumed only by plugins for data scoping. See\nthe [crate-level docs](crate) for the full contract.",
+      "type": "object",
+      "properties": {
+        "claims": {
+          "description": "Transport-asserted claims (e.g. `[\"admin\"]`). Advisory only: the kernel\nnever branches on these. A plugin MAY consult them for its own\nauthorization decisions. Omitted from the wire when empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tenant_id": {
+          "description": "Optional tenant / organization partition the user belongs to. Plugins\nuse it for multi-tenant data isolation. Omitted from the wire when\nabsent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_id": {
+          "description": "Stable identifier for the authenticated user. Opaque to the kernel;\nplugins use it to scope owned rows to a user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id"
+      ]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TeardownResponse",
+  "description": "Response payload for [`METHOD_ENVIRONMENT_TEARDOWN`]. Empty on success; the\nwire-level error shape is `animus_plugin_protocol::RpcError`.",
+  "type": "object"
+}

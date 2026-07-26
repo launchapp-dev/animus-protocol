@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GetNodeResponse",
+  "description": "Response payload for [`METHOD_ENVIRONMENT_GET`].",
+  "type": "object",
+  "properties": {
+    "node": {
+      "description": "The node, or null when no node matched.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EnvironmentNode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "$defs": {
+    "EnvironmentNode": {
+      "description": "A managed environment instance (a \"node\") as reported by the node-management\nsurface. Substrate-agnostic: a Railway service, a Docker container, a k8s pod.",
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "description": "Creation timestamp (ISO 8601) when the substrate exposes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Substrate-native id (railway service id, container id, ...).",
+          "type": "string"
+        },
+        "image": {
+          "description": "Image / impl ref backing the node, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Human-facing name (e.g. `animus-run-<hash>`).",
+          "type": "string"
+        },
+        "orphan": {
+          "description": "True when the node has no live owning run (a reap candidate).",
+          "type": "boolean"
+        },
+        "run_id": {
+          "description": "The animus run id this node serves, when recoverable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "Lifecycle state as the substrate reports it (`SUCCESS`, `FAILED`,\n`CRASHED`, `unknown`, ...).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "state",
+        "orphan"
+      ]
+    }
+  }
+}

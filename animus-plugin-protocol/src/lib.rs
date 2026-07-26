@@ -37,7 +37,7 @@ use serde_json::Value;
 /// declares its own in [`InitializeParams::protocol_version`]. A plugin and
 /// host with the same major version are compatible. See `spec.md` for the
 /// full versioning policy.
-pub const PROTOCOL_VERSION: &str = "1.1.0";
+pub const PROTOCOL_VERSION: &str = "1.2.0";
 
 /// Plugin kind for LLM provider plugins (Claude, Codex, Gemini, OpenAI-compat,
 /// on-prem, ...).
@@ -164,6 +164,14 @@ pub const PLUGIN_KIND_DURABLE_STORE: &str = "durable_store";
 /// (`memory/put`, `memory/get`, `memory/query`, etc.).
 pub const PLUGIN_KIND_MEMORY_STORE: &str = "memory_store";
 
+/// Plugin kind for execution-environment plugins (v0.7).
+///
+/// Environment plugins prepare an execution context (git worktree, container,
+/// or remote host), run provider harness commands inside it, and tear it down.
+/// See `animus-environment-protocol` for the typed RPC surface
+/// (`environment/prepare`, `environment/exec`, `environment/teardown`).
+pub const PLUGIN_KIND_ENVIRONMENT: &str = "environment";
+
 /// Plugin kind for the legacy agent-runner sidecar.
 ///
 /// The agent-runner sidecar (and its `animus-agent-runner-protocol` crate)
@@ -219,6 +227,8 @@ pub enum PluginKind {
     DurableStore,
     /// Agent memory store plugin (v0.5). See [`PLUGIN_KIND_MEMORY_STORE`].
     MemoryStore,
+    /// Execution-environment plugin (v0.7). See [`PLUGIN_KIND_ENVIRONMENT`].
+    Environment,
     /// Agent-runner sidecar plugin (v0.5). See [`PLUGIN_KIND_AGENT_RUNNER`].
     AgentRunner,
     /// Any kind not understood by this crate version. Preserves the wire
@@ -245,6 +255,7 @@ impl PluginKind {
             PluginKind::WorkflowJournal => PLUGIN_KIND_WORKFLOW_JOURNAL,
             PluginKind::DurableStore => PLUGIN_KIND_DURABLE_STORE,
             PluginKind::MemoryStore => PLUGIN_KIND_MEMORY_STORE,
+            PluginKind::Environment => PLUGIN_KIND_ENVIRONMENT,
             PluginKind::AgentRunner => PLUGIN_KIND_AGENT_RUNNER,
             PluginKind::Other(value) => value.as_str(),
         }
@@ -283,6 +294,7 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_WORKFLOW_JOURNAL => PluginKind::WorkflowJournal,
             PLUGIN_KIND_DURABLE_STORE => PluginKind::DurableStore,
             PLUGIN_KIND_MEMORY_STORE => PluginKind::MemoryStore,
+            PLUGIN_KIND_ENVIRONMENT => PluginKind::Environment,
             PLUGIN_KIND_AGENT_RUNNER => PluginKind::AgentRunner,
             _ => PluginKind::Other(value),
         }
@@ -728,6 +740,26 @@ pub struct PluginManifest {
     /// up the new hint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification_buffer_size: Option<usize>,
+    /// Whether this plugin consumes host-injected MCP servers.
+    ///
+    /// First-class, plugin-DECLARED capability the kernel reads instead of
+    /// hardcoding per-tool behavior in name tables (REQUIREMENT-039). A
+    /// provider plugin sets this to advertise whether it accepts the
+    /// host-supplied MCP server set (profile/skill MCP endpoints injected via
+    /// the run request); the kernel gates MCP injection on the declared value
+    /// rather than a built-in allow-list keyed on the tool name.
+    ///
+    /// This is the proof-of-pattern field for a growing family of declared
+    /// kernel-behavior capabilities (launch template, permission-mode flag,
+    /// reasoning-effort, default model, ...) that will migrate off the kernel's
+    /// hardcoded name tables onto the manifest over subsequent slices.
+    ///
+    /// Back-compat: `None` means "undeclared" — plugins built against earlier
+    /// protocol versions omit the field entirely, and the kernel applies its
+    /// historical default (MCP-capable for provider plugins). Only an explicit
+    /// `Some(false)` opts a provider out of MCP injection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_mcp: Option<bool>,
 }
 
 impl PluginManifest {
@@ -1053,6 +1085,13 @@ impl From<TriggerAckStatus> for String {
 /// | [`METHOD_CONVERSATION_LOAD_MESSAGES`] | [`ConversationLoadMessagesRequest`]  | [`ConversationLoadMessagesResponse`]  |
 /// | [`METHOD_CONVERSATION_LIST`]          | [`ConversationListRequest`]          | [`ConversationListResponse`]          |
 /// | [`METHOD_CONVERSATION_DELETE`]        | [`ConversationDeleteRequest`]        | [`ConversationDeleteResponse`]        |
+/// | [`METHOD_CONVERSATION_OPERATION_BEGIN`]| [`ConversationOperationBeginRequest`]| [`ConversationOperationBeginResponse`]|
+/// | [`METHOD_CONVERSATION_OPERATION_LOAD`]| [`ConversationOperationLoadRequest`]  | [`ConversationOperationLoadResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_RENEW`]| [`ConversationOperationRenewRequest`]| [`ConversationOperationMutationResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_BIND_EXECUTION`]| [`ConversationOperationBindExecutionRequest`]| [`ConversationOperationMutationResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_RELEASE`]| [`ConversationOperationReleaseRequest`]| [`ConversationOperationMutationResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_ACCEPT_USER`]| [`ConversationOperationAcceptUserRequest`]| [`ConversationOperationMutationResponse`] |
+/// | [`METHOD_CONVERSATION_OPERATION_TERMINALIZE`]| [`ConversationOperationTerminalizeRequest`]| [`ConversationOperationMutationResponse`] |
 ///
 /// Cross-process serialization of concurrent turns (the in-tree store's
 /// `try_lock_conversation`) is intentionally **NOT** on the wire — it is a
@@ -1092,19 +1131,38 @@ impl From<TriggerAckStatus> for String {
 ///
 /// # Scope identity
 ///
-/// Every request carries `project_root` and `repo_scope` (the repository
-/// scope id, as `config_source` does) so a multi-tenant backend can isolate
-/// conversations per scope.
+/// Every request carries `tenant_id`, `project_root`, and `repo_scope` (the
+/// repository scope id, as `config_source` does) so a shared backend can
+/// isolate conversations even when two tenants mount the same repository.
+/// `tenant_id` is an opaque, transport-selected workspace/tenant key. User
+/// input MUST NOT select it. Authenticated backends MUST compare it with the
+/// transport-asserted actor tenant and fail closed on absence or mismatch.
 ///
 /// # Ownership and visibility
 ///
 /// [`ConversationMeta`] carries `owner` (the portal's authenticated user id;
-/// `None` = unowned/legacy) and `visibility` ([`Visibility`], default
+/// `None` = explicitly configured legacy data) and `visibility` ([`Visibility`], default
 /// [`Visibility::Private`]). These are the foundation for per-user history
 /// with sharing. The query-layer filtering — "X's own conversations PLUS any
-/// `Shared` ones" — is requested via [`ConversationListRequest::as_user`];
-/// a backend that ignores it simply returns everything (the in-tree store's
-/// behavior, which has no auth context).
+/// `Shared` ones" — is represented by [`ConversationListRequest::as_user`].
+/// Authenticated stores treat it as a consistency assertion against their call
+/// context, never as authority. The in-tree store may use it directly because
+/// it has no authenticated transport context.
+///
+/// # Canonical agent identity and revisions
+///
+/// `agent_id` is a durable canonical profile binding, not caller-projected
+/// decoration. Once non-null, a backend MUST reject attempts to replace or
+/// clear it. Creation may stamp it atomically; the first bound send may set it
+/// from null. Every accepted meta mutation advances `revision`, and
+/// `expected_revision` on save MUST be enforced atomically with the write.
+///
+/// A keyed turn may reserve that revision before its user message is appended.
+/// In that case `active_operation_id` records which durable operation owns the
+/// reservation so the same operation can recover after a crash. Backends MUST
+/// persist and compare that field as part of the same `save_meta` CAS. It is
+/// internal concurrency state: create requests cannot set it, and list
+/// summaries intentionally omit it.
 pub mod conversation_store {
     use super::*;
 
@@ -1122,6 +1180,211 @@ pub mod conversation_store {
     pub const METHOD_CONVERSATION_LIST: &str = "conversation/list";
     /// `conversation/delete` — permanently remove a conversation (idempotent).
     pub const METHOD_CONVERSATION_DELETE: &str = "conversation/delete";
+    /// `conversation/operation_begin` — atomically admit, replay, or reject a keyed turn.
+    pub const METHOD_CONVERSATION_OPERATION_BEGIN: &str = "conversation/operation_begin";
+    /// `conversation/operation_load` — load the durable operation receipt.
+    pub const METHOD_CONVERSATION_OPERATION_LOAD: &str = "conversation/operation_load";
+    /// `conversation/operation_renew` — renew lease ownership.
+    pub const METHOD_CONVERSATION_OPERATION_RENEW: &str = "conversation/operation_renew";
+    /// `conversation/operation_bind_execution` — bind the resolved execution snapshot.
+    pub const METHOD_CONVERSATION_OPERATION_BIND_EXECUTION: &str =
+        "conversation/operation_bind_execution";
+    /// `conversation/operation_release` — release an unaccepted pending admission.
+    pub const METHOD_CONVERSATION_OPERATION_RELEASE: &str = "conversation/operation_release";
+    /// `conversation/operation_accept_user` — record canonical user-message acceptance.
+    pub const METHOD_CONVERSATION_OPERATION_ACCEPT_USER: &str =
+        "conversation/operation_accept_user";
+    /// `conversation/operation_terminalize` — record one immutable terminal outcome.
+    pub const METHOD_CONVERSATION_OPERATION_TERMINALIZE: &str =
+        "conversation/operation_terminalize";
+    /// Capability proving that operation receipts and leases are shared by all
+    /// hosts using this conversation backend.
+    pub const CAPABILITY_CONVERSATION_OPERATIONS_SHARED_V1: &str =
+        "conversation_operations_shared_v1";
+
+    /// Durable lifecycle state for an idempotent application chat send.
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ConversationOperationStatus {
+        Pending,
+        UserAccepted,
+        Completed,
+        AssistantFailed,
+        AssistantInterrupted,
+    }
+
+    impl ConversationOperationStatus {
+        /// Whether no provider execution may ever be admitted for this operation again.
+        pub fn is_terminal(self) -> bool {
+            matches!(
+                self,
+                Self::Completed | Self::AssistantFailed | Self::AssistantInterrupted
+            )
+        }
+    }
+
+    /// Canonical durable operation state. Lease credentials are returned only
+    /// on an acquired begin and are not part of replay/load receipts.
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperation {
+        pub operation_id: String,
+        pub conversation_id: String,
+        pub caller_key: String,
+        pub user_message_id: String,
+        pub assistant_message_id: String,
+        pub status: ConversationOperationStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub execution_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub user_seq: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub assistant_seq: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error_message: Option<String>,
+    }
+
+    /// Lease-bearing claim returned only to the host that owns shared authority.
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationClaim {
+        #[serde(flatten)]
+        pub operation: ConversationOperation,
+        pub lease_token: String,
+        pub lease_expires_at: i64,
+        #[serde(default)]
+        pub recovered: bool,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ConversationOperationBeginOutcome {
+        Acquired,
+        Replay,
+        InProgress,
+        Conflict,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationBeginRequest {
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        pub conversation_id: String,
+        #[schemars(length(min = 1, max = 128), regex(pattern = r"^[A-Za-z0-9._:-]+$"))]
+        pub caller_key: String,
+        pub request_hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationBeginResponse {
+        pub outcome: ConversationOperationBeginOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub claim: Option<ConversationOperationClaim>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub operation: Option<ConversationOperation>,
+    }
+
+    /// Shared key used by load and all lease-owned mutations. The backend
+    /// still derives actor and tenant authority from the authenticated context.
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationKey {
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        pub conversation_id: String,
+        #[schemars(length(min = 1, max = 128), regex(pattern = r"^[A-Za-z0-9._:-]+$"))]
+        pub caller_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationLoadRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationLoadResponse {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub operation: Option<ConversationOperation>,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationRenewRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationBindExecutionRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+        pub execution_hash: String,
+        /// Rebinding is permitted only for a reclaimed pending lease before
+        /// canonical user acceptance; ordinary claims may only bind once.
+        #[serde(default)]
+        pub allow_rebind: bool,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationReleaseRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationAcceptUserRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+        pub user_seq: u64,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationTerminalizeRequest {
+        #[serde(flatten)]
+        pub key: ConversationOperationKey,
+        pub operation_id: String,
+        pub lease_token: String,
+        pub status: ConversationOperationStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub assistant_seq: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error_message: Option<String>,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationOperationMutationResponse {
+        pub changed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub operation: Option<ConversationOperation>,
+    }
 
     /// Visibility of a conversation. Controls whether [`ConversationListRequest::as_user`]
     /// filtering surfaces it to users other than its `owner`.
@@ -1137,16 +1400,32 @@ pub mod conversation_store {
     }
 
     /// Conversation metadata — the continuity pointer, identity, and the
-    /// ownership/visibility fields that power per-user history.
+    /// immutable ownership/visibility fields that power per-user history.
     ///
     /// The shape matches the kernel's on-disk `meta.json` exactly so existing
     /// filesystem conversations and plugin-backed ones are interchangeable.
-    /// `owner` and `visibility` use serde defaults so legacy `meta.json`
-    /// files (which lack both) still deserialize as unowned + private.
+    /// Identity/concurrency fields use serde defaults so legacy `meta.json`
+    /// files still deserialize as unbound, revision zero, unowned + private.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
     pub struct ConversationMeta {
         /// Stable conversation id.
         pub id: String,
+        /// Canonical configured agent profile bound to this conversation.
+        /// `None` keeps legacy and intentionally unbound conversations neutral.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent_id: Option<String>,
+        /// Monotonic optimistic-concurrency token. Legacy metas start at zero.
+        #[serde(default)]
+        pub revision: u64,
+        /// Durable operation that owns the current revision reservation.
+        ///
+        /// `None` means no keyed operation owns a reservation. A present id
+        /// MUST contain 1..=128 ASCII alphanumeric or `._:-` characters.
+        /// Backends expose it through load-meta and accept it through
+        /// save-meta so the owning operation can recover after a crash.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = 128), regex(pattern = r"^[A-Za-z0-9._:-]+$"))]
+        pub active_operation_id: Option<String>,
         /// Wrapped tool that currently owns the native session. `None` until
         /// the first turn completes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1167,8 +1446,10 @@ pub mod conversation_store {
         /// Count of persisted turns (user + assistant).
         #[serde(default)]
         pub message_count: u64,
-        /// Authenticated user id that owns this conversation. `None` = unowned
-        /// (legacy on-disk conversations, or ones created without `--as-user`).
+        /// Authenticated user id that owns this conversation. Authenticated
+        /// stores stamp this from their call context and MUST NOT accept an
+        /// ordinary metadata update that changes or clears it. `None` is
+        /// reserved for explicitly configured legacy data.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub owner: Option<String>,
         /// Visibility. Defaults to [`Visibility::Private`] for legacy metas.
@@ -1213,6 +1494,12 @@ pub mod conversation_store {
     pub struct ConversationSummary {
         /// Conversation id.
         pub id: String,
+        /// Canonical configured agent profile bound to this conversation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent_id: Option<String>,
+        /// Current optimistic-concurrency token.
+        #[serde(default)]
+        pub revision: u64,
         /// Title, if any.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub title: Option<String>,
@@ -1234,11 +1521,22 @@ pub mod conversation_store {
         pub visibility: Visibility,
     }
 
-    /// Fields common to every conversation-store request: the project + scope
-    /// identity a multi-tenant backend partitions on. Flattened into each
+    /// Fields common to every conversation-store request: tenant, project, and
+    /// repository identity a shared backend partitions on. Flattened into each
     /// request so the wire payload stays flat.
-    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
     pub struct ConversationScope {
+        /// Opaque server-selected tenant/workspace partition key.
+        ///
+        /// The authenticated application layer derives this value from its
+        /// session and forwards the same value in the transport actor. A user
+        /// supplied workspace id is not authoritative. Authenticated stores
+        /// MUST fail closed if this field is absent or disagrees with the
+        /// transport-asserted actor tenant. Omission remains wire-compatible
+        /// only for explicitly configured single-tenant legacy stores.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = 128))]
+        pub tenant_id: Option<String>,
         /// Absolute project root path of the calling CLI/daemon.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub project_root: Option<String>,
@@ -1256,7 +1554,14 @@ pub mod conversation_store {
         /// Explicit conversation id; the backend assigns one when `None`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub id: Option<String>,
-        /// Owner to stamp onto the new conversation's meta.
+        /// Canonical agent binding to stamp atomically at creation time.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent_id: Option<String>,
+        /// Legacy owner compatibility assertion.
+        ///
+        /// Authenticated stores MUST stamp the owner from their call context;
+        /// when this field is present they may require it to match, but MUST
+        /// never treat it as caller authority.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub owner: Option<String>,
         /// Initial visibility for the new conversation.
@@ -1301,8 +1606,13 @@ pub mod conversation_store {
         /// Scope identity.
         #[serde(flatten)]
         pub scope: ConversationScope,
-        /// The meta to persist.
+        /// The meta to persist. `meta.owner` is an immutable assertion: an
+        /// ordinary save MUST NOT change or clear the stored owner.
         pub meta: ConversationMeta,
+        /// Apply only when the stored meta still has this revision. Backends
+        /// must enforce this atomically with the write (compare-and-swap).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub expected_revision: Option<u64>,
         /// Acting user id, when known. A backend MAY use it to authorize the
         /// mutation. `None` for unscoped/admin access.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1487,11 +1797,13 @@ mod tests {
             name: "x".to_string(),
             version: "0.1.0".to_string(),
             plugin_kind: PluginKind::Custom.to_string(),
+            plugin_kinds: Vec::new(),
             description: "x".to_string(),
             protocol_version: "1.0.0".to_string(),
             capabilities: vec![],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let value = serde_json::to_value(&manifest).unwrap();
         assert!(
@@ -1501,6 +1813,10 @@ mod tests {
         assert!(
             value.get("notification_buffer_size").is_none(),
             "unset notification_buffer_size must not be serialized for back-compat"
+        );
+        assert!(
+            value.get("supports_mcp").is_none(),
+            "unset supports_mcp must not be serialized for back-compat"
         );
         assert_eq!(value.get("plugin_kind"), Some(&serde_json::json!("custom")));
         assert_eq!(manifest.kind(), PluginKind::Custom);
@@ -1520,6 +1836,44 @@ mod tests {
         let manifest: PluginManifest =
             serde_json::from_value(value).expect("manifest should parse");
         assert_eq!(manifest.notification_buffer_size, Some(1024));
+    }
+
+    #[test]
+    fn manifest_supports_mcp_round_trips() {
+        // Explicit opt-out parses to Some(false).
+        let value = serde_json::json!({
+            "name": "animus-provider-portal",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "Out-of-tree provider",
+            "protocol_version": "1.2.0",
+            "capabilities": ["agent/run"],
+            "supports_mcp": false
+        });
+        let manifest: PluginManifest =
+            serde_json::from_value(value).expect("manifest should parse");
+        assert_eq!(manifest.supports_mcp, Some(false));
+
+        // A manifest that sets it serializes the field back out.
+        let encoded = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(encoded.get("supports_mcp"), Some(&serde_json::json!(false)));
+    }
+
+    #[test]
+    fn manifest_absent_supports_mcp_is_none() {
+        // Older plugins omit the field entirely -> undeclared (None), so the
+        // kernel keeps its historical default.
+        let value = serde_json::json!({
+            "name": "animus-provider-legacy",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "Legacy provider",
+            "protocol_version": "1.0.0",
+            "capabilities": ["agent/run"]
+        });
+        let manifest: PluginManifest =
+            serde_json::from_value(value).expect("manifest should parse");
+        assert_eq!(manifest.supports_mcp, None);
     }
 
     #[test]
@@ -1645,12 +1999,123 @@ mod tests {
         // A pre-existing meta.json lacks `owner` and `visibility` entirely.
         let legacy = r#"{"id":"conv-x","created_at":"2026-06-08T00:00:00Z","updated_at":"2026-06-08T00:00:00Z"}"#;
         let meta: ConversationMeta = serde_json::from_str(legacy).expect("legacy meta must parse");
-        assert_eq!(meta.owner, None, "missing owner must default to None (unowned)");
+        assert_eq!(
+            meta.agent_id, None,
+            "legacy conversations must remain unbound"
+        );
+        assert_eq!(
+            meta.revision, 0,
+            "legacy conversations start at revision zero"
+        );
+        assert_eq!(
+            meta.active_operation_id, None,
+            "legacy conversations have no active operation"
+        );
+        assert!(
+            serde_json::to_value(&meta)
+                .unwrap()
+                .get("active_operation_id")
+                .is_none(),
+            "an absent operation id remains absent on the legacy wire shape"
+        );
+        assert_eq!(
+            meta.owner, None,
+            "missing owner must default to None (unowned)"
+        );
         assert_eq!(
             meta.visibility,
             Visibility::Private,
             "missing visibility must default to Private"
         );
+    }
+
+    #[test]
+    fn conversation_agent_binding_round_trips_on_meta_summary_and_create() {
+        use conversation_store::{
+            ConversationCreateRequest, ConversationLoadMetaResponse, ConversationMeta,
+            ConversationSaveMetaRequest, ConversationScope, ConversationSummary,
+        };
+
+        let meta: ConversationMeta = serde_json::from_value(serde_json::json!({
+            "id": "conv-agent",
+            "agent_id": "researcher",
+            "revision": 4,
+            "active_operation_id": "chat.op:request-42",
+            "created_at": "2026-07-25T00:00:00Z",
+            "updated_at": "2026-07-25T00:00:00Z"
+        }))
+        .expect("bound meta must parse");
+        assert_eq!(meta.agent_id.as_deref(), Some("researcher"));
+        assert_eq!(meta.revision, 4);
+        assert_eq!(
+            meta.active_operation_id.as_deref(),
+            Some("chat.op:request-42")
+        );
+        assert_eq!(
+            serde_json::to_value(&meta).unwrap()["agent_id"],
+            "researcher"
+        );
+
+        let load = ConversationLoadMetaResponse {
+            meta: Some(meta.clone()),
+        };
+        assert_eq!(
+            serde_json::to_value(load).unwrap()["meta"]["active_operation_id"],
+            "chat.op:request-42"
+        );
+
+        let summary: ConversationSummary = serde_json::from_value(serde_json::json!({
+            "id": "conv-agent",
+            "agent_id": "researcher",
+            "revision": 4,
+            "message_count": 0,
+            "updated_at": "2026-07-25T00:00:00Z"
+        }))
+        .expect("bound summary must parse");
+        assert_eq!(summary.agent_id.as_deref(), Some("researcher"));
+
+        let create: ConversationCreateRequest = serde_json::from_value(serde_json::json!({
+            "project_root": "/repo",
+            "agent_id": "researcher"
+        }))
+        .expect("bound create request must parse");
+        assert_eq!(create.agent_id.as_deref(), Some("researcher"));
+
+        let save = ConversationSaveMetaRequest {
+            scope: ConversationScope::default(),
+            meta,
+            expected_revision: Some(4),
+            as_user: Some("user-1".to_string()),
+        };
+        let encoded = serde_json::to_value(save).unwrap();
+        assert_eq!(encoded["expected_revision"], 4);
+        assert_eq!(encoded["meta"]["agent_id"], "researcher");
+        assert_eq!(encoded["meta"]["active_operation_id"], "chat.op:request-42");
+    }
+
+    #[test]
+    fn conversation_active_operation_schema_has_safe_id_contract() {
+        use conversation_store::{
+            ConversationCreateRequest, ConversationMeta, ConversationSummary,
+        };
+        use schemars::schema_for;
+
+        let schema = serde_json::to_value(schema_for!(ConversationMeta)).unwrap();
+        let field = &schema["properties"]["active_operation_id"];
+        assert_eq!(field["maxLength"], 128);
+        assert_eq!(field["minLength"], 1);
+        assert_eq!(field["pattern"], r"^[A-Za-z0-9._:-]+$");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|name| name == "active_operation_id")),
+            "legacy metadata must not require active_operation_id"
+        );
+
+        let create = serde_json::to_value(schema_for!(ConversationCreateRequest)).unwrap();
+        assert!(create["properties"].get("active_operation_id").is_none());
+        let summary = serde_json::to_value(schema_for!(ConversationSummary)).unwrap();
+        assert!(summary["properties"].get("active_operation_id").is_none());
     }
 
     #[test]
@@ -1671,6 +2136,7 @@ mod tests {
         use conversation_store::{ConversationListRequest, ConversationScope};
         let req = ConversationListRequest {
             scope: ConversationScope {
+                tenant_id: Some("workspace-7".to_string()),
                 project_root: Some("/repo".to_string()),
                 repo_scope: Some("scope-1".to_string()),
             },
@@ -1678,12 +2144,64 @@ mod tests {
         };
         let encoded = serde_json::to_value(&req).unwrap();
         // Scope fields are flattened to the top level, not nested under "scope".
-        assert_eq!(encoded.get("project_root"), Some(&serde_json::json!("/repo")));
-        assert_eq!(encoded.get("repo_scope"), Some(&serde_json::json!("scope-1")));
+        assert_eq!(
+            encoded.get("tenant_id"),
+            Some(&serde_json::json!("workspace-7"))
+        );
+        assert_eq!(
+            encoded.get("project_root"),
+            Some(&serde_json::json!("/repo"))
+        );
+        assert_eq!(
+            encoded.get("repo_scope"),
+            Some(&serde_json::json!("scope-1"))
+        );
         assert_eq!(encoded.get("as_user"), Some(&serde_json::json!("user-7")));
         assert!(
             encoded.get("scope").is_none(),
             "scope must be flattened, not nested"
         );
+    }
+
+    #[test]
+    fn conversation_tenant_scope_is_optional_bounded_and_opaque() {
+        use conversation_store::{
+            ConversationAppendMessageRequest, ConversationCreateRequest, ConversationDeleteRequest,
+            ConversationListRequest, ConversationLoadMessagesRequest, ConversationLoadMetaRequest,
+            ConversationSaveMetaRequest, ConversationScope,
+        };
+        use schemars::schema_for;
+
+        let schema = serde_json::to_value(schema_for!(ConversationScope)).unwrap();
+        let field = &schema["properties"]["tenant_id"];
+        assert_eq!(field["minLength"], 1);
+        assert_eq!(field["maxLength"], 128);
+        assert!(field.get("pattern").is_none(), "tenant ids are opaque");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|name| name == "tenant_id")),
+            "legacy wire payloads remain parseable; stores decide whether legacy mode is configured"
+        );
+
+        let scope: ConversationScope = serde_json::from_value(serde_json::json!({
+            "tenant_id": "workspace / opaque:alpha"
+        }))
+        .expect("opaque tenant ids must round trip");
+        assert_eq!(scope.tenant_id.as_deref(), Some("workspace / opaque:alpha"));
+
+        let request_schemas = [
+            serde_json::to_value(schema_for!(ConversationCreateRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationLoadMetaRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationSaveMetaRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationAppendMessageRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationLoadMessagesRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationListRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationDeleteRequest)).unwrap(),
+        ];
+        assert!(request_schemas.iter().all(|request| {
+            request["properties"]["tenant_id"]["maxLength"] == 128
+                && request["properties"]["tenant_id"]["minLength"] == 1
+        }));
     }
 }

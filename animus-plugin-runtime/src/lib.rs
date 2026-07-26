@@ -87,6 +87,7 @@ impl ProviderInfo {
             name: self.plugin_name.to_string(),
             version: self.plugin_version.to_string(),
             plugin_kind: animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
+            plugin_kinds: Vec::new(),
             description: self.description.to_string(),
             protocol_version: PROTOCOL_VERSION.to_string(),
             capabilities: vec![
@@ -97,6 +98,7 @@ impl ProviderInfo {
             ],
             env_required: Vec::new(),
             notification_buffer_size: None,
+            supports_mcp: None,
         }
     }
 
@@ -107,6 +109,7 @@ impl ProviderInfo {
                 name: self.plugin_name.to_string(),
                 version: self.plugin_version.to_string(),
                 plugin_kind: animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
+                plugin_kinds: Vec::new(),
                 description: Some(self.description.to_string()),
             },
             capabilities: PluginCapabilities {

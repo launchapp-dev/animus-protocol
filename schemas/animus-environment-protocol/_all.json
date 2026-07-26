@@ -1,0 +1,601 @@
+{
+  "$defs": {
+    "EnvironmentHandle": {
+      "description": "Handle to a prepared execution context.\n\nThe kernel treats [`Self::id`] as opaque and passes the whole handle back on\nevery [`ExecRequest`] / [`TeardownRequest`]; only the originating plugin\ninterprets the id. [`Self::workspace_root`] is the absolute path (on the\nplugin's side of the world) that command `cwd`s resolve against.",
+      "properties": {
+        "id": {
+          "description": "Opaque, plugin-assigned identifier for this prepared context.",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Free-form plugin-specific metadata about the prepared context\n(container id, remote host, allocated ports, ...). Carried opaquely."
+        },
+        "workspace_root": {
+          "description": "Absolute path to the root of the materialized workspace. Command `cwd`s\n([`HarnessCommand::cwd`]) resolve relative to this path; for a\nmulti-repo workspace each [`RepoRef`] lives in a subdirectory under it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspace_root"
+      ],
+      "title": "EnvironmentHandle",
+      "type": "object"
+    },
+    "EnvironmentNode": {
+      "description": "A managed environment instance (a \"node\") as reported by the node-management\nsurface. Substrate-agnostic: a Railway service, a Docker container, a k8s pod.",
+      "properties": {
+        "created_at": {
+          "description": "Creation timestamp (ISO 8601) when the substrate exposes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Substrate-native id (railway service id, container id, ...).",
+          "type": "string"
+        },
+        "image": {
+          "description": "Image / impl ref backing the node, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Human-facing name (e.g. `animus-run-<hash>`).",
+          "type": "string"
+        },
+        "orphan": {
+          "description": "True when the node has no live owning run (a reap candidate).",
+          "type": "boolean"
+        },
+        "run_id": {
+          "description": "The animus run id this node serves, when recoverable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "Lifecycle state as the substrate reports it (`SUCCESS`, `FAILED`,\n`CRASHED`, `unknown`, ...).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "state",
+        "orphan"
+      ],
+      "title": "EnvironmentNode",
+      "type": "object"
+    },
+    "EnvironmentSpec": {
+      "description": "Declarative description of the execution context to materialize.\n\n[`Self::kind`] names the environment plugin id (e.g. `\"worktree\"`,\n`\"container\"`, `\"railway\"`) so the kernel can route a `prepare` call to the\nright plugin. The rest of the spec is intentionally open: [`Self::image`],\n[`Self::resources`], and [`Self::metadata`] carry plugin-specific knobs that\nthe kernel passes through opaquely.",
+      "properties": {
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables to inject into every command run in this context.\nNon-secret config only — secrets flow through the kernel's secret store,\nnot this field.",
+          "type": "object"
+        },
+        "image": {
+          "description": "Container/VM image reference for image-based environments (Docker tag,\nOCI ref, AMI id, ...). Ignored by the worktree environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Environment plugin id that should service this spec (the plugin's\ndeclared environment kind, not [`animus_plugin_protocol::PluginKind`]).",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Free-form plugin-specific metadata (labels, base_ref, network mode,\nmounts, ...). Carried opaquely by the kernel."
+        },
+        "repos": {
+          "description": "The repo set / workspace to materialize. May be empty for a\nrepo-less environment (e.g. a scratch container).",
+          "items": {
+            "$ref": "#/$defs/RepoRef"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "description": "Resource requests/limits for the environment (cpu, memory, disk,\ntimeout, region, ...). Shape is plugin-defined; carried opaquely."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "EnvironmentSpec",
+      "type": "object"
+    },
+    "ExecNotification": {
+      "description": "A streaming notification an environment plugin emits mid-exec during a\n[`METHOD_ENVIRONMENT_EXEC_STREAM`] call.\n\nThe runtime wraps these into [`NOTIFICATION_ENVIRONMENT_OUTPUT`] JSON-RPC\nnotifications and forwards them to the host on the same channel as the\neventual [`ExecResponse`] reply. This mirrors\n`animus-provider-protocol`'s `AgentNotification` server-streaming surface.",
+      "oneOf": [
+        {
+          "description": "Incremental stdout/stderr the command has produced. Maps to\n[`NOTIFICATION_ENVIRONMENT_OUTPUT`].",
+          "properties": {
+            "handle_id": {
+              "description": "Handle id of the environment this exec runs in.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "output",
+              "type": "string"
+            },
+            "stream": {
+              "$ref": "#/$defs/ExecStream",
+              "description": "Which stream this delta belongs to."
+            },
+            "text": {
+              "description": "The output delta (UTF-8).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "handle_id",
+            "stream",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One journal event from an in-flight [`METHOD_ENVIRONMENT_EXEC_SESSION`],\nforwarded verbatim from the node's own workflow journal. Maps to\n[`NOTIFICATION_ENVIRONMENT_JOURNAL`].",
+          "properties": {
+            "event_kind": {
+              "description": "The journal event kind (e.g. `phase_started`, `output_chunk`,\n`tool_call`, `run_failed`).",
+              "type": "string"
+            },
+            "handle_id": {
+              "description": "Handle id of the environment this session runs in.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "journal",
+              "type": "string"
+            },
+            "payload": {
+              "description": "The event's full payload, forwarded verbatim."
+            },
+            "phase_id": {
+              "description": "Phase this event belongs to, when phase-scoped.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "description": "Event status discriminator, when present.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "terminal": {
+              "description": "True on the final event of the session (the run reached a terminal\nstatus), signalling the host to settle.",
+              "type": "boolean"
+            },
+            "ts": {
+              "description": "Event timestamp (RFC 3339).",
+              "type": "string"
+            },
+            "workflow_id": {
+              "description": "The node-local run id this event belongs to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "handle_id",
+            "event_kind",
+            "ts",
+            "payload"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ExecNotification"
+    },
+    "ExecRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_EXEC`] and\n[`METHOD_ENVIRONMENT_EXEC_STREAM`].",
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/HarnessCommand",
+          "description": "The command to run."
+        },
+        "handle": {
+          "$ref": "#/$defs/EnvironmentHandle",
+          "description": "The prepared context to run in."
+        },
+        "stdin": {
+          "description": "Bytes to feed to the command's stdin, up front, as a UTF-8 string.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout_secs": {
+          "description": "Hard wall-clock timeout in seconds. When exceeded the environment kills\nthe command and returns [`ExecResponse::timed_out`] = true. `None` means\nno explicit timeout (the environment may still impose its own).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "handle",
+        "command"
+      ],
+      "title": "ExecRequest",
+      "type": "object"
+    },
+    "ExecResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_EXEC`] /\n[`METHOD_ENVIRONMENT_EXEC_STREAM`].\n\nFor [`METHOD_ENVIRONMENT_EXEC_STREAM`], [`Self::stdout`] / [`Self::stderr`]\ncarry the aggregated output already delivered incrementally via\n[`ExecNotification`]s; a client that consumed the stream can ignore them.",
+      "properties": {
+        "exit_code": {
+          "description": "Process exit code. `None` when the process was terminated by a signal or\nkilled on timeout without producing an exit code.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "description": "Aggregated stderr captured from the command.",
+          "type": "string"
+        },
+        "stdout": {
+          "description": "Aggregated stdout captured from the command.",
+          "type": "string"
+        },
+        "timed_out": {
+          "description": "True when the command was killed because it exceeded\n[`ExecRequest::timeout_secs`].",
+          "type": "boolean"
+        }
+      },
+      "title": "ExecResponse",
+      "type": "object"
+    },
+    "ExecSessionRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`] — dispatch a subject\nto the environment's own animus (REQ-052 remote-animus).",
+      "properties": {
+        "dispatch_input": {
+          "description": "Optional dispatch input forwarded to the node's run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "handle": {
+          "$ref": "#/$defs/EnvironmentHandle",
+          "description": "The prepared context (whose in-container animus runs the subject)."
+        },
+        "subject_id": {
+          "description": "The subject to dispatch, qualified `kind:id` (e.g. `task:TASK-1`).",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The DELEGATING run's workflow id (REQ-052 one-id). When set, the node\nMUST execute INTO this already-bootstrapped run (resume-existing) rather\nthan minting its own, so exactly ONE journal row exists for the dispatch\nand the node's transcript lands on the id the portal reads. `None` keeps\nthe legacy behavior (the node mints its own run id).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow_ref": {
+          "description": "Workflow to run the subject through. `None` uses the node's default\nrouting for the subject's kind.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "handle",
+        "subject_id"
+      ],
+      "title": "ExecSessionRequest",
+      "type": "object"
+    },
+    "ExecSessionResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`]: the node-local run\nid the dispatch spawned and its terminal status.",
+      "properties": {
+        "status": {
+          "description": "Terminal status of the node-local run (e.g. `completed`, `failed`,\n`escalated`, `cancelled`, or `no-run` when nothing was dispatched).",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The node-local workflow run id, when one was spawned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "ExecSessionResponse",
+      "type": "object"
+    },
+    "ExecStream": {
+      "description": "Which output stream an [`ExecNotification`] delta belongs to.",
+      "oneOf": [
+        {
+          "const": "stdout",
+          "description": "Standard output.",
+          "type": "string"
+        },
+        {
+          "const": "stderr",
+          "description": "Standard error.",
+          "type": "string"
+        }
+      ],
+      "title": "ExecStream"
+    },
+    "GetNodeRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_GET`].",
+      "properties": {
+        "id": {
+          "description": "Substrate id or name of the node to describe.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "GetNodeRequest",
+      "type": "object"
+    },
+    "GetNodeResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_GET`].",
+      "properties": {
+        "node": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentNode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The node, or null when no node matched."
+        }
+      },
+      "title": "GetNodeResponse",
+      "type": "object"
+    },
+    "HarnessCommand": {
+      "description": "A command to run inside a prepared environment.\n\nThis is the harness invocation the provider layer would otherwise run\ndirectly on the host; the environment plugin runs it inside the prepared\ncontext instead.",
+      "properties": {
+        "args": {
+          "description": "Arguments passed to [`Self::program`], not including `argv[0]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "description": "Working directory for the command, relative to\n[`EnvironmentHandle::workspace_root`]. When unset, runs in the primary\nrepo's directory (or the workspace root when there is no primary repo).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra environment variables for this command, merged over (and\noverriding) [`EnvironmentSpec::env`].",
+          "type": "object"
+        },
+        "program": {
+          "description": "Executable to run (looked up on the environment's `PATH` unless\nabsolute).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "program"
+      ],
+      "title": "HarnessCommand",
+      "type": "object"
+    },
+    "ListNodesRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_LIST`] (no parameters).",
+      "title": "ListNodesRequest",
+      "type": "object"
+    },
+    "ListNodesResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_LIST`].",
+      "properties": {
+        "nodes": {
+          "default": [],
+          "description": "Every known environment node.",
+          "items": {
+            "$ref": "#/$defs/EnvironmentNode"
+          },
+          "type": "array"
+        }
+      },
+      "title": "ListNodesResponse",
+      "type": "object"
+    },
+    "PrepareRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_PREPARE`].",
+      "properties": {
+        "spec": {
+          "$ref": "#/$defs/EnvironmentSpec",
+          "description": "The environment to materialize."
+        }
+      },
+      "required": [
+        "spec"
+      ],
+      "title": "PrepareRequest",
+      "type": "object"
+    },
+    "PrepareResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_PREPARE`].",
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/EnvironmentHandle",
+          "description": "Handle to the materialized context, used for subsequent `exec` and\n`teardown` calls."
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "title": "PrepareResponse",
+      "type": "object"
+    },
+    "ReapRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_REAP`]. With no fields set, reap\ndeletes only dead nodes (always safe — a live node is never dead).",
+      "properties": {
+        "all": {
+          "description": "Also reap non-dead nodes that have no live owning run (needs `force`).",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "description": "Report what WOULD be reaped without deleting anything.",
+          "type": "boolean"
+        },
+        "force": {
+          "description": "Required alongside `all` — guards a fresh (no-liveness) reaper from\ntreating every healthy node as an orphan.",
+          "type": "boolean"
+        },
+        "older_than_secs": {
+          "description": "Only reap nodes at least this many seconds old.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "title": "ReapRequest",
+      "type": "object"
+    },
+    "ReapResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_REAP`].",
+      "properties": {
+        "deleted": {
+          "default": [],
+          "description": "Substrate ids deleted (or that WOULD be deleted, when `dry_run`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Echoes the request's `dry_run`.",
+          "type": "boolean"
+        },
+        "kept": {
+          "default": [],
+          "description": "Nodes spared.",
+          "items": {
+            "$ref": "#/$defs/EnvironmentNode"
+          },
+          "type": "array"
+        }
+      },
+      "title": "ReapResponse",
+      "type": "object"
+    },
+    "RepoRef": {
+      "description": "A single repository in an environment's workspace (repo set).\n\nA multi-repo workspace (see the top-level `workspace:` config) checks out\nmore than one `RepoRef` under [`EnvironmentHandle::workspace_root`], each in\nits own subdirectory named by [`RepoRef::name`] (or derived from\n[`RepoRef::url`] when `name` is unset).",
+      "properties": {
+        "git_ref": {
+          "description": "Git ref (branch, tag, or commit) to check out. When unset, the plugin\nuses the remote's default branch.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Subdirectory name to check the repo out under, relative to\n[`EnvironmentHandle::workspace_root`]. When unset, the plugin derives it\nfrom the last path segment of [`Self::url`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "primary": {
+          "description": "True when this repo is the primary workspace repo (the one a\nsingle-repo subject maps to, and the default `cwd` for\n[`HarnessCommand`]). At most one repo in a set should be primary; when\nnone is marked, the first entry is primary.",
+          "type": "boolean"
+        },
+        "url": {
+          "description": "Clone URL or local path for the repository. The originating environment\nplugin interprets the value (an `https://`/`git@` remote for the\nworktree/container/remote runners, or a local path for a bind-mount).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "RepoRef",
+      "type": "object"
+    },
+    "TeardownNodeRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_TEARDOWN_NODE`].",
+      "properties": {
+        "id": {
+          "description": "Substrate id or name of the node to destroy.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "TeardownNodeRequest",
+      "type": "object"
+    },
+    "TeardownNodeResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_TEARDOWN_NODE`]. Idempotent — an\nalready-gone node yields an empty `deleted`.",
+      "properties": {
+        "deleted": {
+          "default": [],
+          "description": "Substrate ids actually deleted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "TeardownNodeResponse",
+      "type": "object"
+    },
+    "TeardownRequest": {
+      "description": "Request payload for [`METHOD_ENVIRONMENT_TEARDOWN`].",
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/EnvironmentHandle",
+          "description": "The prepared context to dispose of."
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "title": "TeardownRequest",
+      "type": "object"
+    },
+    "TeardownResponse": {
+      "description": "Response payload for [`METHOD_ENVIRONMENT_TEARDOWN`]. Empty on success; the\nwire-level error shape is `animus_plugin_protocol::RpcError`.",
+      "title": "TeardownResponse",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-environment-protocol"
+}

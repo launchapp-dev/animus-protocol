@@ -102,6 +102,16 @@ pub struct WorkflowPhaseConfig {
     pub skip_if: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<BudgetConfig>,
+    /// Environment plugin id (or an [`EnvironmentRouting`] rule key) this phase
+    /// should run in, overriding the workflow- and config-level defaults.
+    /// `None` falls through to the workflow's `environment`, then to
+    /// [`EnvironmentRouting`]. See [[TASK-163]].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    /// Named [`Workspace`] (repo set) this phase runs against, overriding the
+    /// workflow-level `workspace`. `None` inherits the workflow default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,6 +273,82 @@ impl WorktreeConfig {
     }
 }
 
+/// A single repository in a named [`Workspace`] (repo set). Mirrors the
+/// `RepoRef` wire type in `animus-environment-protocol`; this is the
+/// YAML/postgres-authorable config form the kernel compiles into an
+/// `EnvironmentSpec`. See [[TASK-157]].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceRepo {
+    /// Clone URL or local path for the repository.
+    pub url: String,
+    /// Subdirectory to check the repo out under. Defaults to the last path
+    /// segment of [`Self::url`] when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Git ref (branch, tag, or commit) to check out. Defaults to the remote's
+    /// default branch when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
+    /// Marks the primary repo in the set (the default command `cwd`). At most
+    /// one repo should be primary; when none is, the first entry wins.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub primary: bool,
+}
+
+/// A named repo set an environment materializes as a single workspace.
+/// Referenced by name from `workflow.workspace` / `phase.workspace`. See
+/// [[TASK-157]].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct Workspace {
+    /// Repositories that make up the workspace, each checked out under its own
+    /// subdirectory in the environment's workspace root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<WorkspaceRepo>,
+}
+
+/// Config-level environment routing: the default environment plugin and an
+/// ordered list of match rules. The kernel evaluates [`Self::rules`] top-to-
+/// bottom and falls back to [`Self::default`] when none match. See [[TASK-163]].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct EnvironmentRouting {
+    /// Environment plugin id used when no rule matches (and no workflow/phase
+    /// override applies). `None` means "no explicit environment" — the runner
+    /// falls back to its built-in local behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    /// Ordered match rules, evaluated first-match-wins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<EnvironmentRule>,
+}
+
+/// One environment-routing rule: a match predicate plus the environment (and
+/// optional spec overrides) to use when it matches. See [[TASK-163]].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnvironmentRule {
+    /// Predicate this rule matches on. An empty match matches everything.
+    #[serde(rename = "match", default)]
+    pub match_on: EnvironmentMatch,
+    /// Environment plugin id to route matching work to.
+    pub environment: String,
+    /// Optional spec overrides (image, resources, env, ...) merged into the
+    /// compiled `EnvironmentSpec` for matching work. Carried opaquely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<BTreeMap<String, Value>>,
+}
+
+/// Match predicate for an [`EnvironmentRule`]. Fields are ANDed; an unset field
+/// is a wildcard. An all-unset match matches everything (useful as a
+/// catch-all). See [[TASK-163]].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct EnvironmentMatch {
+    /// Match on subject kind (e.g. `"task"`, `"requirement"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Match on harness / provider tool id (e.g. `"claude"`, `"codex"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+}
+
 /// Top-level declarative secret reference. `${secret.<key>}` interpolation
 /// resolves the named env var at compile time; required-but-unset fails the
 /// compile with a file path + line number diagnostic.
@@ -292,6 +378,15 @@ pub struct WorkflowDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeConfig>,
     pub budget: Option<BudgetConfig>,
+    /// Environment plugin id (or an [`EnvironmentRouting`] rule key) every phase
+    /// in this workflow runs in unless the phase overrides it. `None` falls
+    /// through to [`EnvironmentRouting`]. See [[TASK-163]].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    /// Named [`Workspace`] (repo set) this workflow runs against. `None` uses
+    /// the environment's default single-repo workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 impl WorkflowDefinition {
@@ -622,6 +717,26 @@ pub struct WorkflowSchedule {
     pub input: Option<Value>,
     #[serde(default = "default_schedule_enabled")]
     pub enabled: bool,
+    /// Optional config-declared owner. When set, the daemon scheduler mints a
+    /// system [`Actor`](animus_actor::Actor) for this `user_id` and runs the
+    /// dispatched workflow as that user (resolving their config partition and
+    /// integrations). `None` keeps the legacy global (actor-less) dispatch.
+    ///
+    /// TRUST BOUNDARY: the owner is asserted at config-authoring time — the
+    /// workflow config is itself owner-scoped / admin-authored (e.g. served by
+    /// `config-postgres` team_* rows or admin-curated YAML), never derived from
+    /// runtime or agent-generated content. Minting an actor here therefore
+    /// respects the transport-asserted-identity model: it is the one place the
+    /// kernel constructs an actor rather than relaying one, and the assertion
+    /// originates from a trusted, authored source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_id: Option<String>,
+    /// Optional advisory claims minted alongside [`owner_id`](Self::owner_id)
+    /// (e.g. `["admin"]`). Ignored when `owner_id` is `None`. Mirrors
+    /// [`Actor::claims`](animus_actor::Actor::claims): advisory only, the
+    /// kernel never branches on them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<String>,
 }
 
 pub(crate) fn default_schedule_enabled() -> bool {
@@ -828,6 +943,14 @@ pub struct WorkflowConfig {
     pub daemon: Option<DaemonConfig>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: BTreeMap<String, SecretRef>,
+    /// Named repo sets ([`Workspace`]) workflows/phases can reference by name.
+    /// See [[TASK-157]].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspaces: BTreeMap<String, Workspace>,
+    /// Config-level environment routing (default + match rules). Workflow- and
+    /// phase-level `environment` overrides win over these. See [[TASK-163]].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_routing: Option<EnvironmentRouting>,
 }
 
 impl Default for WorkflowConfig {
@@ -841,6 +964,10 @@ impl Default for WorkflowConfig {
 pub enum WorkflowConfigSource {
     Json,
     Yaml,
+    /// Base config acquired from an installed `config_source` plugin
+    /// (e.g. animus-config-postgres). The on-disk `path` is just the
+    /// project root, not a real YAML file. See TASK-177.
+    Plugin,
     Builtin,
     BuiltinFallback,
 }
@@ -850,6 +977,7 @@ impl WorkflowConfigSource {
         match self {
             Self::Json => "json",
             Self::Yaml => "yaml",
+            Self::Plugin => "plugin",
             Self::Builtin => "builtin",
             Self::BuiltinFallback => "builtin_fallback",
         }

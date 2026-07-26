@@ -1338,6 +1338,13 @@ pub struct PhaseDecision {
     pub commit_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_phase: Option<String>,
+    /// Custom routing key emitted by an agent or command phase when the
+    /// verdict string is not one of the built-in `advance`/`rework`/`skip`/
+    /// `fail` values. Carries the raw verdict verbatim (e.g. `needs-research`)
+    /// so the workflow executor can route it through the phase's `on_verdict`
+    /// map to an arbitrary target phase. `None` for built-in verdicts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1492,8 +1499,10 @@ pub struct OrchestratorWorkflow {
     pub id: String,
     pub task_id: String,
     pub workflow_ref: Option<String>,
-    #[serde(default = "default_workflow_subject_ref")]
-    pub subject: SubjectRef,
+    /// The subject this workflow run targets, or `None` for a subjectless run.
+    /// Omitted from the wire when absent; older records always carry a subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<SubjectRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -1517,10 +1526,6 @@ pub struct OrchestratorWorkflow {
     pub total_reworks: u32,
     #[serde(default)]
     pub decision_history: Vec<WorkflowDecisionRecord>,
-}
-
-fn default_workflow_subject_ref() -> SubjectRef {
-    SubjectRef::task(String::new())
 }
 
 impl OrchestratorWorkflow {
@@ -1685,16 +1690,19 @@ impl SubjectDispatchExt for SubjectDispatch {
     }
 
     fn to_workflow_run_input(&self) -> WorkflowRunInput {
-        let mut input = match self.subject.kind() {
-            SUBJECT_KIND_TASK => WorkflowRunInput::for_task(self.subject.id.clone(), Some(self.workflow_ref.clone())),
-            SUBJECT_KIND_REQUIREMENT => {
-                WorkflowRunInput::for_requirement(self.subject.id.clone(), Some(self.workflow_ref.clone()))
-            }
-            _ => WorkflowRunInput::for_custom(
-                self.subject.title.clone().unwrap_or_else(|| self.subject.id.clone()),
-                self.subject.description.clone().unwrap_or_default(),
-                Some(self.workflow_ref.clone()),
-            ),
+        let mut input = match self.subject.as_ref() {
+            None => WorkflowRunInput::subjectless(Some(self.workflow_ref.clone())),
+            Some(subject) => match subject.kind() {
+                SUBJECT_KIND_TASK => WorkflowRunInput::for_task(subject.id.clone(), Some(self.workflow_ref.clone())),
+                SUBJECT_KIND_REQUIREMENT => {
+                    WorkflowRunInput::for_requirement(subject.id.clone(), Some(self.workflow_ref.clone()))
+                }
+                _ => WorkflowRunInput::for_custom(
+                    subject.title.clone().unwrap_or_else(|| subject.id.clone()),
+                    subject.description.clone().unwrap_or_default(),
+                    Some(self.workflow_ref.clone()),
+                ),
+            },
         };
         input.subject = self.subject.clone();
         input.with_input(self.input.clone()).with_vars(self.vars.clone())
@@ -1761,8 +1769,10 @@ impl SubjectExecutionFact {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunInput {
-    #[serde(default = "default_workflow_subject_ref")]
-    pub subject: SubjectRef,
+    /// The subject this run targets, or `None` for a subjectless run. Omitted
+    /// from the wire when absent; older payloads always carry a subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<SubjectRef>,
     #[serde(default)]
     pub workflow_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "input_json")]
@@ -1785,7 +1795,31 @@ impl WorkflowRunInput {
         let requirement_id = subject.requirement_id().map(ToOwned::to_owned);
         let title = subject.title.clone();
         let description = subject.description.clone();
-        Self { subject, task_id, workflow_ref, input: None, vars: HashMap::new(), requirement_id, title, description }
+        Self {
+            subject: Some(subject),
+            task_id,
+            workflow_ref,
+            input: None,
+            vars: HashMap::new(),
+            requirement_id,
+            title,
+            description,
+        }
+    }
+
+    /// Construct a subjectless run input (no bound subject). All subject-derived
+    /// fields are empty/absent so downstream subject template vars are absent.
+    pub fn subjectless(workflow_ref: Option<String>) -> Self {
+        Self {
+            subject: None,
+            task_id: String::new(),
+            workflow_ref,
+            input: None,
+            vars: HashMap::new(),
+            requirement_id: None,
+            title: None,
+            description: None,
+        }
     }
 
     pub fn for_task(task_id: String, workflow_ref: Option<String>) -> Self {
@@ -1800,16 +1834,16 @@ impl WorkflowRunInput {
         Self::for_subject(SubjectRef::custom(title, description), workflow_ref)
     }
 
-    pub fn subject(&self) -> &SubjectRef {
-        &self.subject
+    pub fn subject(&self) -> Option<&SubjectRef> {
+        self.subject.as_ref()
     }
 
-    pub fn subject_id(&self) -> &str {
-        self.subject.id()
+    pub fn subject_id(&self) -> Option<&str> {
+        self.subject.as_ref().map(SubjectRef::id)
     }
 
-    pub fn subject_kind(&self) -> &str {
-        self.subject.kind()
+    pub fn subject_kind(&self) -> Option<&str> {
+        self.subject.as_ref().map(SubjectRef::kind)
     }
 
     pub fn workflow_ref(&self) -> Option<&str> {
@@ -1968,9 +2002,12 @@ mod tests {
         let serialized = serde_json::to_value(&dispatch).expect("generic dispatch should serialize");
         assert_eq!(serialized["subject"]["kind"], "pack.review");
         assert_eq!(serialized["subject"]["id"], "REV-1");
-        assert_eq!(dispatch.subject_kind(), "pack.review");
-        assert_eq!(dispatch.subject_key(), "pack.review::REV-1");
-        assert_eq!(dispatch.to_workflow_run_input().subject(), &SubjectRef::new("pack.review", "REV-1"));
+        assert_eq!(dispatch.subject_kind(), Some("pack.review"));
+        assert_eq!(dispatch.subject_key().as_deref(), Some("pack.review::REV-1"));
+        assert_eq!(
+            dispatch.to_workflow_run_input().subject(),
+            Some(&SubjectRef::new("pack.review", "REV-1"))
+        );
     }
 
     #[test]
@@ -1987,9 +2024,36 @@ mod tests {
         }))
         .expect("legacy requirement dispatch should deserialize");
 
-        assert_eq!(dispatch.subject_kind(), SUBJECT_KIND_REQUIREMENT);
-        assert_eq!(dispatch.subject_id(), "REQ-39");
-        assert_eq!(dispatch.subject_key(), "REQ-39");
+        assert_eq!(dispatch.subject_kind(), Some(SUBJECT_KIND_REQUIREMENT));
+        assert_eq!(dispatch.subject_id(), Some("REQ-39"));
+        assert_eq!(dispatch.subject_key().as_deref(), Some("REQ-39"));
+    }
+
+    #[test]
+    fn subjectless_dispatch_maps_to_subjectless_run_input() {
+        let dispatch = SubjectDispatch::subjectless(
+            "relate",
+            "manual",
+            Utc.with_ymd_and_hms(2026, 3, 10, 9, 30, 0).unwrap(),
+        );
+        assert!(dispatch.subject().is_none());
+        assert_eq!(dispatch.subject_id(), None);
+
+        // Subjectless dispatch omits `subject` from the wire entirely.
+        let serialized = serde_json::to_value(&dispatch).expect("subjectless dispatch serializes");
+        assert!(serialized.get("subject").is_none(), "subject must be absent: {serialized}");
+
+        // ... and lowers to a subjectless run input (all subject-derived fields
+        // empty/absent).
+        let input = dispatch.to_workflow_run_input();
+        assert!(input.subject().is_none());
+        assert_eq!(input.subject_id(), None);
+        assert!(input.task_id.is_empty());
+        assert_eq!(input.requirement_id, None);
+        assert_eq!(input.workflow_ref(), Some("relate"));
+
+        let input_value = serde_json::to_value(&input).expect("subjectless run input serializes");
+        assert!(input_value.get("subject").is_none(), "run input subject must be absent: {input_value}");
     }
 
     #[test]

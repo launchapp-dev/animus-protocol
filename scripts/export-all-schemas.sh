@@ -31,6 +31,7 @@ CRATES=(
     "animus-durable-store-protocol"
     "animus-memory-store-protocol"
     "animus-notifier-protocol"
+    "animus-environment-protocol"
 )
 
 for crate in "${CRATES[@]}"; do
