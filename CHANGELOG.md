@@ -5,9 +5,17 @@ This file tracks notable changes to the workspace tag stream
 source of truth for individual crate bumps. Tags map roughly to
 "workspace cuts" — a tag may bump multiple crates at once.
 
-## Unreleased — declared `supports_mcp` manifest capability
+## Unreleased
 
 ### Added
+
+`animus-plugin-protocol`: optional
+`ConversationMeta.active_operation_id` on the canonical load/save-meta path.
+The field durably identifies which keyed chat operation owns a revision
+reservation so that operation can recover after a crash. It is absent by
+default for backward compatibility, constrained to 1..=128 ASCII alphanumeric
+or `._:-` characters, writable only through `conversation/save_meta`, and
+intentionally omitted from create requests and list summaries.
 
 `animus-plugin-protocol` (0.1.18): `PluginManifest.supports_mcp: Option<bool>`
 — a first-class, plugin-DECLARED capability field the kernel reads instead of

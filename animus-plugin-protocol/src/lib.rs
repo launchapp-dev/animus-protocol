@@ -1145,6 +1145,13 @@ impl From<TriggerAckStatus> for String {
 /// clear it. Creation may stamp it atomically; the first bound send may set it
 /// from null. Every accepted meta mutation advances `revision`, and
 /// `expected_revision` on save MUST be enforced atomically with the write.
+///
+/// A keyed turn may reserve that revision before its user message is appended.
+/// In that case `active_operation_id` records which durable operation owns the
+/// reservation so the same operation can recover after a crash. Backends MUST
+/// persist and compare that field as part of the same `save_meta` CAS. It is
+/// internal concurrency state: create requests cannot set it, and list
+/// summaries intentionally omit it.
 pub mod conversation_store {
     use super::*;
 
@@ -1194,6 +1201,15 @@ pub mod conversation_store {
         /// Monotonic optimistic-concurrency token. Legacy metas start at zero.
         #[serde(default)]
         pub revision: u64,
+        /// Durable operation that owns the current revision reservation.
+        ///
+        /// `None` means no keyed operation owns a reservation. A present id
+        /// MUST contain 1..=128 ASCII alphanumeric or `._:-` characters.
+        /// Backends expose it through load-meta and accept it through
+        /// save-meta so the owning operation can recover after a crash.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = 128), regex(pattern = r"^[A-Za-z0-9._:-]+$"))]
+        pub active_operation_id: Option<String>,
         /// Wrapped tool that currently owns the native session. `None` until
         /// the first turn completes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1758,6 +1774,17 @@ mod tests {
             "legacy conversations start at revision zero"
         );
         assert_eq!(
+            meta.active_operation_id, None,
+            "legacy conversations have no active operation"
+        );
+        assert!(
+            serde_json::to_value(&meta)
+                .unwrap()
+                .get("active_operation_id")
+                .is_none(),
+            "an absent operation id remains absent on the legacy wire shape"
+        );
+        assert_eq!(
             meta.owner, None,
             "missing owner must default to None (unowned)"
         );
@@ -1771,14 +1798,15 @@ mod tests {
     #[test]
     fn conversation_agent_binding_round_trips_on_meta_summary_and_create() {
         use conversation_store::{
-            ConversationCreateRequest, ConversationMeta, ConversationSaveMetaRequest,
-            ConversationScope, ConversationSummary,
+            ConversationCreateRequest, ConversationLoadMetaResponse, ConversationMeta,
+            ConversationSaveMetaRequest, ConversationScope, ConversationSummary,
         };
 
         let meta: ConversationMeta = serde_json::from_value(serde_json::json!({
             "id": "conv-agent",
             "agent_id": "researcher",
             "revision": 4,
+            "active_operation_id": "chat.op:request-42",
             "created_at": "2026-07-25T00:00:00Z",
             "updated_at": "2026-07-25T00:00:00Z"
         }))
@@ -1786,8 +1814,20 @@ mod tests {
         assert_eq!(meta.agent_id.as_deref(), Some("researcher"));
         assert_eq!(meta.revision, 4);
         assert_eq!(
+            meta.active_operation_id.as_deref(),
+            Some("chat.op:request-42")
+        );
+        assert_eq!(
             serde_json::to_value(&meta).unwrap()["agent_id"],
             "researcher"
+        );
+
+        let load = ConversationLoadMetaResponse {
+            meta: Some(meta.clone()),
+        };
+        assert_eq!(
+            serde_json::to_value(load).unwrap()["meta"]["active_operation_id"],
+            "chat.op:request-42"
         );
 
         let summary: ConversationSummary = serde_json::from_value(serde_json::json!({
@@ -1816,6 +1856,32 @@ mod tests {
         let encoded = serde_json::to_value(save).unwrap();
         assert_eq!(encoded["expected_revision"], 4);
         assert_eq!(encoded["meta"]["agent_id"], "researcher");
+        assert_eq!(encoded["meta"]["active_operation_id"], "chat.op:request-42");
+    }
+
+    #[test]
+    fn conversation_active_operation_schema_has_safe_id_contract() {
+        use conversation_store::{
+            ConversationCreateRequest, ConversationMeta, ConversationSummary,
+        };
+        use schemars::schema_for;
+
+        let schema = serde_json::to_value(schema_for!(ConversationMeta)).unwrap();
+        let field = &schema["properties"]["active_operation_id"];
+        assert_eq!(field["maxLength"], 128);
+        assert_eq!(field["minLength"], 1);
+        assert_eq!(field["pattern"], r"^[A-Za-z0-9._:-]+$");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|name| name == "active_operation_id")),
+            "legacy metadata must not require active_operation_id"
+        );
+
+        let create = serde_json::to_value(schema_for!(ConversationCreateRequest)).unwrap();
+        assert!(create["properties"].get("active_operation_id").is_none());
+        let summary = serde_json::to_value(schema_for!(ConversationSummary)).unwrap();
+        assert!(summary["properties"].get("active_operation_id").is_none());
     }
 
     #[test]

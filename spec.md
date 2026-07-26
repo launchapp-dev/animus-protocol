@@ -508,6 +508,31 @@ When [`NotifierSchema.supports_flush`](#125-notifier-types) is `true`, the daemo
 
 Returns a [`NotifierSchema`](#125-notifier-types) capability declaration (advertised `connector_kinds` plus the `supports_flush` flag). SHOULD be cheap (constant or one-shot at startup).
 
+### 7.10 Conversation store methods
+
+Conversation stores persist chat metadata and messages behind the
+`conversation_store` plugin kind. The canonical metadata RPCs are:
+
+- `conversation/load_meta` — returns `{ "meta": ConversationMeta | null }`.
+- `conversation/save_meta` — accepts `{ "meta": ConversationMeta,
+  "expected_revision": integer | null, ...scope }`; the backend MUST compare
+  `expected_revision` and write the metadata atomically.
+
+`ConversationMeta.active_operation_id` is optional internal concurrency state.
+A keyed turn sets it when reserving a revision, which lets that same durable
+operation prove ownership and continue if the host crashes before appending the
+user message. A backend MUST return it from `conversation/load_meta` and MUST
+persist updates supplied through `conversation/save_meta` in the same atomic
+compare-and-swap as `revision`.
+
+When present, `active_operation_id` MUST be 1 through 128 ASCII characters and
+every character MUST be an ASCII letter, digit, `.`, `_`, `:`, or `-`
+(`^[A-Za-z0-9._:-]+$`). Backends MUST reject invalid values. Absence means no
+operation owns a revision reservation and is the default for legacy metadata.
+The field is not accepted by `conversation/create` and is intentionally omitted
+from `ConversationSummary` / `conversation/list`, because callers do not select
+reservation ownership and list views do not need the internal identifier.
+
 ## 8. Plugin protocol types
 
 ### 8.1 `PROTOCOL_VERSION`
