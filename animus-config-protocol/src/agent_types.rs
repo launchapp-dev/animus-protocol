@@ -17,6 +17,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use animus_application_protocol::{
+    ApplicationPermissionIntent as ApplicationChatPermissionIntent,
+    ApplicationReasoningEffort as ApplicationChatReasoningEffort,
+    MAX_APPLICATION_CHAT_CONTROL_REF_BYTES,
+};
+use animus_application_protocol::validate_application_configured_ref;
+
 use crate::workflow_types::WorktreeConfig;
 
 /// `crate::types::*` in the original kernel module resolved to
@@ -528,25 +535,7 @@ pub struct AgentProjectOverrides {
     pub env: BTreeMap<String, String>,
 }
 
-pub const MAX_APPLICATION_CHAT_CONTROL_REF_BYTES: usize = 64;
 pub const MAX_APPLICATION_CHAT_CONTROL_SKILL_REFS: usize = 100;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ApplicationChatReasoningEffort {
-    Low,
-    Medium,
-    High,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ApplicationChatPermissionIntent {
-    Default,
-    Review,
-    AutoEdit,
-    Unrestricted,
-}
 
 /// Portal-authored allowlist for typed application chat controls.
 ///
@@ -628,14 +617,7 @@ fn no_duplicates<T: PartialEq>(values: &[T]) -> bool {
 }
 
 fn valid_application_chat_control_ref(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= MAX_APPLICATION_CHAT_CONTROL_REF_BYTES
-        && bytes[0].is_ascii_alphanumeric()
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-        && !value.contains("..")
+    validate_application_configured_ref(value).is_ok()
 }
 
 /// Presence-aware patch value for nullable profile fields.
