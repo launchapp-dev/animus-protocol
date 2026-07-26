@@ -4,6 +4,13 @@
   "description": "`conversation/create` request.",
   "type": "object",
   "properties": {
+    "agent_id": {
+      "description": "Canonical agent binding to stamp atomically at creation time.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "id": {
       "description": "Explicit conversation id; the backend assigns one when `None`.",
       "type": [

@@ -1137,6 +1137,14 @@ impl From<TriggerAckStatus> for String {
 /// `Shared` ones" — is requested via [`ConversationListRequest::as_user`];
 /// a backend that ignores it simply returns everything (the in-tree store's
 /// behavior, which has no auth context).
+///
+/// # Canonical agent identity and revisions
+///
+/// `agent_id` is a durable canonical profile binding, not caller-projected
+/// decoration. Once non-null, a backend MUST reject attempts to replace or
+/// clear it. Creation may stamp it atomically; the first bound send may set it
+/// from null. Every accepted meta mutation advances `revision`, and
+/// `expected_revision` on save MUST be enforced atomically with the write.
 pub mod conversation_store {
     use super::*;
 
@@ -1173,12 +1181,19 @@ pub mod conversation_store {
     ///
     /// The shape matches the kernel's on-disk `meta.json` exactly so existing
     /// filesystem conversations and plugin-backed ones are interchangeable.
-    /// `owner` and `visibility` use serde defaults so legacy `meta.json`
-    /// files (which lack both) still deserialize as unowned + private.
+    /// Identity/concurrency fields use serde defaults so legacy `meta.json`
+    /// files still deserialize as unbound, revision zero, unowned + private.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
     pub struct ConversationMeta {
         /// Stable conversation id.
         pub id: String,
+        /// Canonical configured agent profile bound to this conversation.
+        /// `None` keeps legacy and intentionally unbound conversations neutral.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent_id: Option<String>,
+        /// Monotonic optimistic-concurrency token. Legacy metas start at zero.
+        #[serde(default)]
+        pub revision: u64,
         /// Wrapped tool that currently owns the native session. `None` until
         /// the first turn completes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1245,6 +1260,12 @@ pub mod conversation_store {
     pub struct ConversationSummary {
         /// Conversation id.
         pub id: String,
+        /// Canonical configured agent profile bound to this conversation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent_id: Option<String>,
+        /// Current optimistic-concurrency token.
+        #[serde(default)]
+        pub revision: u64,
         /// Title, if any.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub title: Option<String>,
@@ -1288,6 +1309,9 @@ pub mod conversation_store {
         /// Explicit conversation id; the backend assigns one when `None`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub id: Option<String>,
+        /// Canonical agent binding to stamp atomically at creation time.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent_id: Option<String>,
         /// Owner to stamp onto the new conversation's meta.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub owner: Option<String>,
@@ -1335,6 +1359,10 @@ pub mod conversation_store {
         pub scope: ConversationScope,
         /// The meta to persist.
         pub meta: ConversationMeta,
+        /// Apply only when the stored meta still has this revision. Backends
+        /// must enforce this atomically with the write (compare-and-swap).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub expected_revision: Option<u64>,
         /// Acting user id, when known. A backend MAY use it to authorize the
         /// mutation. `None` for unscoped/admin access.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1721,12 +1749,73 @@ mod tests {
         // A pre-existing meta.json lacks `owner` and `visibility` entirely.
         let legacy = r#"{"id":"conv-x","created_at":"2026-06-08T00:00:00Z","updated_at":"2026-06-08T00:00:00Z"}"#;
         let meta: ConversationMeta = serde_json::from_str(legacy).expect("legacy meta must parse");
-        assert_eq!(meta.owner, None, "missing owner must default to None (unowned)");
+        assert_eq!(
+            meta.agent_id, None,
+            "legacy conversations must remain unbound"
+        );
+        assert_eq!(
+            meta.revision, 0,
+            "legacy conversations start at revision zero"
+        );
+        assert_eq!(
+            meta.owner, None,
+            "missing owner must default to None (unowned)"
+        );
         assert_eq!(
             meta.visibility,
             Visibility::Private,
             "missing visibility must default to Private"
         );
+    }
+
+    #[test]
+    fn conversation_agent_binding_round_trips_on_meta_summary_and_create() {
+        use conversation_store::{
+            ConversationCreateRequest, ConversationMeta, ConversationSaveMetaRequest,
+            ConversationScope, ConversationSummary,
+        };
+
+        let meta: ConversationMeta = serde_json::from_value(serde_json::json!({
+            "id": "conv-agent",
+            "agent_id": "researcher",
+            "revision": 4,
+            "created_at": "2026-07-25T00:00:00Z",
+            "updated_at": "2026-07-25T00:00:00Z"
+        }))
+        .expect("bound meta must parse");
+        assert_eq!(meta.agent_id.as_deref(), Some("researcher"));
+        assert_eq!(meta.revision, 4);
+        assert_eq!(
+            serde_json::to_value(&meta).unwrap()["agent_id"],
+            "researcher"
+        );
+
+        let summary: ConversationSummary = serde_json::from_value(serde_json::json!({
+            "id": "conv-agent",
+            "agent_id": "researcher",
+            "revision": 4,
+            "message_count": 0,
+            "updated_at": "2026-07-25T00:00:00Z"
+        }))
+        .expect("bound summary must parse");
+        assert_eq!(summary.agent_id.as_deref(), Some("researcher"));
+
+        let create: ConversationCreateRequest = serde_json::from_value(serde_json::json!({
+            "project_root": "/repo",
+            "agent_id": "researcher"
+        }))
+        .expect("bound create request must parse");
+        assert_eq!(create.agent_id.as_deref(), Some("researcher"));
+
+        let save = ConversationSaveMetaRequest {
+            scope: ConversationScope::default(),
+            meta,
+            expected_revision: Some(4),
+            as_user: Some("user-1".to_string()),
+        };
+        let encoded = serde_json::to_value(save).unwrap();
+        assert_eq!(encoded["expected_revision"], 4);
+        assert_eq!(encoded["meta"]["agent_id"], "researcher");
     }
 
     #[test]
@@ -1754,8 +1843,14 @@ mod tests {
         };
         let encoded = serde_json::to_value(&req).unwrap();
         // Scope fields are flattened to the top level, not nested under "scope".
-        assert_eq!(encoded.get("project_root"), Some(&serde_json::json!("/repo")));
-        assert_eq!(encoded.get("repo_scope"), Some(&serde_json::json!("scope-1")));
+        assert_eq!(
+            encoded.get("project_root"),
+            Some(&serde_json::json!("/repo"))
+        );
+        assert_eq!(
+            encoded.get("repo_scope"),
+            Some(&serde_json::json!("scope-1"))
+        );
         assert_eq!(encoded.get("as_user"), Some(&serde_json::json!("user-7")));
         assert!(
             encoded.get("scope").is_none(),
