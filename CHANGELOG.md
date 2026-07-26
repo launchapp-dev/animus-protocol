@@ -9,6 +9,14 @@ source of truth for individual crate bumps. Tags map roughly to
 
 ### Added
 
+`animus-plugin-protocol`: `ConversationScope.tenant_id`, an optional-on-wire,
+1..=128-character opaque server-selected workspace/tenant partition key carried
+by every conversation-store request. Shared backends include it in every
+conversation/message key and validate it against the authenticated transport
+actor, failing closed unless an operator explicitly pins a legacy tenant.
+Conversation creation stamps owner from that authenticated call context, and
+ordinary metadata saves cannot transfer or clear ownership.
+
 `animus-plugin-protocol`: optional
 `ConversationMeta.active_operation_id` on the canonical load/save-meta path.
 The field durably identifies which keyed chat operation owns a revision

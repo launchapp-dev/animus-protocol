@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ConversationMeta",
-  "description": "Conversation metadata — the continuity pointer, identity, and the\nownership/visibility fields that power per-user history.\n\nThe shape matches the kernel's on-disk `meta.json` exactly so existing\nfilesystem conversations and plugin-backed ones are interchangeable.\nIdentity/concurrency fields use serde defaults so legacy `meta.json`\nfiles still deserialize as unbound, revision zero, unowned + private.",
+  "description": "Conversation metadata — the continuity pointer, identity, and the\nimmutable ownership/visibility fields that power per-user history.\n\nThe shape matches the kernel's on-disk `meta.json` exactly so existing\nfilesystem conversations and plugin-backed ones are interchangeable.\nIdentity/concurrency fields use serde defaults so legacy `meta.json`\nfiles still deserialize as unbound, revision zero, unowned + private.",
   "type": "object",
   "properties": {
     "active_operation_id": {
@@ -44,7 +44,7 @@
       ]
     },
     "owner": {
-      "description": "Authenticated user id that owns this conversation. `None` = unowned\n(legacy on-disk conversations, or ones created without `--as-user`).",
+      "description": "Authenticated user id that owns this conversation. Authenticated\nstores stamp this from their call context and MUST NOT accept an\nordinary metadata update that changes or clears it. `None` is\nreserved for explicitly configured legacy data.",
       "type": [
         "string",
         "null"

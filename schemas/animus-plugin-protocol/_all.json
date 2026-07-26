@@ -92,6 +92,15 @@
             "string",
             "null"
           ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -124,7 +133,7 @@
           ]
         },
         "owner": {
-          "description": "Owner to stamp onto the new conversation's meta.",
+          "description": "Legacy owner compatibility assertion.\n\nAuthenticated stores MUST stamp the owner from their call context;\nwhen this field is present they may require it to match, but MUST\nnever treat it as caller authority.",
           "type": [
             "string",
             "null"
@@ -139,6 +148,15 @@
         },
         "repo_scope": {
           "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
           "type": [
             "string",
             "null"
@@ -194,6 +212,15 @@
             "string",
             "null"
           ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -226,6 +253,15 @@
         },
         "repo_scope": {
           "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
           "type": [
             "string",
             "null"
@@ -273,6 +309,15 @@
         },
         "repo_scope": {
           "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
           "type": [
             "string",
             "null"
@@ -327,6 +372,15 @@
             "string",
             "null"
           ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -354,7 +408,7 @@
       "type": "object"
     },
     "ConversationMeta": {
-      "description": "Conversation metadata — the continuity pointer, identity, and the\nownership/visibility fields that power per-user history.\n\nThe shape matches the kernel's on-disk `meta.json` exactly so existing\nfilesystem conversations and plugin-backed ones are interchangeable.\nIdentity/concurrency fields use serde defaults so legacy `meta.json`\nfiles still deserialize as unbound, revision zero, unowned + private.",
+      "description": "Conversation metadata — the continuity pointer, identity, and the\nimmutable ownership/visibility fields that power per-user history.\n\nThe shape matches the kernel's on-disk `meta.json` exactly so existing\nfilesystem conversations and plugin-backed ones are interchangeable.\nIdentity/concurrency fields use serde defaults so legacy `meta.json`\nfiles still deserialize as unbound, revision zero, unowned + private.",
       "properties": {
         "active_operation_id": {
           "description": "Durable operation that owns the current revision reservation.\n\n`None` means no keyed operation owns a reservation. A present id\nMUST contain 1..=128 ASCII alphanumeric or `._:-` characters.\nBackends expose it through load-meta and accept it through\nsave-meta so the owning operation can recover after a crash.",
@@ -396,7 +450,7 @@
           ]
         },
         "owner": {
-          "description": "Authenticated user id that owns this conversation. `None` = unowned\n(legacy on-disk conversations, or ones created without `--as-user`).",
+          "description": "Authenticated user id that owns this conversation. Authenticated\nstores stamp this from their call context and MUST NOT accept an\nordinary metadata update that changes or clears it. `None` is\nreserved for explicitly configured legacy data.",
           "type": [
             "string",
             "null"
@@ -469,7 +523,7 @@
         },
         "meta": {
           "$ref": "#/$defs/ConversationMeta",
-          "description": "The meta to persist."
+          "description": "The meta to persist. `meta.owner` is an immutable assertion: an\nordinary save MUST NOT change or clear the stored owner."
         },
         "project_root": {
           "description": "Absolute project root path of the calling CLI/daemon.",
@@ -480,6 +534,15 @@
         },
         "repo_scope": {
           "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
           "type": [
             "string",
             "null"
@@ -498,7 +561,7 @@
       "type": "object"
     },
     "ConversationScope": {
-      "description": "Fields common to every conversation-store request: the project + scope\nidentity a multi-tenant backend partitions on. Flattened into each\nrequest so the wire payload stays flat.",
+      "description": "Fields common to every conversation-store request: tenant, project, and\nrepository identity a shared backend partitions on. Flattened into each\nrequest so the wire payload stays flat.",
       "properties": {
         "project_root": {
           "description": "Absolute project root path of the calling CLI/daemon.",
@@ -509,6 +572,15 @@
         },
         "repo_scope": {
           "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+          "maxLength": 128,
+          "minLength": 1,
           "type": [
             "string",
             "null"

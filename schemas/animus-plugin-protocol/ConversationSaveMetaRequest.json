@@ -21,7 +21,7 @@
       "minimum": 0
     },
     "meta": {
-      "description": "The meta to persist.",
+      "description": "The meta to persist. `meta.owner` is an immutable assertion: an\nordinary save MUST NOT change or clear the stored owner.",
       "$ref": "#/$defs/ConversationMeta"
     },
     "project_root": {
@@ -37,6 +37,15 @@
         "string",
         "null"
       ]
+    },
+    "tenant_id": {
+      "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128,
+      "minLength": 1
     }
   },
   "required": [
@@ -44,7 +53,7 @@
   ],
   "$defs": {
     "ConversationMeta": {
-      "description": "Conversation metadata — the continuity pointer, identity, and the\nownership/visibility fields that power per-user history.\n\nThe shape matches the kernel's on-disk `meta.json` exactly so existing\nfilesystem conversations and plugin-backed ones are interchangeable.\nIdentity/concurrency fields use serde defaults so legacy `meta.json`\nfiles still deserialize as unbound, revision zero, unowned + private.",
+      "description": "Conversation metadata — the continuity pointer, identity, and the\nimmutable ownership/visibility fields that power per-user history.\n\nThe shape matches the kernel's on-disk `meta.json` exactly so existing\nfilesystem conversations and plugin-backed ones are interchangeable.\nIdentity/concurrency fields use serde defaults so legacy `meta.json`\nfiles still deserialize as unbound, revision zero, unowned + private.",
       "type": "object",
       "properties": {
         "active_operation_id": {
@@ -87,7 +96,7 @@
           ]
         },
         "owner": {
-          "description": "Authenticated user id that owns this conversation. `None` = unowned\n(legacy on-disk conversations, or ones created without `--as-user`).",
+          "description": "Authenticated user id that owns this conversation. Authenticated\nstores stamp this from their call context and MUST NOT accept an\nordinary metadata update that changes or clears it. `None` is\nreserved for explicitly configured legacy data.",
           "type": [
             "string",
             "null"

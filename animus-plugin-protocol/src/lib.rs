@@ -1124,19 +1124,23 @@ impl From<TriggerAckStatus> for String {
 ///
 /// # Scope identity
 ///
-/// Every request carries `project_root` and `repo_scope` (the repository
-/// scope id, as `config_source` does) so a multi-tenant backend can isolate
-/// conversations per scope.
+/// Every request carries `tenant_id`, `project_root`, and `repo_scope` (the
+/// repository scope id, as `config_source` does) so a shared backend can
+/// isolate conversations even when two tenants mount the same repository.
+/// `tenant_id` is an opaque, transport-selected workspace/tenant key. User
+/// input MUST NOT select it. Authenticated backends MUST compare it with the
+/// transport-asserted actor tenant and fail closed on absence or mismatch.
 ///
 /// # Ownership and visibility
 ///
 /// [`ConversationMeta`] carries `owner` (the portal's authenticated user id;
-/// `None` = unowned/legacy) and `visibility` ([`Visibility`], default
+/// `None` = explicitly configured legacy data) and `visibility` ([`Visibility`], default
 /// [`Visibility::Private`]). These are the foundation for per-user history
 /// with sharing. The query-layer filtering — "X's own conversations PLUS any
-/// `Shared` ones" — is requested via [`ConversationListRequest::as_user`];
-/// a backend that ignores it simply returns everything (the in-tree store's
-/// behavior, which has no auth context).
+/// `Shared` ones" — is represented by [`ConversationListRequest::as_user`].
+/// Authenticated stores treat it as a consistency assertion against their call
+/// context, never as authority. The in-tree store may use it directly because
+/// it has no authenticated transport context.
 ///
 /// # Canonical agent identity and revisions
 ///
@@ -1184,7 +1188,7 @@ pub mod conversation_store {
     }
 
     /// Conversation metadata — the continuity pointer, identity, and the
-    /// ownership/visibility fields that power per-user history.
+    /// immutable ownership/visibility fields that power per-user history.
     ///
     /// The shape matches the kernel's on-disk `meta.json` exactly so existing
     /// filesystem conversations and plugin-backed ones are interchangeable.
@@ -1230,8 +1234,10 @@ pub mod conversation_store {
         /// Count of persisted turns (user + assistant).
         #[serde(default)]
         pub message_count: u64,
-        /// Authenticated user id that owns this conversation. `None` = unowned
-        /// (legacy on-disk conversations, or ones created without `--as-user`).
+        /// Authenticated user id that owns this conversation. Authenticated
+        /// stores stamp this from their call context and MUST NOT accept an
+        /// ordinary metadata update that changes or clears it. `None` is
+        /// reserved for explicitly configured legacy data.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub owner: Option<String>,
         /// Visibility. Defaults to [`Visibility::Private`] for legacy metas.
@@ -1303,11 +1309,22 @@ pub mod conversation_store {
         pub visibility: Visibility,
     }
 
-    /// Fields common to every conversation-store request: the project + scope
-    /// identity a multi-tenant backend partitions on. Flattened into each
+    /// Fields common to every conversation-store request: tenant, project, and
+    /// repository identity a shared backend partitions on. Flattened into each
     /// request so the wire payload stays flat.
     #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
     pub struct ConversationScope {
+        /// Opaque server-selected tenant/workspace partition key.
+        ///
+        /// The authenticated application layer derives this value from its
+        /// session and forwards the same value in the transport actor. A user
+        /// supplied workspace id is not authoritative. Authenticated stores
+        /// MUST fail closed if this field is absent or disagrees with the
+        /// transport-asserted actor tenant. Omission remains wire-compatible
+        /// only for explicitly configured single-tenant legacy stores.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = 128))]
+        pub tenant_id: Option<String>,
         /// Absolute project root path of the calling CLI/daemon.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub project_root: Option<String>,
@@ -1328,7 +1345,11 @@ pub mod conversation_store {
         /// Canonical agent binding to stamp atomically at creation time.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub agent_id: Option<String>,
-        /// Owner to stamp onto the new conversation's meta.
+        /// Legacy owner compatibility assertion.
+        ///
+        /// Authenticated stores MUST stamp the owner from their call context;
+        /// when this field is present they may require it to match, but MUST
+        /// never treat it as caller authority.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub owner: Option<String>,
         /// Initial visibility for the new conversation.
@@ -1373,7 +1394,8 @@ pub mod conversation_store {
         /// Scope identity.
         #[serde(flatten)]
         pub scope: ConversationScope,
-        /// The meta to persist.
+        /// The meta to persist. `meta.owner` is an immutable assertion: an
+        /// ordinary save MUST NOT change or clear the stored owner.
         pub meta: ConversationMeta,
         /// Apply only when the stored meta still has this revision. Backends
         /// must enforce this atomically with the write (compare-and-swap).
@@ -1902,6 +1924,7 @@ mod tests {
         use conversation_store::{ConversationListRequest, ConversationScope};
         let req = ConversationListRequest {
             scope: ConversationScope {
+                tenant_id: Some("workspace-7".to_string()),
                 project_root: Some("/repo".to_string()),
                 repo_scope: Some("scope-1".to_string()),
             },
@@ -1909,6 +1932,10 @@ mod tests {
         };
         let encoded = serde_json::to_value(&req).unwrap();
         // Scope fields are flattened to the top level, not nested under "scope".
+        assert_eq!(
+            encoded.get("tenant_id"),
+            Some(&serde_json::json!("workspace-7"))
+        );
         assert_eq!(
             encoded.get("project_root"),
             Some(&serde_json::json!("/repo"))
@@ -1922,5 +1949,47 @@ mod tests {
             encoded.get("scope").is_none(),
             "scope must be flattened, not nested"
         );
+    }
+
+    #[test]
+    fn conversation_tenant_scope_is_optional_bounded_and_opaque() {
+        use conversation_store::{
+            ConversationAppendMessageRequest, ConversationCreateRequest, ConversationDeleteRequest,
+            ConversationListRequest, ConversationLoadMessagesRequest, ConversationLoadMetaRequest,
+            ConversationSaveMetaRequest, ConversationScope,
+        };
+        use schemars::schema_for;
+
+        let schema = serde_json::to_value(schema_for!(ConversationScope)).unwrap();
+        let field = &schema["properties"]["tenant_id"];
+        assert_eq!(field["minLength"], 1);
+        assert_eq!(field["maxLength"], 128);
+        assert!(field.get("pattern").is_none(), "tenant ids are opaque");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|name| name == "tenant_id")),
+            "legacy wire payloads remain parseable; stores decide whether legacy mode is configured"
+        );
+
+        let scope: ConversationScope = serde_json::from_value(serde_json::json!({
+            "tenant_id": "workspace / opaque:alpha"
+        }))
+        .expect("opaque tenant ids must round trip");
+        assert_eq!(scope.tenant_id.as_deref(), Some("workspace / opaque:alpha"));
+
+        let request_schemas = [
+            serde_json::to_value(schema_for!(ConversationCreateRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationLoadMetaRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationSaveMetaRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationAppendMessageRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationLoadMessagesRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationListRequest)).unwrap(),
+            serde_json::to_value(schema_for!(ConversationDeleteRequest)).unwrap(),
+        ];
+        assert!(request_schemas.iter().all(|request| {
+            request["properties"]["tenant_id"]["maxLength"] == 128
+                && request["properties"]["tenant_id"]["minLength"] == 1
+        }));
     }
 }

@@ -518,6 +518,22 @@ Conversation stores persist chat metadata and messages behind the
   "expected_revision": integer | null, ...scope }`; the backend MUST compare
   `expected_revision` and write the metadata atomically.
 
+Every conversation method carries `ConversationScope.tenant_id`, an opaque
+server-selected workspace/tenant partition key of 1 through 128 characters.
+The authenticated application layer selects it from the session; it is not a
+user-controlled filter. A shared backend MUST include it in every conversation
+and message key and MUST compare it with the transport-asserted actor tenant.
+Missing or mismatched tenant context fails closed. An omitted `tenant_id` is
+permitted only when an operator has explicitly configured a fixed legacy tenant;
+backends MUST NOT infer a tenant from `project_root`, `repo_scope`, owner, or
+conversation id.
+
+On `conversation/create`, authenticated backends stamp `ConversationMeta.owner`
+from the transport-asserted caller. The request's legacy `owner` field is at
+most a matching assertion and is never authority. `conversation/save_meta`
+MUST NOT change or clear the stored owner; owner transfer requires a separate
+privileged operation rather than an ordinary metadata update.
+
 `ConversationMeta.active_operation_id` is optional internal concurrency state.
 A keyed turn sets it when reserving a revision, which lets that same durable
 operation prove ownership and continue if the host crashes before appending the
