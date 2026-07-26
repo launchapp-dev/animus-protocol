@@ -21,7 +21,11 @@ pub struct ConfigBundle {
 impl ConfigBundle {
     /// Create a new empty config bundle
     pub fn new() -> Self {
-        Self { files: BTreeMap::new(), tasks: Vec::new(), requirements: Vec::new() }
+        Self {
+            files: BTreeMap::new(),
+            tasks: Vec::new(),
+            requirements: Vec::new(),
+        }
     }
 
     /// Add a file to the bundle

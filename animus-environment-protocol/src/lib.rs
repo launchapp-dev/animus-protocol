@@ -592,7 +592,10 @@ mod tests {
         assert_eq!(METHOD_ENVIRONMENT_TEARDOWN, "environment/teardown");
         assert_eq!(METHOD_ENVIRONMENT_LIST, "environment/list");
         assert_eq!(METHOD_ENVIRONMENT_GET, "environment/get");
-        assert_eq!(METHOD_ENVIRONMENT_TEARDOWN_NODE, "environment/teardown_node");
+        assert_eq!(
+            METHOD_ENVIRONMENT_TEARDOWN_NODE,
+            "environment/teardown_node"
+        );
         assert_eq!(METHOD_ENVIRONMENT_REAP, "environment/reap");
         assert_eq!(NOTIFICATION_ENVIRONMENT_OUTPUT, "environment/output");
     }

@@ -17,12 +17,12 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use animus_application_protocol::validate_application_configured_ref;
 pub use animus_application_protocol::{
     ApplicationPermissionIntent as ApplicationChatPermissionIntent,
     ApplicationReasoningEffort as ApplicationChatReasoningEffort,
     MAX_APPLICATION_CHAT_CONTROL_REF_BYTES,
 };
-use animus_application_protocol::validate_application_configured_ref;
 
 use crate::workflow_types::WorktreeConfig;
 
@@ -63,8 +63,13 @@ pub struct PhaseOutputContract {
 
 impl PhaseOutputContract {
     pub fn requires_field(&self, field: &str) -> bool {
-        self.required_fields.iter().any(|candidate| candidate.eq_ignore_ascii_case(field))
-            || self.fields.iter().any(|(name, definition)| definition.required && name.eq_ignore_ascii_case(field))
+        self.required_fields
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(field))
+            || self
+                .fields
+                .iter()
+                .any(|(name, definition)| definition.required && name.eq_ignore_ascii_case(field))
     }
 }
 
@@ -241,7 +246,11 @@ pub struct AgentToolPolicy {
 
 impl AgentToolPolicy {
     pub fn is_tool_permitted(&self, tool_name: &str) -> bool {
-        let allowed = if self.allow.is_empty() { true } else { self.allow.iter().any(|p| glob_match(p, tool_name)) };
+        let allowed = if self.allow.is_empty() {
+            true
+        } else {
+            self.allow.iter().any(|p| glob_match(p, tool_name))
+        };
 
         if !allowed {
             return false;
@@ -381,10 +390,18 @@ pub struct ApprovalPolicy {
 
 impl ApprovalPolicy {
     pub fn evaluate(&self, subject: &str) -> ApprovalPolicyDecision {
-        if self.auto_deny.iter().any(|pattern| glob_match(pattern, subject)) {
+        if self
+            .auto_deny
+            .iter()
+            .any(|pattern| glob_match(pattern, subject))
+        {
             return ApprovalPolicyDecision::Deny;
         }
-        if self.auto_allow.iter().any(|pattern| glob_match(pattern, subject)) {
+        if self
+            .auto_allow
+            .iter()
+            .any(|pattern| glob_match(pattern, subject))
+        {
             return ApprovalPolicyDecision::Allow;
         }
         match self.default {
@@ -405,7 +422,10 @@ pub fn glob_match(pattern: &str, value: &str) -> bool {
 fn glob_match_inner(pat: &[u8], val: &[u8]) -> bool {
     match (pat.first(), val.first()) {
         (None, None) => true,
-        (Some(b'*'), _) => glob_match_inner(&pat[1..], val) || (!val.is_empty() && glob_match_inner(pat, &val[1..])),
+        (Some(b'*'), _) => {
+            glob_match_inner(&pat[1..], val)
+                || (!val.is_empty() && glob_match_inner(pat, &val[1..]))
+        }
         (Some(&p), Some(&v)) if p == v => glob_match_inner(&pat[1..], &val[1..]),
         _ => false,
     }
@@ -463,7 +483,11 @@ pub const AGENT_CAPABILITY_MEMORY: &str = "memory";
 /// spawned agent's runtime contract. See [`AgentCapabilities`] for the catalog of recognized
 /// capability keys.
 pub fn agent_memory_capability_enabled(profile: &AgentProfile) -> bool {
-    profile.capabilities.get(AGENT_CAPABILITY_MEMORY).copied().unwrap_or(false)
+    profile
+        .capabilities
+        .get(AGENT_CAPABILITY_MEMORY)
+        .copied()
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -613,7 +637,10 @@ impl ApplicationChatControlsPolicy {
 }
 
 fn no_duplicates<T: PartialEq>(values: &[T]) -> bool {
-    values.iter().enumerate().all(|(index, value)| !values[..index].contains(value))
+    values
+        .iter()
+        .enumerate()
+        .all(|(index, value)| !values[..index].contains(value))
 }
 
 fn valid_application_chat_control_ref(value: &str) -> bool {
@@ -1270,9 +1297,13 @@ retry_on:
 no_retry_on:
   - auth_error
 "#;
-        let cfg: AgentRuntimeOverrides = serde_yaml::from_str(yaml).expect("parse runtime overrides");
+        let cfg: AgentRuntimeOverrides =
+            serde_yaml::from_str(yaml).expect("parse runtime overrides");
         assert_eq!(cfg.max_attempts, Some(5));
-        assert_eq!(cfg.retry_on, vec!["transient".to_string(), "rate_limit".to_string()]);
+        assert_eq!(
+            cfg.retry_on,
+            vec!["transient".to_string(), "rate_limit".to_string()]
+        );
         assert_eq!(cfg.no_retry_on, vec!["auth_error".to_string()]);
     }
 
@@ -1280,10 +1311,17 @@ no_retry_on:
     fn back_compat_config_without_classification_fields_parses() {
         // A pre-existing config that never heard of retry_on / no_retry_on.
         let yaml = "max_attempts: 2\n";
-        let cfg: AgentRuntimeOverrides = serde_yaml::from_str(yaml).expect("parse legacy runtime overrides");
+        let cfg: AgentRuntimeOverrides =
+            serde_yaml::from_str(yaml).expect("parse legacy runtime overrides");
         assert_eq!(cfg.max_attempts, Some(2));
-        assert!(cfg.retry_on.is_empty(), "absent retry_on defaults to empty (retry-all behavior)");
-        assert!(cfg.no_retry_on.is_empty(), "absent no_retry_on defaults to empty");
+        assert!(
+            cfg.retry_on.is_empty(),
+            "absent retry_on defaults to empty (retry-all behavior)"
+        );
+        assert!(
+            cfg.no_retry_on.is_empty(),
+            "absent no_retry_on defaults to empty"
+        );
     }
 
     #[test]
@@ -1292,8 +1330,14 @@ no_retry_on:
         // round-trips and golden artifacts stay byte-stable.
         let cfg = AgentRuntimeOverrides::default();
         let json = serde_json::to_string(&cfg).expect("serialize default");
-        assert!(!json.contains("retry_on"), "empty retry_on must be skipped: {json}");
-        assert!(!json.contains("no_retry_on"), "empty no_retry_on must be skipped: {json}");
+        assert!(
+            !json.contains("retry_on"),
+            "empty retry_on must be skipped: {json}"
+        );
+        assert!(
+            !json.contains("no_retry_on"),
+            "empty no_retry_on must be skipped: {json}"
+        );
     }
 
     #[test]
@@ -1336,7 +1380,11 @@ no_retry_on:
             ..Default::default()
         };
         merge_agent_profile(&mut base, &overlay);
-        assert_eq!(base.retry_on, vec!["network".to_string()], "overlay retry_on wins");
+        assert_eq!(
+            base.retry_on,
+            vec!["network".to_string()],
+            "overlay retry_on wins"
+        );
         assert_eq!(base.no_retry_on, vec!["validation".to_string()]);
     }
 }
@@ -1380,7 +1428,10 @@ mod application_chat_controls_policy_tests {
         let json = serde_json::to_string(&overlay).expect("serialize overlay");
         let round_trip: AgentProfileOverlay =
             serde_json::from_str(&json).expect("deserialize overlay");
-        assert_eq!(round_trip.application_chat_controls, AgentProfilePatch::Set(declared.clone()));
+        assert_eq!(
+            round_trip.application_chat_controls,
+            AgentProfilePatch::Set(declared.clone())
+        );
 
         let mut base = AgentProfile {
             application_chat_controls: Some(ApplicationChatControlsPolicy {

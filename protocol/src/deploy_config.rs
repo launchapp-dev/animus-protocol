@@ -27,7 +27,9 @@ impl DeployConfig {
     }
 
     pub fn load_for_project(project_root: &str) -> Self {
-        let project_path = PathBuf::from(project_root).join(".animus").join("deploy.json");
+        let project_path = PathBuf::from(project_root)
+            .join(".animus")
+            .join("deploy.json");
         if let Some(project_config) = Self::try_load_from(&project_path) {
             return project_config.merge_with_global();
         }
@@ -45,7 +47,9 @@ impl DeployConfig {
     }
 
     pub fn save_for_project(&self, project_root: &str) -> anyhow::Result<()> {
-        let path = PathBuf::from(project_root).join(".animus").join("deploy.json");
+        let path = PathBuf::from(project_root)
+            .join(".animus")
+            .join("deploy.json");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -63,7 +67,11 @@ impl DeployConfig {
             region: self.region.or(global.region),
             status: self.status.or(global.status),
             last_deployed_at: self.last_deployed_at,
-            machine_ids: if self.machine_ids.is_empty() { global.machine_ids } else { self.machine_ids },
+            machine_ids: if self.machine_ids.is_empty() {
+                global.machine_ids
+            } else {
+                self.machine_ids
+            },
         }
     }
 

@@ -21,7 +21,8 @@ use crate::builtins::builtin_workflow_config;
 use crate::env_interp::{interpolate_env, lint_sensitive_interpolations};
 use crate::workflow_types::*;
 use crate::yaml_parser::{
-    parse_yaml_workflow_config_confined_to_pack, parse_yaml_workflow_config_with_base_source_and_original,
+    parse_yaml_workflow_config_confined_to_pack,
+    parse_yaml_workflow_config_with_base_source_and_original,
 };
 
 pub const YAML_WORKFLOWS_DIR: &str = "workflows";
@@ -33,15 +34,17 @@ pub fn yaml_workflows_dir(project_root: &Path) -> PathBuf {
 
 /// Collect the project's `.animus` YAML sources in deterministic order:
 /// `.animus/workflows.yaml` first, then `.animus/workflows/*.{yaml,yml}` sorted.
-pub fn collect_project_yaml_workflow_sources(project_root: &Path) -> Result<Vec<(PathBuf, String)>> {
+pub fn collect_project_yaml_workflow_sources(
+    project_root: &Path,
+) -> Result<Vec<(PathBuf, String)>> {
     let workflows_dir = yaml_workflows_dir(project_root);
     let single_file = project_root.join(".animus").join("workflows.yaml");
 
     let mut yaml_sources: Vec<(PathBuf, String)> = Vec::new();
 
     if single_file.exists() {
-        let content =
-            fs::read_to_string(&single_file).with_context(|| format!("failed to read {}", single_file.display()))?;
+        let content = fs::read_to_string(&single_file)
+            .with_context(|| format!("failed to read {}", single_file.display()))?;
         yaml_sources.push((single_file, content));
     }
 
@@ -49,13 +52,20 @@ pub fn collect_project_yaml_workflow_sources(project_root: &Path) -> Result<Vec<
         let mut entries: Vec<_> = fs::read_dir(&workflows_dir)
             .with_context(|| format!("failed to read directory {}", workflows_dir.display()))?
             .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.path().extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false))
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .map(|ext| ext == "yaml" || ext == "yml")
+                    .unwrap_or(false)
+            })
             .collect();
         entries.sort_by_key(|e| e.path());
 
         for entry in entries {
             let path = entry.path();
-            let content = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+            let content = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
             yaml_sources.push((path, content));
         }
     }
@@ -150,7 +160,10 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
     let mut workflows = base.workflows;
 
     for yaml_pipeline in yaml.workflows {
-        if let Some(pos) = workflows.iter().position(|p| p.id.eq_ignore_ascii_case(&yaml_pipeline.id)) {
+        if let Some(pos) = workflows
+            .iter()
+            .position(|p| p.id.eq_ignore_ascii_case(&yaml_pipeline.id))
+        {
             workflows[pos] = yaml_pipeline;
         } else {
             workflows.push(yaml_pipeline);
@@ -206,9 +219,11 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
 
     let mut schedules = base.schedules;
     for overlay_schedule in yaml.schedules {
-        if let Some(pos) =
-            schedules.iter().position(|schedule| schedule.id.eq_ignore_ascii_case(overlay_schedule.id.as_str()))
-        {
+        if let Some(pos) = schedules.iter().position(|schedule| {
+            schedule
+                .id
+                .eq_ignore_ascii_case(overlay_schedule.id.as_str())
+        }) {
             schedules[pos] = overlay_schedule;
         } else {
             schedules.push(overlay_schedule);
@@ -217,8 +232,9 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
 
     let mut triggers = base.triggers;
     for overlay_trigger in yaml.triggers {
-        if let Some(pos) =
-            triggers.iter().position(|trigger| trigger.id.eq_ignore_ascii_case(overlay_trigger.id.as_str()))
+        if let Some(pos) = triggers
+            .iter()
+            .position(|trigger| trigger.id.eq_ignore_ascii_case(overlay_trigger.id.as_str()))
         {
             triggers[pos] = overlay_trigger;
         } else {
@@ -241,12 +257,13 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         (None, Some(overlay)) => Some(overlay),
     };
 
-    let default_workflow_ref =
-        if yaml.default_workflow_ref != base.default_workflow_ref && !yaml.default_workflow_ref.is_empty() {
-            yaml.default_workflow_ref
-        } else {
-            base.default_workflow_ref
-        };
+    let default_workflow_ref = if yaml.default_workflow_ref != base.default_workflow_ref
+        && !yaml.default_workflow_ref.is_empty()
+    {
+        yaml.default_workflow_ref
+    } else {
+        base.default_workflow_ref
+    };
 
     let daemon = match (base.daemon, yaml.daemon) {
         (None, None) => None,

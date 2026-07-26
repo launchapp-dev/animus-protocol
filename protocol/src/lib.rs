@@ -29,9 +29,10 @@ pub use agent_runner::*;
 pub use common::*;
 // Explicit re-exports for config helpers used across crates
 pub use config::{
-    cli_tracker_path, daemon_events_log_path, default_allowed_tool_prefixes, metrics_env_disabled, parse_env_bool,
-    parse_env_bool_opt, AutoUpdateChannel, AutoUpdateConfig, AutoUpdateMode, ClaudeProfileEntry, Config, MetricsConfig,
-    ProjectMcpServerEntry, SecretsConfig, DEFAULT_METRICS_BATCH_INTERVAL, DEFAULT_METRICS_ENDPOINT,
+    cli_tracker_path, daemon_events_log_path, default_allowed_tool_prefixes, metrics_env_disabled,
+    parse_env_bool, parse_env_bool_opt, AutoUpdateChannel, AutoUpdateConfig, AutoUpdateMode,
+    ClaudeProfileEntry, Config, MetricsConfig, ProjectMcpServerEntry, SecretsConfig,
+    DEFAULT_METRICS_BATCH_INTERVAL, DEFAULT_METRICS_ENDPOINT,
 };
 pub use config_bundle::ConfigBundle;
 pub use daemon::*;
@@ -41,8 +42,8 @@ pub use error_classification::*;
 pub use errors::*;
 pub use model_routing::*;
 pub use orchestrator::{
-    RunnerEvent, SubjectDispatch, SubjectDispatchExt, SubjectExecutionFact, SubjectRef, SUBJECT_KIND_CUSTOM,
-    SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
+    RunnerEvent, SubjectDispatch, SubjectDispatchExt, SubjectExecutionFact, SubjectRef,
+    SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
 };
 pub use output::*;
 pub use process::*;

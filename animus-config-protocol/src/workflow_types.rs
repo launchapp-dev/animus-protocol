@@ -229,7 +229,11 @@ pub struct WorktreeConfig {
 
 impl Default for WorktreeConfig {
     fn default() -> Self {
-        Self { mode: WorktreeMode::Auto, cleanup: default_worktree_cleanup(), base_ref: None }
+        Self {
+            mode: WorktreeMode::Auto,
+            cleanup: default_worktree_cleanup(),
+            base_ref: None,
+        }
     }
 }
 
@@ -239,11 +243,19 @@ pub(crate) fn default_worktree_cleanup() -> bool {
 
 impl WorktreeConfig {
     pub fn skip() -> Self {
-        Self { mode: WorktreeMode::Skip, cleanup: default_worktree_cleanup(), base_ref: None }
+        Self {
+            mode: WorktreeMode::Skip,
+            cleanup: default_worktree_cleanup(),
+            base_ref: None,
+        }
     }
 
     pub fn required() -> Self {
-        Self { mode: WorktreeMode::Required, cleanup: default_worktree_cleanup(), base_ref: None }
+        Self {
+            mode: WorktreeMode::Required,
+            cleanup: default_worktree_cleanup(),
+            base_ref: None,
+        }
     }
 
     pub(crate) fn parse_mode(value: &str) -> Result<WorktreeMode> {
@@ -251,7 +263,10 @@ impl WorktreeConfig {
             "auto" => Ok(WorktreeMode::Auto),
             "required" => Ok(WorktreeMode::Required),
             "skip" => Ok(WorktreeMode::Skip),
-            other => Err(anyhow!("invalid worktree mode '{}' (expected auto, required, or skip)", other)),
+            other => Err(anyhow!(
+                "invalid worktree mode '{}' (expected auto, required, or skip)",
+                other
+            )),
         }
     }
 
@@ -261,12 +276,24 @@ impl WorktreeConfig {
     pub(crate) fn from_yaml(yaml: crate::yaml_types::YamlPhaseWorktree) -> Result<Self> {
         match yaml {
             crate::yaml_types::YamlPhaseWorktree::Bool(flag) => {
-                let mode = if flag { WorktreeMode::Auto } else { WorktreeMode::Skip };
-                Ok(Self { mode, cleanup: default_worktree_cleanup(), base_ref: None })
+                let mode = if flag {
+                    WorktreeMode::Auto
+                } else {
+                    WorktreeMode::Skip
+                };
+                Ok(Self {
+                    mode,
+                    cleanup: default_worktree_cleanup(),
+                    base_ref: None,
+                })
             }
             crate::yaml_types::YamlPhaseWorktree::Mode(scalar) => {
                 let mode = Self::parse_mode(&scalar)?;
-                Ok(Self { mode, cleanup: default_worktree_cleanup(), base_ref: None })
+                Ok(Self {
+                    mode,
+                    cleanup: default_worktree_cleanup(),
+                    base_ref: None,
+                })
             }
             crate::yaml_types::YamlPhaseWorktree::Full(config) => Ok(config),
         }
@@ -391,16 +418,26 @@ pub struct WorkflowDefinition {
 
 impl WorkflowDefinition {
     pub fn phase_ids(&self) -> Vec<String> {
-        self.phases.iter().map(|entry| entry.phase_id().trim().to_owned()).filter(|id| !id.is_empty()).collect()
+        self.phases
+            .iter()
+            .map(|entry| entry.phase_id().trim().to_owned())
+            .filter(|id| !id.is_empty())
+            .collect()
     }
 }
 
-pub fn expand_workflow_phases(workflows: &[WorkflowDefinition], workflow_ref: &str) -> Result<Vec<WorkflowPhaseEntry>> {
+pub fn expand_workflow_phases(
+    workflows: &[WorkflowDefinition],
+    workflow_ref: &str,
+) -> Result<Vec<WorkflowPhaseEntry>> {
     let mut visited = HashSet::new();
     expand_workflow_phases_inner(workflows, workflow_ref, &mut visited)
 }
 
-pub fn collect_workflow_refs(workflows: &[WorkflowDefinition], workflow_ref: &str) -> Result<Vec<String>> {
+pub fn collect_workflow_refs(
+    workflows: &[WorkflowDefinition],
+    workflow_ref: &str,
+) -> Result<Vec<String>> {
     let mut active = HashSet::new();
     let mut seen = HashSet::new();
     let mut refs = Vec::new();
@@ -467,7 +504,8 @@ fn expand_workflow_phases_inner(
     for entry in &workflow.phases {
         match entry {
             WorkflowPhaseEntry::SubWorkflow(sub) => {
-                let sub_phases = expand_workflow_phases_inner(workflows, &sub.workflow_ref, visited)?;
+                let sub_phases =
+                    expand_workflow_phases_inner(workflows, &sub.workflow_ref, visited)?;
                 expanded.extend(sub_phases);
             }
             other => {
@@ -499,7 +537,10 @@ pub fn resolve_workflow_variables(
 
     if !missing.is_empty() {
         missing.sort();
-        return Err(anyhow!("missing required workflow variable(s): {}", missing.join(", ")));
+        return Err(anyhow!(
+            "missing required workflow variable(s): {}",
+            missing.join(", ")
+        ));
     }
 
     Ok(resolved)

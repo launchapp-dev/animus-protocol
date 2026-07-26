@@ -7,8 +7,8 @@ use serde_json::Value;
 use crate::yaml_diagnostic::closest_match;
 
 use crate::agent_types::{
-    default_eval_expected_exit, default_eval_pass_threshold, AgentProfileOverlay, EvalKind, EvalOnFail, Idempotency,
-    PhaseExecutionMode,
+    default_eval_expected_exit, default_eval_pass_threshold, AgentProfileOverlay, EvalKind,
+    EvalOnFail, Idempotency, PhaseExecutionMode,
 };
 
 use crate::workflow_types::*;
@@ -181,7 +181,9 @@ impl<'de> Deserialize<'de> for YamlPhaseWorktree {
                 } else {
                     let suggestion = match lower.as_str() {
                         "yes" | "on" | "enabled" | "enable" | "true" => Some("auto".to_string()),
-                        "no" | "off" | "disabled" | "disable" | "false" | "none" => Some("skip".to_string()),
+                        "no" | "off" | "disabled" | "disable" | "false" | "none" => {
+                            Some("skip".to_string())
+                        }
                         "needed" | "must" | "force" | "mandatory" => Some("required".to_string()),
                         _ => closest_match(&lower, WORKTREE_VALID_MODES, 2).map(|s| s.to_string()),
                     };

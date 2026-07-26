@@ -17,7 +17,12 @@ fn windows_process_exists(pid: i32) -> bool {
         .output()
         .ok()
         .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).lines().map(str::trim).any(|line| line.starts_with('"')))
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::trim)
+                .any(|line| line.starts_with('"'))
+        })
         .unwrap_or(false)
 }
 
@@ -30,7 +35,9 @@ fn taskkill_process_tree(pid: u32, force: bool) -> Result<()> {
         command.arg("/F");
     }
 
-    let output = command.output().with_context(|| format!("failed to launch taskkill for process {pid}"))?;
+    let output = command
+        .output()
+        .with_context(|| format!("failed to launch taskkill for process {pid}"))?;
 
     if output.status.success() || !is_process_alive(pid) {
         return Ok(());
@@ -39,12 +46,18 @@ fn taskkill_process_tree(pid: u32, force: bool) -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let detail = stderr.trim();
-    let detail = if detail.is_empty() { stdout.trim() } else { detail };
+    let detail = if detail.is_empty() {
+        stdout.trim()
+    } else {
+        detail
+    };
 
     if detail.is_empty() {
         Err(anyhow::anyhow!("taskkill failed for process {pid}"))
     } else {
-        Err(anyhow::anyhow!("taskkill failed for process {pid}: {detail}"))
+        Err(anyhow::anyhow!(
+            "taskkill failed for process {pid}: {detail}"
+        ))
     }
 }
 
@@ -82,7 +95,9 @@ pub fn is_process_alive(pid: u32) -> bool {
 
 #[cfg(unix)]
 fn is_zombie_process(pid: i32) -> bool {
-    let output = Command::new("ps").args(["-o", "state=", "-p", &pid.to_string()]).output();
+    let output = Command::new("ps")
+        .args(["-o", "state=", "-p", &pid.to_string()])
+        .output();
     match output {
         Ok(out) => {
             let state = String::from_utf8_lossy(&out.stdout);
