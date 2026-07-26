@@ -140,7 +140,9 @@ where
                 copy_from = i;
                 continue;
             }
-            let resolved = resolve_reference(body, source_label, &resolver, || line_number_for_offset(content, start))?;
+            let resolved = resolve_reference(body, source_label, &resolver, || {
+                line_number_for_offset(content, start)
+            })?;
             out.push_str(&resolved);
             i = body_start + close_off + 1; // skip past `}`
             copy_from = i;
@@ -193,7 +195,10 @@ fn yaml_comment_spans(content: &str) -> Vec<(usize, usize)> {
         let line_end = line_start + line.len();
         let stripped = line.strip_suffix('\n').unwrap_or(line);
         let bytes = stripped.as_bytes();
-        let indent = bytes.iter().take_while(|b| **b == b' ' || **b == b'\t').count();
+        let indent = bytes
+            .iter()
+            .take_while(|b| **b == b' ' || **b == b'\t')
+            .count();
         let blank = indent == bytes.len();
 
         if let Some(parent_indent) = block_scalar_indent {
@@ -297,7 +302,10 @@ struct CommentSpans {
 
 impl CommentSpans {
     fn new(content: &str) -> Self {
-        Self { spans: yaml_comment_spans(content), next: 0 }
+        Self {
+            spans: yaml_comment_spans(content),
+            next: 0,
+        }
     }
 
     fn contains(&mut self, offset: usize) -> bool {
@@ -326,7 +334,12 @@ fn find_matching_close(bytes: &[u8]) -> Option<usize> {
     None
 }
 
-fn resolve_reference<F, L>(body: &str, source_label: &str, resolver: &F, line_of: L) -> Result<String>
+fn resolve_reference<F, L>(
+    body: &str,
+    source_label: &str,
+    resolver: &F,
+    line_of: L,
+) -> Result<String>
 where
     F: Fn(&str) -> Option<String>,
     L: Fn() -> usize,
@@ -356,7 +369,11 @@ where
                 source_label,
                 line_of(),
                 name,
-                if message.is_empty() { "value is unset" } else { message }
+                if message.is_empty() {
+                    "value is unset"
+                } else {
+                    message
+                }
             )),
         };
     }
@@ -365,7 +382,12 @@ where
     validate_name(name, source_label, &line_of)?;
     match resolver(name) {
         Some(value) => Ok(value),
-        None => Err(anyhow!("workflow YAML at {} line {} references unset env var {}.", source_label, line_of(), name)),
+        None => Err(anyhow!(
+            "workflow YAML at {} line {} references unset env var {}.",
+            source_label,
+            line_of(),
+            name
+        )),
     }
 }
 
@@ -380,7 +402,12 @@ where
             line_of()
         ));
     }
-    if !name.chars().next().map(|c| c == '_' || c.is_ascii_alphabetic()).unwrap_or(false) {
+    if !name
+        .chars()
+        .next()
+        .map(|c| c == '_' || c.is_ascii_alphabetic())
+        .unwrap_or(false)
+    {
         return Err(anyhow!(
             "workflow YAML at {} line {} env var name `{}` must start with a letter or underscore",
             source_label,
@@ -460,7 +487,10 @@ pub fn lint_sensitive_interpolations(content: &str, source_label: &str) -> Vec<S
         let line_bytes = line.as_bytes();
         let mut i = 0usize;
         while i + 1 < line_bytes.len() {
-            if line_bytes[i] == b'$' && line_bytes[i + 1] == b'{' && !comments.contains(line_start + i) {
+            if line_bytes[i] == b'$'
+                && line_bytes[i + 1] == b'{'
+                && !comments.contains(line_start + i)
+            {
                 let body_start = i + 2;
                 let body_rel = &line_bytes[body_start..];
                 let Some(close_off) = find_matching_close(body_rel) else {
@@ -494,7 +524,10 @@ fn looks_like_sensitive_var(body: &str) -> bool {
         return false;
     }
     let upper = name.to_ascii_uppercase();
-    upper.contains("TOKEN") || upper.contains("KEY") || upper.contains("SECRET") || upper.contains("PASSWORD")
+    upper.contains("TOKEN")
+        || upper.contains("KEY")
+        || upper.contains("SECRET")
+        || upper.contains("PASSWORD")
 }
 
 fn line_number_for_offset(content: &str, offset: usize) -> usize {
@@ -509,32 +542,46 @@ mod tests {
     /// Hermetic env stub: tests pass an explicit resolver instead of mutating
     /// process env, so they need no global lock.
     fn env_map(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let map: std::collections::BTreeMap<String, String> =
-            pairs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+        let map: std::collections::BTreeMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
         move |key: &str| map.get(key).cloned()
     }
 
     #[test]
     fn expands_required_var() {
-        let out =
-            interpolate_env_with("api_token: ${KEY}\n", "test.yaml", env_map(&[("KEY", "secret-token")])).unwrap();
+        let out = interpolate_env_with(
+            "api_token: ${KEY}\n",
+            "test.yaml",
+            env_map(&[("KEY", "secret-token")]),
+        )
+        .unwrap();
         assert_eq!(out, "api_token: secret-token\n");
     }
 
     #[test]
     fn errors_clearly_when_required_var_unset() {
         let src = "a: 1\nb: 2\napi_token: ${KEY}\n";
-        let err = interpolate_env_with(src, ".animus/workflows/agents.yaml", env_map(&[])).unwrap_err();
+        let err =
+            interpolate_env_with(src, ".animus/workflows/agents.yaml", env_map(&[])).unwrap_err();
         let msg = format!("{:#}", err);
         assert!(msg.contains("line 3"), "missing line number: {msg}");
         assert!(msg.contains("KEY"), "missing var name: {msg}");
-        assert!(msg.contains(".animus/workflows/agents.yaml"), "missing source label: {msg}");
+        assert!(
+            msg.contains(".animus/workflows/agents.yaml"),
+            "missing source label: {msg}"
+        );
     }
 
     #[test]
     fn uses_default_when_var_unset_with_default_syntax() {
-        let out =
-            interpolate_env_with("api_url: ${KEY:-https://api.example.com}\n", "test.yaml", env_map(&[])).unwrap();
+        let out = interpolate_env_with(
+            "api_url: ${KEY:-https://api.example.com}\n",
+            "test.yaml",
+            env_map(&[]),
+        )
+        .unwrap();
         assert_eq!(out, "api_url: https://api.example.com\n");
     }
 
@@ -571,7 +618,10 @@ mod tests {
         let src = "a: ${KEY:?set this in your shell}\n";
         let err = interpolate_env_with(src, "test.yaml", env_map(&[])).unwrap_err();
         let msg = format!("{:#}", err);
-        assert!(msg.contains("set this in your shell"), "missing custom message: {msg}");
+        assert!(
+            msg.contains("set this in your shell"),
+            "missing custom message: {msg}"
+        );
         assert!(msg.contains("KEY"));
     }
 
@@ -583,19 +633,24 @@ mod tests {
 
         let err = interpolate_env_with(src, "test.yaml", env_map(&[])).unwrap_err();
         let msg = format!("{:#}", err);
-        assert!(msg.contains("missing key :-("), "missing custom message: {msg}");
+        assert!(
+            msg.contains("missing key :-("),
+            "missing custom message: {msg}"
+        );
         assert!(msg.contains("KEY"), "missing var name: {msg}");
     }
 
     #[test]
     fn default_containing_required_token_parses_as_default() {
-        let out = interpolate_env_with("a: ${KEY:-fallback :? ok}\n", "test.yaml", env_map(&[])).unwrap();
+        let out =
+            interpolate_env_with("a: ${KEY:-fallback :? ok}\n", "test.yaml", env_map(&[])).unwrap();
         assert_eq!(out, "a: fallback :? ok\n");
     }
 
     #[test]
     fn lone_dollar_passes_through() {
-        let out = interpolate_env_with("note: this costs $5 in total\n", "test.yaml", env_map(&[])).unwrap();
+        let out = interpolate_env_with("note: this costs $5 in total\n", "test.yaml", env_map(&[]))
+            .unwrap();
         assert_eq!(out, "note: this costs $5 in total\n");
     }
 
@@ -635,13 +690,15 @@ mod tests {
     fn leaves_secret_references_untouched() {
         // `${secret.*}` is no longer resolved at parse time — it survives
         // verbatim regardless of env contents.
-        let out = interpolate_env_with("token: ${secret.api}\n", "test.yaml", env_map(&[])).unwrap();
+        let out =
+            interpolate_env_with("token: ${secret.api}\n", "test.yaml", env_map(&[])).unwrap();
         assert_eq!(out, "token: ${secret.api}\n");
     }
 
     #[test]
     fn preserves_escaped_literal_secret_reference() {
-        let out = interpolate_env_with("prompt: $${secret.api}\n", "test.yaml", env_map(&[])).unwrap();
+        let out =
+            interpolate_env_with("prompt: $${secret.api}\n", "test.yaml", env_map(&[])).unwrap();
         assert_eq!(out, "prompt: $${secret.api}\n");
     }
 
@@ -668,9 +725,12 @@ mod tests {
 
     #[test]
     fn hash_inside_quoted_scalar_still_interpolates() {
-        let out =
-            interpolate_env_with("key: \"#not-a-comment ${KEY}\"\n", "test.yaml", env_map(&[("KEY", "expanded")]))
-                .unwrap();
+        let out = interpolate_env_with(
+            "key: \"#not-a-comment ${KEY}\"\n",
+            "test.yaml",
+            env_map(&[("KEY", "expanded")]),
+        )
+        .unwrap();
         assert_eq!(out, "key: \"#not-a-comment expanded\"\n");
     }
 
@@ -727,14 +787,21 @@ mod tests {
     fn lint_skips_sensitive_looking_references_in_comments() {
         let src = "# export ${LINEAR_TOKEN}\nurl: ${TEAM_URL:-https://example.com}\n";
         let warnings = lint_sensitive_interpolations(src, "test.yaml");
-        assert!(warnings.is_empty(), "comment-only reference should not warn: {warnings:?}");
+        assert!(
+            warnings.is_empty(),
+            "comment-only reference should not warn: {warnings:?}"
+        );
     }
 
     #[test]
     fn lint_flags_sensitive_looking_interpolations() {
         let src = "token: ${LINEAR_TOKEN}\n";
         let warnings = lint_sensitive_interpolations(src, "test.yaml");
-        assert_eq!(warnings.len(), 1, "expected one sensitive-interpolation warning: {warnings:?}");
+        assert_eq!(
+            warnings.len(),
+            1,
+            "expected one sensitive-interpolation warning: {warnings:?}"
+        );
         assert!(warnings[0].contains("LINEAR_TOKEN"));
     }
 }

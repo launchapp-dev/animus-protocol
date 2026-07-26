@@ -18,6 +18,13 @@
       "description": "One-line summary returned by [`METHOD_CONVERSATION_LIST`].",
       "type": "object",
       "properties": {
+        "agent_id": {
+          "description": "Canonical configured agent profile bound to this conversation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "description": "Conversation id.",
           "type": "string"
@@ -41,6 +48,13 @@
             "string",
             "null"
           ]
+        },
+        "revision": {
+          "description": "Current optimistic-concurrency token.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         },
         "title": {
           "description": "Title, if any.",

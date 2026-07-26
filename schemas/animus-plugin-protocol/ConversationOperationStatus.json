@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationOperationStatus",
+  "description": "Durable lifecycle state for an idempotent application chat send.",
+  "type": "string",
+  "enum": [
+    "pending",
+    "user_accepted",
+    "completed",
+    "assistant_failed",
+    "assistant_interrupted"
+  ]
+}

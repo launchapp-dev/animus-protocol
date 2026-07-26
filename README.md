@@ -9,6 +9,7 @@
 | Crate | Standalone-compilable? | Notes |
 |---|---|---|
 | `animus-plugin-protocol` | yes | Wire types only; no external Animus deps. |
+| `animus-application-protocol` | yes | Policy-neutral application wire types, generated JSON Schemas, and cross-language scalar limits. |
 | `animus-subject-protocol` | yes | Pure trait + schema definitions. |
 | `animus-provider-protocol` | yes | Pure trait + schema definitions. |
 | `animus-trigger-protocol` | yes | Pure trait + schema definitions for push-driven event sources (Slack, webhooks, file watchers, cron). |
@@ -24,6 +25,7 @@ The protocol + subject + provider + runtime crates are usable today via git path
 | Crate | Purpose |
 |---|---|
 | [`animus-plugin-protocol`](./animus-plugin-protocol) | Wire types every plugin uses: `RpcRequest`, `RpcResponse`, `RpcNotification`, `RpcError`, error codes, `InitializeParams` / `InitializeResult`, `PluginManifest`, `HealthCheckResult`. |
+| [`animus-application-protocol`](./animus-application-protocol) | Application-facing action/resource vocabularies, closed chat controls, durable chat receipts, and machine-readable UTF-8/numeric limits. Portals still own policy; spatial clients still own world state. |
 | [`animus-subject-protocol`](./animus-subject-protocol) | `SubjectBackend` trait + normalized `Subject` schema for backends like Linear, Jira, GitHub Issues, Notion, Asana — anything with a system-of-record API. |
 | [`animus-provider-protocol`](./animus-provider-protocol) | `ProviderBackend` trait + `AgentRunRequest`/`AgentRunResponse` shapes for LLM provider plugins (Claude, Codex, Gemini, OpenAI-compatible, on-prem). |
 | [`animus-trigger-protocol`](./animus-trigger-protocol) | `TriggerBackend` trait + `TriggerEvent`/`TriggerSchema` shapes for push-driven event sources (Slack mentions, generic webhooks, file watchers, cron). |
@@ -31,6 +33,12 @@ The protocol + subject + provider + runtime crates are usable today via git path
 | [`animus-plugin-runtime`](./animus-plugin-runtime) | Shared stdio JSON-RPC loop, handshake, `--manifest` mode, notification helpers. Plugin authors call `subject_backend_main(...)` / `provider_main(...)` / `trigger_backend_main(...)` / `log_storage_backend_main(...)` from `main` and avoid hand-rolling the wire layer. |
 
 `animus-plugin-protocol` is the only required dependency for non-Rust plugin authors — and even then only as a reference. Any process that emits the documented JSON over stdio is a compatible Animus plugin.
+
+Application consumers regenerate the committed Draft 2020-12 artifacts with
+`cargo run -p animus-application-protocol --bin animus-application-protocol-export-schema`.
+The generated `_limits.json` is normative alongside JSON Schema: JSON Schema
+`maxLength` counts Unicode characters, while Animus transport ceilings count
+encoded UTF-8 bytes. Downstream validators must enforce both.
 
 ## Subject backend quickstart (Rust)
 

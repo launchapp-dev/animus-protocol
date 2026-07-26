@@ -18,7 +18,9 @@ impl SyncConfig {
     }
 
     pub fn load_for_project(project_root: &str) -> Self {
-        let project_path = PathBuf::from(project_root).join(".animus").join("sync.json");
+        let project_path = PathBuf::from(project_root)
+            .join(".animus")
+            .join("sync.json");
         if let Some(project_config) = Self::try_load_from(&project_path) {
             return project_config.merge_with_global();
         }
@@ -36,7 +38,9 @@ impl SyncConfig {
     }
 
     pub fn save_for_project(&self, project_root: &str) -> anyhow::Result<()> {
-        let path = PathBuf::from(project_root).join(".animus").join("sync.json");
+        let path = PathBuf::from(project_root)
+            .join(".animus")
+            .join("sync.json");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -51,7 +55,9 @@ impl SyncConfig {
             server: self.server.or(global.server),
             token: self.token.or(global.token),
             refresh_token: self.refresh_token.or(global.refresh_token),
-            access_token_expires_at: self.access_token_expires_at.or(global.access_token_expires_at),
+            access_token_expires_at: self
+                .access_token_expires_at
+                .or(global.access_token_expires_at),
             project_id: self.project_id.or(global.project_id),
             last_synced_at: self.last_synced_at.or(global.last_synced_at),
         }
@@ -75,13 +81,17 @@ impl SyncConfig {
 
     pub fn server_url(&self) -> anyhow::Result<String> {
         self.server.clone().ok_or_else(|| {
-            anyhow::anyhow!("Sync server not configured. Run: animus sync setup --server <url> --token <token>")
+            anyhow::anyhow!(
+                "Sync server not configured. Run: animus sync setup --server <url> --token <token>"
+            )
         })
     }
 
     pub fn bearer_token(&self) -> anyhow::Result<String> {
         self.token.clone().ok_or_else(|| {
-            anyhow::anyhow!("Sync token not configured. Run: animus sync setup --server <url> --token <token>")
+            anyhow::anyhow!(
+                "Sync token not configured. Run: animus sync setup --server <url> --token <token>"
+            )
         })
     }
 
@@ -89,7 +99,8 @@ impl SyncConfig {
         if let Some(ref expires_at) = self.access_token_expires_at {
             if let Ok(expires) = chrono::DateTime::parse_from_rfc3339(expires_at) {
                 let now = chrono::Utc::now();
-                let refresh_threshold = expires.with_timezone(&chrono::Utc) - chrono::Duration::minutes(5);
+                let refresh_threshold =
+                    expires.with_timezone(&chrono::Utc) - chrono::Duration::minutes(5);
                 return now >= refresh_threshold;
             }
         }
@@ -177,9 +188,18 @@ mod tests {
 
         assert_eq!(deserialized.server, Some("http://example.com".to_string()));
         assert_eq!(deserialized.token, Some("access_token".to_string()));
-        assert_eq!(deserialized.refresh_token, Some("refresh_token".to_string()));
-        assert_eq!(deserialized.access_token_expires_at, Some("2025-12-31T23:59:59Z".to_string()));
+        assert_eq!(
+            deserialized.refresh_token,
+            Some("refresh_token".to_string())
+        );
+        assert_eq!(
+            deserialized.access_token_expires_at,
+            Some("2025-12-31T23:59:59Z".to_string())
+        );
         assert_eq!(deserialized.project_id, Some("project-123".to_string()));
-        assert_eq!(deserialized.last_synced_at, Some("2025-01-01T00:00:00Z".to_string()));
+        assert_eq!(
+            deserialized.last_synced_at,
+            Some("2025-01-01T00:00:00Z".to_string())
+        );
     }
 }

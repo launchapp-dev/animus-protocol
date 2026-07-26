@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrepareRequest",
+  "description": "Request payload for [`METHOD_ENVIRONMENT_PREPARE`].",
+  "type": "object",
+  "properties": {
+    "spec": {
+      "description": "The environment to materialize.",
+      "$ref": "#/$defs/EnvironmentSpec"
+    }
+  },
+  "required": [
+    "spec"
+  ],
+  "$defs": {
+    "EnvironmentSpec": {
+      "description": "Declarative description of the execution context to materialize.\n\n[`Self::kind`] names the environment plugin id (e.g. `\"worktree\"`,\n`\"container\"`, `\"railway\"`) so the kernel can route a `prepare` call to the\nright plugin. The rest of the spec is intentionally open: [`Self::image`],\n[`Self::resources`], and [`Self::metadata`] carry plugin-specific knobs that\nthe kernel passes through opaquely.",
+      "type": "object",
+      "properties": {
+        "env": {
+          "description": "Environment variables to inject into every command run in this context.\nNon-secret config only — secrets flow through the kernel's secret store,\nnot this field.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "image": {
+          "description": "Container/VM image reference for image-based environments (Docker tag,\nOCI ref, AMI id, ...). Ignored by the worktree environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Environment plugin id that should service this spec (the plugin's\ndeclared environment kind, not [`animus_plugin_protocol::PluginKind`]).",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Free-form plugin-specific metadata (labels, base_ref, network mode,\nmounts, ...). Carried opaquely by the kernel."
+        },
+        "repos": {
+          "description": "The repo set / workspace to materialize. May be empty for a\nrepo-less environment (e.g. a scratch container).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RepoRef"
+          }
+        },
+        "resources": {
+          "description": "Resource requests/limits for the environment (cpu, memory, disk,\ntimeout, region, ...). Shape is plugin-defined; carried opaquely."
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "RepoRef": {
+      "description": "A single repository in an environment's workspace (repo set).\n\nA multi-repo workspace (see the top-level `workspace:` config) checks out\nmore than one `RepoRef` under [`EnvironmentHandle::workspace_root`], each in\nits own subdirectory named by [`RepoRef::name`] (or derived from\n[`RepoRef::url`] when `name` is unset).",
+      "type": "object",
+      "properties": {
+        "git_ref": {
+          "description": "Git ref (branch, tag, or commit) to check out. When unset, the plugin\nuses the remote's default branch.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Subdirectory name to check the repo out under, relative to\n[`EnvironmentHandle::workspace_root`]. When unset, the plugin derives it\nfrom the last path segment of [`Self::url`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "primary": {
+          "description": "True when this repo is the primary workspace repo (the one a\nsingle-repo subject maps to, and the default `cwd` for\n[`HarnessCommand`]). At most one repo in a set should be primary; when\nnone is marked, the first entry is primary.",
+          "type": "boolean"
+        },
+        "url": {
+          "description": "Clone URL or local path for the repository. The originating environment\nplugin interprets the value (an `https://`/`git@` remote for the\nworktree/container/remote runners, or a local path for a bind-mount).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  }
+}

@@ -7,8 +7,8 @@ use serde_json::Value;
 use crate::yaml_diagnostic::closest_match;
 
 use crate::agent_types::{
-    default_eval_expected_exit, default_eval_pass_threshold, AgentProfileOverlay, EvalKind, EvalOnFail, Idempotency,
-    PhaseExecutionMode,
+    default_eval_expected_exit, default_eval_pass_threshold, AgentProfileOverlay, EvalKind,
+    EvalOnFail, Idempotency, PhaseExecutionMode,
 };
 
 use crate::workflow_types::*;
@@ -43,6 +43,10 @@ pub(super) struct YamlPhaseRichConfig {
     pub(super) on_verdict: HashMap<String, PhaseTransitionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) budget: Option<BudgetConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,7 +181,9 @@ impl<'de> Deserialize<'de> for YamlPhaseWorktree {
                 } else {
                     let suggestion = match lower.as_str() {
                         "yes" | "on" | "enabled" | "enable" | "true" => Some("auto".to_string()),
-                        "no" | "off" | "disabled" | "disable" | "false" | "none" => Some("skip".to_string()),
+                        "no" | "off" | "disabled" | "disable" | "false" | "none" => {
+                            Some("skip".to_string())
+                        }
                         "needed" | "must" | "force" | "mandatory" => Some("required".to_string()),
                         _ => closest_match(&lower, WORKTREE_VALID_MODES, 2).map(|s| s.to_string()),
                     };
@@ -254,6 +260,10 @@ pub(super) struct YamlWorkflowDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) worktree: Option<YamlPhaseWorktree>,
     pub(super) budget: Option<BudgetConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,6 +420,12 @@ pub(super) struct YamlWorkflowFile {
     /// `${secret.<name>}` in any YAML scalar.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) secrets: BTreeMap<String, SecretRef>,
+    /// Named repo sets (workspaces) workflows/phases reference by name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) workspaces: BTreeMap<String, Workspace>,
+    /// Config-level environment routing (default + match rules).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) environment_routing: Option<EnvironmentRouting>,
 }
 
 /// Title-case a phase id (`code-review` -> `Code Review`) for default UI labels.

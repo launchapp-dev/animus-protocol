@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecResponse",
+  "description": "Response payload for [`METHOD_ENVIRONMENT_EXEC`] /\n[`METHOD_ENVIRONMENT_EXEC_STREAM`].\n\nFor [`METHOD_ENVIRONMENT_EXEC_STREAM`], [`Self::stdout`] / [`Self::stderr`]\ncarry the aggregated output already delivered incrementally via\n[`ExecNotification`]s; a client that consumed the stream can ignore them.",
+  "type": "object",
+  "properties": {
+    "exit_code": {
+      "description": "Process exit code. `None` when the process was terminated by a signal or\nkilled on timeout without producing an exit code.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "stderr": {
+      "description": "Aggregated stderr captured from the command.",
+      "type": "string"
+    },
+    "stdout": {
+      "description": "Aggregated stdout captured from the command.",
+      "type": "string"
+    },
+    "timed_out": {
+      "description": "True when the command was killed because it exceeded\n[`ExecRequest::timeout_secs`].",
+      "type": "boolean"
+    }
+  }
+}

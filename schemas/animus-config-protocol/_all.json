@@ -1,5 +1,32 @@
 {
   "$defs": {
+    "Actor": {
+      "description": "An opaque, transport-asserted caller identity.\n\nConstructed by the transport after it authenticates the caller, relayed\nverbatim by the kernel, and consumed only by plugins for data scoping. See\nthe [crate-level docs](crate) for the full contract.",
+      "properties": {
+        "claims": {
+          "description": "Transport-asserted claims (e.g. `[\"admin\"]`). Advisory only: the kernel\nnever branches on these. A plugin MAY consult them for its own\nauthorization decisions. Omitted from the wire when empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tenant_id": {
+          "description": "Optional tenant / organization partition the user belongs to. Plugins\nuse it for multi-tenant data isolation. Omitted from the wire when\nabsent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_id": {
+          "description": "Stable identifier for the authenticated user. Opaque to the kernel;\nplugins use it to scope owned rows to a user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id"
+      ],
+      "type": "object"
+    },
     "CacheToken": {
       "description": "Opaque cache key a config source returns so the kernel cache stays correct\nfor non-file sources.\n\nThe in-tree YAML cache keys on file content + mtime. For Postgres / API\nsources the plugin instead returns a [`CacheToken`]: an opaque version\nstring (a Postgres `max(updated_at)`, an ETag, a content hash, ...) plus an\n[`Self::external_inputs`] flag that reproduces today's\n`sources_have_external_inputs` cache-bypass hazard (inputs like `${VAR}` /\n`${secret.X}` / `system_prompt_file:` that change without mutating the\nsource bytes). When [`Self::external_inputs`] is true the kernel bypasses\nits disk cache for that load, matching current YAML behavior.\n\nRFC open question #5 (cache-token contract) is the reason this is a small\nstructured shape rather than a bare opaque string: it must cover the\n\"external inputs changed but source bytes didn't\" case explicitly.",
       "properties": {
@@ -80,6 +107,17 @@
     "ConfigLoadRequest": {
       "description": "Parameters for [`METHOD_CONFIG_LOAD`].\n\nCarries the project context the in-tree YAML scan reads from today: the\nproject root (where `.animus/` lives) and the `repo-scope` the kernel uses\nto locate scoped runtime state and keychain entries. A Postgres/API source\nuses `repo_scope` to select the right rows; the YAML source uses\n`project_root` to find the overlay files.",
       "properties": {
+        "actor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Actor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Transport-asserted caller identity, relayed verbatim by the kernel. A\nconfig source MAY use it to scope which config it returns (per-user or\nper-tenant overlays). `None` for daemon/system loads with no actor."
+        },
         "project_root": {
           "description": "Absolute path to the project root (the directory whose `.animus/`\ncarries the config). The YAML source scans `.animus/workflows.yaml` +\n`.animus/workflows/*.yaml` under this root.",
           "type": "string"
@@ -145,6 +183,17 @@
     "ConfigValidateRequest": {
       "description": "Parameters for [`METHOD_CONFIG_VALIDATE`].\n\nIdentical context to [`ConfigLoadRequest`]: a plugin-side syntactic\npre-check runs against the same project scope it would `config/load` from.",
       "properties": {
+        "actor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Actor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Transport-asserted caller identity (see [`ConfigLoadRequest::actor`])."
+        },
         "project_root": {
           "description": "Absolute path to the project root (see [`ConfigLoadRequest::project_root`]).",
           "type": "string"

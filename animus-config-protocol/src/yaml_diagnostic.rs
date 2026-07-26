@@ -103,7 +103,13 @@ impl YamlDiagnostic {
     /// `col_start` and `col_end` are 1-based column positions on `line` to
     /// underline (inclusive..exclusive). If `col_end <= col_start`, the
     /// underline is widened to cover the rest of the line.
-    pub fn with_excerpt_from(mut self, yaml_str: &str, line: usize, col_start: usize, col_end: usize) -> Self {
+    pub fn with_excerpt_from(
+        mut self,
+        yaml_str: &str,
+        line: usize,
+        col_start: usize,
+        col_end: usize,
+    ) -> Self {
         if line == 0 {
             return self;
         }
@@ -114,13 +120,25 @@ impl YamlDiagnostic {
         let focal_idx = line.saturating_sub(1).min(all_lines.len() - 1);
         let start_idx = focal_idx.saturating_sub(1);
         let end_idx = (focal_idx + 1).min(all_lines.len() - 1);
-        let lines: Vec<String> = all_lines[start_idx..=end_idx].iter().map(|s| s.to_string()).collect();
+        let lines: Vec<String> = all_lines[start_idx..=end_idx]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let focal = focal_idx - start_idx;
         let focal_len = all_lines[focal_idx].chars().count();
         let cs = col_start.saturating_sub(1).min(focal_len);
-        let ce = if col_end > col_start { col_end.saturating_sub(1).min(focal_len) } else { focal_len };
+        let ce = if col_end > col_start {
+            col_end.saturating_sub(1).min(focal_len)
+        } else {
+            focal_len
+        };
         let ce = ce.max(cs + 1).min(focal_len.max(cs + 1));
-        self.excerpt = Some(YamlExcerpt { start_line: start_idx + 1, lines, underline: (cs, ce), focal });
+        self.excerpt = Some(YamlExcerpt {
+            start_line: start_idx + 1,
+            lines,
+            underline: (cs, ce),
+            focal,
+        });
         self
     }
 }
@@ -150,7 +168,11 @@ impl fmt::Display for YamlDiagnostic {
                 writeln!(f, "{} | {}", num, line)?;
                 if offset == excerpt.focal {
                     let (cs, ce) = excerpt.underline;
-                    let leading: String = line.chars().take(cs).map(|c| if c == '\t' { '\t' } else { ' ' }).collect();
+                    let leading: String = line
+                        .chars()
+                        .take(cs)
+                        .map(|c| if c == '\t' { '\t' } else { ' ' })
+                        .collect();
                     let span = ce.saturating_sub(cs).max(1);
                     let carets: String = "^".repeat(span);
                     if self.expected.is_empty() {
@@ -201,7 +223,11 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
     for i in 1..=n {
         curr[0] = i;
         for j in 1..=m {
-            let cost = if a[i - 1].eq_ignore_ascii_case(&b[j - 1]) { 0 } else { 1 };
+            let cost = if a[i - 1].eq_ignore_ascii_case(&b[j - 1]) {
+                0
+            } else {
+                1
+            };
             curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
@@ -211,7 +237,11 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
 
 /// Choose the closest candidate to `input` within `max_distance` (Levenshtein).
 /// Returns `None` if no candidate is within range.
-pub fn closest_match<'a>(input: &str, candidates: &[&'a str], max_distance: usize) -> Option<&'a str> {
+pub fn closest_match<'a>(
+    input: &str,
+    candidates: &[&'a str],
+    max_distance: usize,
+) -> Option<&'a str> {
     let mut best: Option<(&'a str, usize)> = None;
     for cand in candidates {
         let d = edit_distance(input, cand);
@@ -227,7 +257,11 @@ pub fn closest_match<'a>(input: &str, candidates: &[&'a str], max_distance: usiz
 
 /// Wrap a raw `serde_yaml::Error` into a `YamlDiagnostic`, attaching the
 /// file path and a source excerpt when location info is available.
-pub fn wrap_serde_yaml_error(err: &serde_yaml::Error, yaml_str: &str, source_path: Option<&Path>) -> YamlDiagnostic {
+pub fn wrap_serde_yaml_error(
+    err: &serde_yaml::Error,
+    yaml_str: &str,
+    source_path: Option<&Path>,
+) -> YamlDiagnostic {
     let mut diag = YamlDiagnostic::new("yaml.parse_failed", err.to_string());
     if let Some(path) = source_path {
         diag = diag.with_file(path.to_path_buf());
@@ -237,7 +271,9 @@ pub fn wrap_serde_yaml_error(err: &serde_yaml::Error, yaml_str: &str, source_pat
         let col = loc.column();
         let trimmed_msg = strip_trailing_location(&diag.message);
         diag.message = trimmed_msg;
-        diag = diag.with_location(line, col).with_excerpt_from(yaml_str, line, col, col + 1);
+        diag = diag
+            .with_location(line, col)
+            .with_excerpt_from(yaml_str, line, col, col + 1);
     }
     diag
 }
@@ -280,7 +316,10 @@ mod tests {
         let diag = YamlDiagnostic::new("yaml.invalid_worktree", "invalid `worktree:` value")
             .with_file("/tmp/x.yaml")
             .with_location(3, 5)
-            .with_expected(vec!["string: \"auto\" | \"required\" | \"skip\"", "boolean: true | false"])
+            .with_expected(vec![
+                "string: \"auto\" | \"required\" | \"skip\"",
+                "boolean: true | false",
+            ])
             .with_suggestion("false")
             .with_excerpt_from(yaml, 3, 5, 19);
         let rendered = format!("{}", diag);

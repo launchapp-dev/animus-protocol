@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TeardownNodeResponse",
+  "description": "Response payload for [`METHOD_ENVIRONMENT_TEARDOWN_NODE`]. Idempotent — an\nalready-gone node yields an empty `deleted`.",
+  "type": "object",
+  "properties": {
+    "deleted": {
+      "description": "Substrate ids actually deleted.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

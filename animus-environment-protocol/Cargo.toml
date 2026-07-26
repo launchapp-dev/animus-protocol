@@ -1,0 +1,18 @@
+[package]
+name = "animus-environment-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "Wire types for the Animus `environment` plugin role (JSON-RPC 2.0). Prepares an execution context (worktree, container, remote host), runs provider harness commands inside it, and tears it down."
+
+[dependencies]
+animus-plugin-protocol = { path = "../animus-plugin-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1.0"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "animus-environment-protocol-export-schema"
+path = "src/bin/export_schema.rs"

@@ -425,6 +425,7 @@ mod tests {
             name: "stub".into(),
             version: "0.0.0".into(),
             plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.into(),
+            plugin_kinds: Vec::new(),
             description: Some("stub".into()),
         };
         let plugin = subject_plugin(info, StubBackend);
@@ -453,6 +454,7 @@ mod tests {
             name: "stub".into(),
             version: "0.0.0".into(),
             plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.into(),
+            plugin_kinds: Vec::new(),
             description: Some("stub".into()),
         };
         let plugin = subject_plugin_with_kind_aliases(info, StubBackend, ["task"]);
@@ -479,6 +481,7 @@ mod tests {
             name: "stub".into(),
             version: "0.0.0".into(),
             plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.into(),
+            plugin_kinds: Vec::new(),
             description: None,
         };
         let plugin = subject_plugin(info, StubBackend);

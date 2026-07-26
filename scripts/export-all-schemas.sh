@@ -20,6 +20,7 @@ cd "${WORKSPACE_ROOT}"
 # Each entry is "<crate>" — the bin name is "<crate>-export-schema" by
 # convention.
 CRATES=(
+    "animus-application-protocol"
     "animus-plugin-protocol"
     "animus-subject-protocol"
     "animus-provider-protocol"
@@ -31,6 +32,7 @@ CRATES=(
     "animus-durable-store-protocol"
     "animus-memory-store-protocol"
     "animus-notifier-protocol"
+    "animus-environment-protocol"
 )
 
 for crate in "${CRATES[@]}"; do

@@ -36,7 +36,11 @@ impl EnvVarGuard {
             Some(value) => std::env::set_var(key, value),
             None => std::env::remove_var(key),
         }
-        Self { key: key.to_string(), previous, _lock: lock }
+        Self {
+            key: key.to_string(),
+            previous,
+            _lock: lock,
+        }
     }
 }
 

@@ -281,7 +281,10 @@ mod tests {
 
     #[test]
     fn error_codes_map() {
-        assert_eq!(JournalError::NotFound("x".into()).code(), error_codes::INVALID_PARAMS);
+        assert_eq!(
+            JournalError::NotFound("x".into()).code(),
+            error_codes::INVALID_PARAMS
+        );
         assert_eq!(
             JournalError::MethodNotSupported("journal/events".into()).code(),
             error_codes::METHOD_NOT_SUPPORTED

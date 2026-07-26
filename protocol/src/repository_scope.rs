@@ -42,7 +42,9 @@ fn reclaim_scope_marker_if_foreign(scope_dir: &Path, project_root: &Path) {
         persist_project_root_marker(scope_dir, project_root);
         return;
     };
-    let canonical = project_root.canonicalize().unwrap_or_else(|_| project_root.to_path_buf());
+    let canonical = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
     let recorded = Path::new(recorded_raw.trim());
     match recorded.canonicalize() {
         Ok(recorded_canonical) if paths_refer_to_same_file(&recorded_canonical, &canonical) => {}
@@ -62,8 +64,13 @@ fn reclaim_scope_marker_if_foreign(scope_dir: &Path, project_root: &Path) {
 }
 
 fn persist_project_root_marker(scope_dir: &Path, project_root: &Path) {
-    let canonical = project_root.canonicalize().unwrap_or_else(|_| project_root.to_path_buf());
-    let _ = std::fs::write(scope_dir.join(".project-root"), format!("{}\n", canonical.to_string_lossy()));
+    let canonical = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+    let _ = std::fs::write(
+        scope_dir.join(".project-root"),
+        format!("{}\n", canonical.to_string_lossy()),
+    );
 }
 
 fn git_remote_origin(project_root: &Path) -> Option<String> {
@@ -81,7 +88,9 @@ fn git_remote_origin(project_root: &Path) -> Option<String> {
 
 fn find_existing_scope_by_origin(ao_root: &Path, project_root: &Path) -> Option<PathBuf> {
     let our_origin = git_remote_origin(project_root)?;
-    let canonical = project_root.canonicalize().unwrap_or_else(|_| project_root.to_path_buf());
+    let canonical = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
 
     let entries = std::fs::read_dir(ao_root).ok()?;
     for entry in entries.flatten() {
@@ -123,7 +132,9 @@ fn find_existing_scope_by_origin(ao_root: &Path, project_root: &Path) -> Option<
                     // canonical string preserves caller casing, so the same
                     // directory reached via differently-cased paths must
                     // still adopt this scope instead of splitting.
-                    Ok(existing_canonical) if paths_refer_to_same_file(&existing_canonical, &canonical) => {
+                    Ok(existing_canonical)
+                        if paths_refer_to_same_file(&existing_canonical, &canonical) =>
+                    {
                         return Some(scope_dir);
                     }
                     Ok(_) => {
@@ -286,7 +297,10 @@ mod tests {
         assert_eq!(sanitize_identifier("Repo Name", "repo"), "repo-name");
         assert_eq!(sanitize_identifier("___", "repo"), "repo");
         assert_eq!(sanitize_identifier("A__B--C", "repo"), "a-b-c");
-        assert_eq!(sanitize_identifier("  __My Repo!! -- 2026__  ", "repo"), "my-repo-2026");
+        assert_eq!(
+            sanitize_identifier("  __My Repo!! -- 2026__  ", "repo"),
+            "my-repo-2026"
+        );
         assert_eq!(sanitize_identifier("日本語", "repo"), "repo");
         assert_eq!(sanitize_identifier("日本語", "task"), "task");
     }
@@ -345,9 +359,14 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
 
             let git_script = bin.join("git");
-            std::fs::write(&git_script, format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()))
-                .expect("write fake git");
-            let mut perms = std::fs::metadata(&git_script).expect("metadata").permissions();
+            std::fs::write(
+                &git_script,
+                format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
+            )
+            .expect("write fake git");
+            let mut perms = std::fs::metadata(&git_script)
+                .expect("metadata")
+                .permissions();
             perms.set_mode(0o755);
             std::fs::set_permissions(&git_script, perms).expect("set perms");
         }
@@ -357,7 +376,10 @@ mod tests {
 
         let resolved = scoped_state_root(&repo).expect("scope dir");
         assert_eq!(resolved, scope_dir);
-        assert!(!marker.exists(), "existing scope lookup should not invoke git");
+        assert!(
+            !marker.exists(),
+            "existing scope lookup should not invoke git"
+        );
     }
 
     #[cfg(unix)]
@@ -377,9 +399,14 @@ mod tests {
 
         // Fake git that always reports the same origin URL regardless of cwd.
         let git_script = bin.join("git");
-        std::fs::write(&git_script, "#!/bin/sh\necho 'git@github.com:example/shared-repo.git'\n")
-            .expect("write fake git");
-        let mut perms = std::fs::metadata(&git_script).expect("metadata").permissions();
+        std::fs::write(
+            &git_script,
+            "#!/bin/sh\necho 'git@github.com:example/shared-repo.git'\n",
+        )
+        .expect("write fake git");
+        let mut perms = std::fs::metadata(&git_script)
+            .expect("metadata")
+            .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&git_script, perms).expect("set perms");
 
@@ -389,12 +416,25 @@ mod tests {
         let scope_a = scoped_state_root(&clone_a).expect("scope a");
         let scope_b = scoped_state_root(&clone_b).expect("scope b");
 
-        let expected_a = home.join(".animus").join(repository_scope_for_path(&clone_a));
-        let expected_b = home.join(".animus").join(repository_scope_for_path(&clone_b));
+        let expected_a = home
+            .join(".animus")
+            .join(repository_scope_for_path(&clone_a));
+        let expected_b = home
+            .join(".animus")
+            .join(repository_scope_for_path(&clone_b));
 
-        assert_eq!(scope_a, expected_a, "clone A should land on its hash-derived scope");
-        assert_eq!(scope_b, expected_b, "clone B should land on its hash-derived scope");
-        assert_ne!(scope_a, scope_b, "two clones of the same origin must not share a scope");
+        assert_eq!(
+            scope_a, expected_a,
+            "clone A should land on its hash-derived scope"
+        );
+        assert_eq!(
+            scope_b, expected_b,
+            "clone B should land on its hash-derived scope"
+        );
+        assert_ne!(
+            scope_a, scope_b,
+            "two clones of the same origin must not share a scope"
+        );
 
         // Subsequent calls must remain stable and not cross over via the
         // same-origin fallback.
@@ -441,9 +481,14 @@ mod tests {
         std::fs::create_dir_all(&bin).expect("bin dir");
 
         let git_script = bin.join("git");
-        std::fs::write(&git_script, "#!/bin/sh\necho 'git@github.com:example/cased-repo.git'\n")
-            .expect("write fake git");
-        let mut perms = std::fs::metadata(&git_script).expect("metadata").permissions();
+        std::fs::write(
+            &git_script,
+            "#!/bin/sh\necho 'git@github.com:example/cased-repo.git'\n",
+        )
+        .expect("write fake git");
+        let mut perms = std::fs::metadata(&git_script)
+            .expect("metadata")
+            .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&git_script, perms).expect("set perms");
 
@@ -459,7 +504,10 @@ mod tests {
             return;
         }
         let adopted = scoped_state_root(&lowercased).expect("adopted scope");
-        assert_eq!(adopted, original_scope, "differently-cased access must adopt the existing scope, not split");
+        assert_eq!(
+            adopted, original_scope,
+            "differently-cased access must adopt the existing scope, not split"
+        );
     }
 
     #[cfg(unix)]
@@ -476,25 +524,39 @@ mod tests {
         std::fs::create_dir_all(&bin).expect("bin dir");
 
         let git_script = bin.join("git");
-        std::fs::write(&git_script, "#!/bin/sh\necho 'git@github.com:example/moved-repo.git'\n")
-            .expect("write fake git");
-        let mut perms = std::fs::metadata(&git_script).expect("metadata").permissions();
+        std::fs::write(
+            &git_script,
+            "#!/bin/sh\necho 'git@github.com:example/moved-repo.git'\n",
+        )
+        .expect("write fake git");
+        let mut perms = std::fs::metadata(&git_script)
+            .expect("metadata")
+            .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&git_script, perms).expect("set perms");
 
         // Pre-create a legacy scope whose recorded `.project-root` no longer exists.
         let legacy_scope = home.join(".animus").join("legacy-scope-aaaaaaaaaaaa");
         std::fs::create_dir_all(&legacy_scope).expect("legacy scope");
-        std::fs::write(legacy_scope.join(".git-origin"), "git@github.com:example/moved-repo.git\n")
-            .expect("write origin");
-        std::fs::write(legacy_scope.join(".project-root"), format!("{}\n", temp.path().join("old-location").display()))
-            .expect("write stale project-root");
+        std::fs::write(
+            legacy_scope.join(".git-origin"),
+            "git@github.com:example/moved-repo.git\n",
+        )
+        .expect("write origin");
+        std::fs::write(
+            legacy_scope.join(".project-root"),
+            format!("{}\n", temp.path().join("old-location").display()),
+        )
+        .expect("write stale project-root");
 
         let _home_guard = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
         let _path_guard = EnvVarGuard::set("PATH", Some(bin.to_string_lossy().as_ref()));
 
         let resolved = scoped_state_root(&new_clone).expect("scope");
-        assert_eq!(resolved, legacy_scope, "moved clone should reclaim its legacy scope");
+        assert_eq!(
+            resolved, legacy_scope,
+            "moved clone should reclaim its legacy scope"
+        );
 
         // And the marker should now point at the new canonical location.
         let marker = std::fs::read_to_string(legacy_scope.join(".project-root")).expect("marker");
@@ -504,11 +566,19 @@ mod tests {
 
     #[test]
     fn recorded_path_transience_distinguishes_missing_mount_from_missing_leaf() {
-        assert!(recorded_path_is_transiently_unavailable(Path::new("/Volumes/animus-no-such-volume-1f2e3d/repo")));
-        assert!(recorded_path_is_transiently_unavailable(Path::new("/mnt/animus-no-such-volume-1f2e3d/repo")));
+        assert!(recorded_path_is_transiently_unavailable(Path::new(
+            "/Volumes/animus-no-such-volume-1f2e3d/repo"
+        )));
+        assert!(recorded_path_is_transiently_unavailable(Path::new(
+            "/mnt/animus-no-such-volume-1f2e3d/repo"
+        )));
         // Repo mounted directly at the volume root.
-        assert!(recorded_path_is_transiently_unavailable(Path::new("/mnt/animus-no-such-volume-1f2e3d")));
-        assert!(recorded_path_is_transiently_unavailable(Path::new("/animus-no-such-root-1f2e3d/nested/repo")));
+        assert!(recorded_path_is_transiently_unavailable(Path::new(
+            "/mnt/animus-no-such-volume-1f2e3d"
+        )));
+        assert!(recorded_path_is_transiently_unavailable(Path::new(
+            "/animus-no-such-root-1f2e3d/nested/repo"
+        )));
 
         // Parent chain present, leaf gone → the repo was moved or deleted.
         let temp = tempdir().expect("tempdir");
@@ -530,9 +600,14 @@ mod tests {
         std::fs::create_dir_all(&bin).expect("bin dir");
 
         let git_script = bin.join("git");
-        std::fs::write(&git_script, "#!/bin/sh\necho 'git@github.com:example/unmounted-repo.git'\n")
-            .expect("write fake git");
-        let mut perms = std::fs::metadata(&git_script).expect("metadata").permissions();
+        std::fs::write(
+            &git_script,
+            "#!/bin/sh\necho 'git@github.com:example/unmounted-repo.git'\n",
+        )
+        .expect("write fake git");
+        let mut perms = std::fs::metadata(&git_script)
+            .expect("metadata")
+            .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&git_script, perms).expect("set perms");
 
@@ -540,16 +615,28 @@ mod tests {
         let unmounted_root = "/Volumes/animus-test-absent-volume-9a8b7c/repo";
         let offline_scope = home.join(".animus").join("offline-scope-bbbbbbbbbbbb");
         std::fs::create_dir_all(&offline_scope).expect("offline scope");
-        std::fs::write(offline_scope.join(".git-origin"), "git@github.com:example/unmounted-repo.git\n")
-            .expect("write origin");
-        std::fs::write(offline_scope.join(".project-root"), format!("{unmounted_root}\n")).expect("write project-root");
+        std::fs::write(
+            offline_scope.join(".git-origin"),
+            "git@github.com:example/unmounted-repo.git\n",
+        )
+        .expect("write origin");
+        std::fs::write(
+            offline_scope.join(".project-root"),
+            format!("{unmounted_root}\n"),
+        )
+        .expect("write project-root");
 
         let _home_guard = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
         let _path_guard = EnvVarGuard::set("PATH", Some(bin.to_string_lossy().as_ref()));
 
         let resolved = scoped_state_root(&new_clone).expect("scope");
-        let expected = home.join(".animus").join(repository_scope_for_path(&new_clone));
-        assert_eq!(resolved, expected, "clone must not adopt a scope whose owner is merely unmounted");
+        let expected = home
+            .join(".animus")
+            .join(repository_scope_for_path(&new_clone));
+        assert_eq!(
+            resolved, expected,
+            "clone must not adopt a scope whose owner is merely unmounted"
+        );
         assert_ne!(resolved, offline_scope);
 
         // The offline clone's marker must survive untouched for remount.
@@ -595,11 +682,16 @@ mod tests {
 
         // Our hash-derived scope exists but its marker was rewritten by a
         // sibling clone while our path was unreachable.
-        let scope_dir = home.join(".animus").join(repository_scope_for_path(&our_clone));
+        let scope_dir = home
+            .join(".animus")
+            .join(repository_scope_for_path(&our_clone));
         std::fs::create_dir_all(&scope_dir).expect("scope dir");
         let canonical_other = other_clone.canonicalize().expect("canon other");
-        std::fs::write(scope_dir.join(".project-root"), format!("{}\n", canonical_other.display()))
-            .expect("write foreign marker");
+        std::fs::write(
+            scope_dir.join(".project-root"),
+            format!("{}\n", canonical_other.display()),
+        )
+        .expect("write foreign marker");
 
         let _home_guard = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
 
@@ -610,7 +702,9 @@ mod tests {
             .with_ansi(false)
             .finish();
 
-        let resolved = tracing::subscriber::with_default(subscriber, || scoped_state_root(&our_clone).expect("scope"));
+        let resolved = tracing::subscriber::with_default(subscriber, || {
+            scoped_state_root(&our_clone).expect("scope")
+        });
         assert_eq!(resolved, scope_dir);
 
         // The marker must be reclaimed for the caller whose path hashes to
@@ -619,10 +713,20 @@ mod tests {
         let canonical_ours = our_clone.canonicalize().expect("canon ours");
         assert_eq!(marker.trim(), canonical_ours.to_string_lossy());
 
-        let logs = String::from_utf8(capture.0.lock().expect("capture lock").clone()).expect("utf8 logs");
-        assert!(logs.contains("reclaiming the scope"), "expected a warn about reclaiming, got: {logs}");
-        assert!(logs.contains(canonical_other.to_string_lossy().as_ref()), "warn should name the recorded path");
-        assert!(logs.contains(canonical_ours.to_string_lossy().as_ref()), "warn should name the current path");
+        let logs =
+            String::from_utf8(capture.0.lock().expect("capture lock").clone()).expect("utf8 logs");
+        assert!(
+            logs.contains("reclaiming the scope"),
+            "expected a warn about reclaiming, got: {logs}"
+        );
+        assert!(
+            logs.contains(canonical_other.to_string_lossy().as_ref()),
+            "warn should name the recorded path"
+        );
+        assert!(
+            logs.contains(canonical_ours.to_string_lossy().as_ref()),
+            "warn should name the current path"
+        );
     }
 
     #[cfg(unix)]

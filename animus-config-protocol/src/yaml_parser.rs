@@ -6,8 +6,8 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::agent_types::PhaseExecutionDefinition;
 use crate::agent_types::{
-    AgentProfileOverlay, CommandCwdMode, EvalCheck, EvalsConfig, PhaseCommandDefinition, PhaseExecutionMode,
-    PhaseManualDefinition,
+    AgentProfileOverlay, CommandCwdMode, EvalCheck, EvalsConfig, PhaseCommandDefinition,
+    PhaseExecutionMode, PhaseManualDefinition,
 };
 
 use crate::builtins::builtin_workflow_config;
@@ -47,7 +47,12 @@ pub fn resolve_agent_model_references(
         }
         if let Some(entry) = registry.get(trimmed) {
             let model = entry.model.trim().to_string();
-            let tool = entry.tool.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(ToOwned::to_owned);
+            let tool = entry
+                .tool
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned);
             resolved_models.push(model);
             resolved_tools.push(tool);
         } else {
@@ -99,7 +104,10 @@ pub(super) fn parse_cwd_mode(value: &str) -> Result<CommandCwdMode> {
         "project_root" => Ok(CommandCwdMode::ProjectRoot),
         "task_root" => Ok(CommandCwdMode::TaskRoot),
         "path" => Ok(CommandCwdMode::Path),
-        other => Err(anyhow!("unknown cwd_mode '{}' (expected project_root, task_root, or path)", other)),
+        other => Err(anyhow!(
+            "unknown cwd_mode '{}' (expected project_root, task_root, or path)",
+            other
+        )),
     }
 }
 
@@ -169,7 +177,12 @@ pub(super) fn yaml_phase_to_execution_definition(
             program: cmd.program,
             args: cmd.args,
             env: cmd.env,
-            cwd_mode: cmd.cwd_mode.as_deref().map(parse_cwd_mode).transpose()?.unwrap_or(CommandCwdMode::ProjectRoot),
+            cwd_mode: cmd
+                .cwd_mode
+                .as_deref()
+                .map(parse_cwd_mode)
+                .transpose()?
+                .unwrap_or(CommandCwdMode::ProjectRoot),
             cwd_path: cmd.cwd_path,
             timeout_secs: cmd.timeout_secs,
             success_exit_codes: cmd.success_exit_codes.unwrap_or_else(|| vec![0]),
@@ -185,7 +198,10 @@ pub(super) fn yaml_phase_to_execution_definition(
             failure_risk: cmd.failure_risk,
         }),
         (PhaseExecutionMode::Command, None) => {
-            return Err(anyhow!("phases['{}'] mode 'command' requires a command block", phase_id));
+            return Err(anyhow!(
+                "phases['{}'] mode 'command' requires a command block",
+                phase_id
+            ));
         }
         (_, Some(_)) => {
             return Err(anyhow!(
@@ -204,10 +220,17 @@ pub(super) fn yaml_phase_to_execution_definition(
             timeout_secs: m.timeout_secs,
         }),
         (PhaseExecutionMode::Manual, None) => {
-            return Err(anyhow!("phases['{}'] mode 'manual' requires a manual block", phase_id));
+            return Err(anyhow!(
+                "phases['{}'] mode 'manual' requires a manual block",
+                phase_id
+            ));
         }
         (_, Some(_)) => {
-            return Err(anyhow!("phases['{}'] mode '{}' must not include a manual block", phase_id, mode_label));
+            return Err(anyhow!(
+                "phases['{}'] mode '{}' must not include a manual block",
+                phase_id,
+                mode_label
+            ));
         }
         _ => None,
     };
@@ -236,9 +259,9 @@ pub(super) fn yaml_phase_to_execution_definition(
 pub(super) fn workflow_phase_entry_to_yaml(entry: &WorkflowPhaseEntry) -> YamlPhaseEntry {
     match entry {
         WorkflowPhaseEntry::Simple(id) => YamlPhaseEntry::Simple(id.clone()),
-        WorkflowPhaseEntry::SubWorkflow(sub) => {
-            YamlPhaseEntry::SubWorkflow(YamlSubWorkflowRef { workflow_ref: sub.workflow_ref.clone() })
-        }
+        WorkflowPhaseEntry::SubWorkflow(sub) => YamlPhaseEntry::SubWorkflow(YamlSubWorkflowRef {
+            workflow_ref: sub.workflow_ref.clone(),
+        }),
         WorkflowPhaseEntry::Rich(config) => {
             let mut map = HashMap::new();
             map.insert(
@@ -248,6 +271,8 @@ pub(super) fn workflow_phase_entry_to_yaml(entry: &WorkflowPhaseEntry) -> YamlPh
                     skip_if: config.skip_if.clone(),
                     on_verdict: config.on_verdict.clone(),
                     budget: config.budget.clone(),
+                    environment: config.environment.clone(),
+                    workspace: config.workspace.clone(),
                 },
             );
             YamlPhaseEntry::Rich(map)
@@ -255,50 +280,66 @@ pub(super) fn workflow_phase_entry_to_yaml(entry: &WorkflowPhaseEntry) -> YamlPh
     }
 }
 
-pub(crate) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> YamlWorkflowDefinition {
+pub(crate) fn workflow_definition_to_yaml(
+    definition: &WorkflowDefinition,
+) -> YamlWorkflowDefinition {
     YamlWorkflowDefinition {
         id: definition.id.clone(),
         name: Some(definition.name.clone()),
         description: Some(definition.description.clone()),
-        phases: definition.phases.iter().map(workflow_phase_entry_to_yaml).collect(),
+        phases: definition
+            .phases
+            .iter()
+            .map(workflow_phase_entry_to_yaml)
+            .collect(),
         variables: definition.variables.clone(),
         worktree: definition.worktree.clone().map(YamlPhaseWorktree::Full),
         budget: definition.budget.clone(),
+        environment: definition.environment.clone(),
+        workspace: definition.workspace.clone(),
     }
 }
 
-pub(crate) fn phase_execution_definition_to_yaml(definition: &PhaseExecutionDefinition) -> YamlPhaseDefinition {
+pub(crate) fn phase_execution_definition_to_yaml(
+    definition: &PhaseExecutionDefinition,
+) -> YamlPhaseDefinition {
     YamlPhaseDefinition {
         mode: definition.mode.clone(),
         agent: definition.agent_id.clone(),
-        command: definition.command.clone().map(|command| YamlCommandDefinition {
-            program: command.program,
-            args: command.args,
-            env: command.env,
-            cwd_mode: Some(match command.cwd_mode {
-                CommandCwdMode::ProjectRoot => "project_root".to_string(),
-                CommandCwdMode::TaskRoot => "task_root".to_string(),
-                CommandCwdMode::Path => "path".to_string(),
+        command: definition
+            .command
+            .clone()
+            .map(|command| YamlCommandDefinition {
+                program: command.program,
+                args: command.args,
+                env: command.env,
+                cwd_mode: Some(match command.cwd_mode {
+                    CommandCwdMode::ProjectRoot => "project_root".to_string(),
+                    CommandCwdMode::TaskRoot => "task_root".to_string(),
+                    CommandCwdMode::Path => "path".to_string(),
+                }),
+                cwd_path: command.cwd_path,
+                timeout_secs: command.timeout_secs,
+                success_exit_codes: Some(command.success_exit_codes),
+                parse_json_output: Some(command.parse_json_output),
+                expected_result_kind: command.expected_result_kind,
+                expected_schema: command.expected_schema,
+                category: command.category,
+                failure_pattern: command.failure_pattern,
+                excerpt_max_chars: command.excerpt_max_chars,
+                on_success_verdict: command.on_success_verdict,
+                on_failure_verdict: command.on_failure_verdict,
+                confidence: command.confidence,
+                failure_risk: command.failure_risk,
             }),
-            cwd_path: command.cwd_path,
-            timeout_secs: command.timeout_secs,
-            success_exit_codes: Some(command.success_exit_codes),
-            parse_json_output: Some(command.parse_json_output),
-            expected_result_kind: command.expected_result_kind,
-            expected_schema: command.expected_schema,
-            category: command.category,
-            failure_pattern: command.failure_pattern,
-            excerpt_max_chars: command.excerpt_max_chars,
-            on_success_verdict: command.on_success_verdict,
-            on_failure_verdict: command.on_failure_verdict,
-            confidence: command.confidence,
-            failure_risk: command.failure_risk,
-        }),
-        manual: definition.manual.clone().map(|manual| YamlManualDefinition {
-            instructions: manual.instructions,
-            approval_note_required: Some(manual.approval_note_required),
-            timeout_secs: manual.timeout_secs,
-        }),
+        manual: definition
+            .manual
+            .clone()
+            .map(|manual| YamlManualDefinition {
+                instructions: manual.instructions,
+                approval_note_required: Some(manual.approval_note_required),
+                timeout_secs: manual.timeout_secs,
+            }),
         directive: definition.directive.clone(),
         system_prompt: definition.system_prompt.clone(),
         skills: definition.skills.clone(),
@@ -318,8 +359,16 @@ pub(crate) fn phase_execution_definition_to_yaml(definition: &PhaseExecutionDefi
 pub(crate) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkflowFile {
     YamlWorkflowFile {
         default_workflow_ref: Some(config.default_workflow_ref.clone()),
-        phase_catalog: if config.phase_catalog.is_empty() { None } else { Some(config.phase_catalog.clone()) },
-        workflows: config.workflows.iter().map(workflow_definition_to_yaml).collect(),
+        phase_catalog: if config.phase_catalog.is_empty() {
+            None
+        } else {
+            Some(config.phase_catalog.clone())
+        },
+        workflows: config
+            .workflows
+            .iter()
+            .map(workflow_definition_to_yaml)
+            .collect(),
         phases: config
             .phase_definitions
             .iter()
@@ -337,18 +386,25 @@ pub(crate) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkf
         triggers: config.triggers.clone(),
         daemon: config.daemon.clone(),
         secrets: config.secrets.clone(),
+        workspaces: config.workspaces.clone(),
+        environment_routing: config.environment_routing.clone(),
     }
 }
 
-pub(super) fn yaml_phase_entry_to_workflow_phase_entry(entry: YamlPhaseEntry) -> Result<WorkflowPhaseEntry> {
+pub(super) fn yaml_phase_entry_to_workflow_phase_entry(
+    entry: YamlPhaseEntry,
+) -> Result<WorkflowPhaseEntry> {
     match entry {
         YamlPhaseEntry::Simple(id) => Ok(WorkflowPhaseEntry::Simple(id)),
-        YamlPhaseEntry::SubWorkflow(sub) => {
-            Ok(WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: sub.workflow_ref }))
-        }
+        YamlPhaseEntry::SubWorkflow(sub) => Ok(WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
+            workflow_ref: sub.workflow_ref,
+        })),
         YamlPhaseEntry::Rich(map) => {
             if map.len() != 1 {
-                return Err(anyhow!("rich phase entry must have exactly one key (the phase id), got {}", map.len()));
+                return Err(anyhow!(
+                    "rich phase entry must have exactly one key (the phase id), got {}",
+                    map.len()
+                ));
             }
             let (id, config) = map.into_iter().next().unwrap();
             Ok(WorkflowPhaseEntry::Rich(WorkflowPhaseConfig {
@@ -357,13 +413,21 @@ pub(super) fn yaml_phase_entry_to_workflow_phase_entry(entry: YamlPhaseEntry) ->
                 on_verdict: config.on_verdict,
                 skip_if: config.skip_if,
                 budget: config.budget,
+                environment: config.environment,
+                workspace: config.workspace,
             }))
         }
     }
 }
 
-pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition) -> Result<WorkflowDefinition> {
-    let phases = yaml.phases.into_iter().map(yaml_phase_entry_to_workflow_phase_entry).collect::<Result<Vec<_>>>()?;
+pub(super) fn yaml_workflow_to_workflow_definition(
+    yaml: YamlWorkflowDefinition,
+) -> Result<WorkflowDefinition> {
+    let phases = yaml
+        .phases
+        .into_iter()
+        .map(yaml_phase_entry_to_workflow_phase_entry)
+        .collect::<Result<Vec<_>>>()?;
     let worktree = yaml.worktree.map(WorktreeConfig::from_yaml).transpose()?;
     Ok(WorkflowDefinition {
         id: yaml.id.clone(),
@@ -373,11 +437,15 @@ pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition)
         variables: yaml.variables,
         worktree,
         budget: yaml.budget,
+        environment: yaml.environment,
+        workspace: yaml.workspace,
     })
 }
 
 fn source_label(source_path: Option<&Path>) -> String {
-    source_path.map(|p| p.display().to_string()).unwrap_or_else(|| "<in-memory>".to_string())
+    source_path
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<in-memory>".to_string())
 }
 
 fn reject_removed_post_success_merge(yaml_str: &str, source_path: Option<&Path>) -> Result<()> {
@@ -386,9 +454,16 @@ fn reject_removed_post_success_merge(yaml_str: &str, source_path: Option<&Path>)
     };
 
     let mut post_success_merge_found = false;
-    if let Some(workflows) = doc.get("workflows").and_then(serde_yaml::Value::as_sequence) {
+    if let Some(workflows) = doc
+        .get("workflows")
+        .and_then(serde_yaml::Value::as_sequence)
+    {
         for workflow in workflows {
-            if workflow.get("post_success").and_then(|ps| ps.get("merge")).is_some() {
+            if workflow
+                .get("post_success")
+                .and_then(|ps| ps.get("merge"))
+                .is_some()
+            {
                 post_success_merge_found = true;
                 break;
             }
@@ -400,7 +475,12 @@ fn reject_removed_post_success_merge(yaml_str: &str, source_path: Option<&Path>)
             .lines()
             .enumerate()
             .find(|(_, line)| line.trim_start().starts_with("merge:"))
-            .or_else(|| yaml_str.lines().enumerate().find(|(_, line)| line.trim_start().starts_with("post_success:")))
+            .or_else(|| {
+                yaml_str
+                    .lines()
+                    .enumerate()
+                    .find(|(_, line)| line.trim_start().starts_with("post_success:"))
+            })
             .map(|(idx, _)| format!("{}:{}", source_label(source_path), idx + 1))
             .unwrap_or_else(|| source_label(source_path));
 
@@ -509,7 +589,12 @@ pub fn resolve_agent_system_prompt_files_confined_to_pack(
     source_path: &Path,
     pack_root: &Path,
 ) -> Result<()> {
-    resolve_agent_system_prompt_files_internal(agent_profiles, yaml_str, Some(source_path), Some(pack_root))
+    resolve_agent_system_prompt_files_internal(
+        agent_profiles,
+        yaml_str,
+        Some(source_path),
+        Some(pack_root),
+    )
 }
 
 fn resolve_agent_system_prompt_files_internal(
@@ -543,7 +628,10 @@ fn resolve_agent_system_prompt_files_internal(
             ));
         }
 
-        let inline_set = profile.system_prompt.as_deref().is_some_and(|prompt| !prompt.trim().is_empty());
+        let inline_set = profile
+            .system_prompt
+            .as_deref()
+            .is_some_and(|prompt| !prompt.trim().is_empty());
         if inline_set {
             let line = find_field_line_in_agent(yaml_str, agent_id, "system_prompt_file");
             let line_suffix = line.map(|l| format!(" line {}", l)).unwrap_or_default();
@@ -565,7 +653,10 @@ fn resolve_agent_system_prompt_files_internal(
                     raw_path,
                 ));
             }
-            if candidate.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            if candidate
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
                 return Err(anyhow!(
                     "pack workflow at {} agent '{}' system_prompt_file '{}' must not contain '..' segments",
                     source_label(source_path),
@@ -646,7 +737,10 @@ fn resolve_agent_system_prompt_files_internal(
     Ok(())
 }
 
-pub fn parse_yaml_workflow_config_with_base(yaml_str: &str, base: &WorkflowConfig) -> Result<WorkflowConfig> {
+pub fn parse_yaml_workflow_config_with_base(
+    yaml_str: &str,
+    base: &WorkflowConfig,
+) -> Result<WorkflowConfig> {
     parse_yaml_workflow_config_with_base_and_source(yaml_str, base, None)
 }
 
@@ -671,7 +765,14 @@ pub(crate) fn parse_yaml_workflow_config_with_base_source_and_original(
     original: &str,
     resolved_secrets: &BTreeMap<String, String>,
 ) -> Result<WorkflowConfig> {
-    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None, Some(original), resolved_secrets)
+    parse_yaml_workflow_config_internal(
+        yaml_str,
+        base,
+        source_path,
+        None,
+        Some(original),
+        resolved_secrets,
+    )
 }
 
 pub(crate) fn parse_yaml_workflow_config_confined_to_pack(
@@ -718,6 +819,10 @@ const KNOWN_FIELD_KEYS: &[&str] = &[
     "triggers",
     "daemon",
     "secrets",
+    "workspaces",
+    "environment_routing",
+    "environment",
+    "workspace",
     "workflow_ref",
     "mode",
     "agent",
@@ -759,7 +864,9 @@ fn enrich_diagnostic(
         // (`- build`). Re-anchor the diagnostic on the line that actually
         // declares `<field>:` so the caret points at the broken entry.
         if let Some(start_line) = diag.line {
-            if let Some((line, col_start, col_end)) = locate_field_line(yaml_str, &field, start_line) {
+            if let Some((line, col_start, col_end)) =
+                locate_field_line(yaml_str, &field, start_line)
+            {
                 diag.line = Some(line);
                 diag.col = Some(col_start);
                 diag.excerpt = None;
@@ -777,7 +884,9 @@ fn enrich_diagnostic(
             diag.suggestion = Some(s);
         }
         if let Some(start_line) = diag.line {
-            if let Some((line, col_start, col_end)) = locate_field_line(yaml_str, "worktree", start_line) {
+            if let Some((line, col_start, col_end)) =
+                locate_field_line(yaml_str, "worktree", start_line)
+            {
                 diag.line = Some(line);
                 diag.col = Some(col_start);
                 diag.excerpt = None;
@@ -808,7 +917,11 @@ fn enrich_diagnostic(
 /// Search `yaml_str` starting from `start_line` (1-based) for a line whose
 /// trimmed prefix is `<field>:`. Returns the 1-based line plus 1-based
 /// column start / column end (exclusive) covering `<field>: <value>`.
-fn locate_field_line(yaml_str: &str, field: &str, start_line: usize) -> Option<(usize, usize, usize)> {
+fn locate_field_line(
+    yaml_str: &str,
+    field: &str,
+    start_line: usize,
+) -> Option<(usize, usize, usize)> {
     let key = format!("{}:", field);
     let lines: Vec<&str> = yaml_str.lines().collect();
     let start_idx = start_line.saturating_sub(1).min(lines.len());
@@ -844,14 +957,18 @@ fn locate_field_line(yaml_str: &str, field: &str, start_line: usize) -> Option<(
 }
 
 fn parse_unknown_field_name(msg: &str) -> Option<String> {
-    let needle = msg.find("unknown field `").map(|i| i + "unknown field `".len())?;
+    let needle = msg
+        .find("unknown field `")
+        .map(|i| i + "unknown field `".len())?;
     let rest = &msg[needle..];
     let end = rest.find('`')?;
     Some(rest[..end].to_string())
 }
 
 fn parse_did_you_mean_from_message(msg: &str) -> Option<String> {
-    let i = msg.find("did you mean `").map(|i| i + "did you mean `".len())?;
+    let i = msg
+        .find("did you mean `")
+        .map(|i| i + "did you mean `".len())?;
     let rest = &msg[i..];
     let end = rest.find('`')?;
     Some(rest[..end].to_string())
@@ -899,11 +1016,17 @@ fn rebuild_excerpt_from_original(
 /// skipped: they are too likely to occur incidentally in unrelated
 /// diagnostic text (line numbers, short words), which would mangle the
 /// message without meaningfully protecting the secret.
-fn redact_resolved_secret_values(message: &str, resolved_secrets: &BTreeMap<String, String>) -> String {
+fn redact_resolved_secret_values(
+    message: &str,
+    resolved_secrets: &BTreeMap<String, String>,
+) -> String {
     let mut redacted = message.to_string();
     // Longest value first so an overlapping shorter secret cannot split a
     // longer one and leave its tail in the diagnostic.
-    let mut entries: Vec<(&String, &String)> = resolved_secrets.iter().filter(|(value, _)| value.len() >= 4).collect();
+    let mut entries: Vec<(&String, &String)> = resolved_secrets
+        .iter()
+        .filter(|(value, _)| value.len() >= 4)
+        .collect();
     entries.sort_by_key(|(value, _)| std::cmp::Reverse(value.len()));
     for (value, name) in entries {
         let marker = format!("[redacted:{}]", name);
@@ -928,15 +1051,17 @@ fn parse_yaml_workflow_config_internal(
     original: Option<&str>,
     resolved_secrets: &BTreeMap<String, String>,
 ) -> Result<WorkflowConfig> {
-    parse_yaml_workflow_config_unredacted(yaml_str, base, source_path, pack_root, original).map_err(|err| {
-        let rendered = format!("{:#}", err);
-        let redacted = redact_resolved_secret_values(&rendered, resolved_secrets);
-        if redacted == rendered {
-            err
-        } else {
-            anyhow!("{}", redacted)
-        }
-    })
+    parse_yaml_workflow_config_unredacted(yaml_str, base, source_path, pack_root, original).map_err(
+        |err| {
+            let rendered = format!("{:#}", err);
+            let redacted = redact_resolved_secret_values(&rendered, resolved_secrets);
+            if redacted == rendered {
+                err
+            } else {
+                anyhow!("{}", redacted)
+            }
+        },
+    )
 }
 
 fn parse_yaml_workflow_config_unredacted(
@@ -951,7 +1076,8 @@ fn parse_yaml_workflow_config_unredacted(
     let yaml_file: YamlWorkflowFile = match serde_yaml::from_str(yaml_str) {
         Ok(file) => file,
         Err(err) => {
-            let mut diag = enrich_diagnostic(wrap_serde_yaml_error(&err, yaml_str, source_path), yaml_str);
+            let mut diag =
+                enrich_diagnostic(wrap_serde_yaml_error(&err, yaml_str, source_path), yaml_str);
             if let Some(original) = original.filter(|original| *original != yaml_str) {
                 diag = rebuild_excerpt_from_original(diag, original);
             }
@@ -964,8 +1090,11 @@ fn parse_yaml_workflow_config_unredacted(
         }
     };
 
-    let workflows =
-        yaml_file.workflows.into_iter().map(yaml_workflow_to_workflow_definition).collect::<Result<Vec<_>>>()?;
+    let workflows = yaml_file
+        .workflows
+        .into_iter()
+        .map(yaml_workflow_to_workflow_definition)
+        .collect::<Result<Vec<_>>>()?;
 
     let mut phase_definitions = BTreeMap::new();
     let mut auto_phase_catalog = BTreeMap::new();
@@ -1001,7 +1130,12 @@ fn parse_yaml_workflow_config_unredacted(
 
     // Resolve agent model references against the top-level models registry.
     let mut agent_profiles = yaml_file.agents;
-    resolve_agent_system_prompt_files_internal(&mut agent_profiles, yaml_str, source_path, pack_root)?;
+    resolve_agent_system_prompt_files_internal(
+        &mut agent_profiles,
+        yaml_str,
+        source_path,
+        pack_root,
+    )?;
     if !yaml_file.models.is_empty() {
         for profile in agent_profiles.values_mut() {
             resolve_agent_model_references(profile, &yaml_file.models);
@@ -1027,6 +1161,8 @@ fn parse_yaml_workflow_config_unredacted(
         triggers: yaml_file.triggers,
         daemon: yaml_file.daemon,
         secrets: yaml_file.secrets,
+        workspaces: yaml_file.workspaces,
+        environment_routing: yaml_file.environment_routing,
     };
 
     Ok(merge_yaml_into_config(base.clone(), overlay))
@@ -1057,11 +1193,17 @@ mod tests {
         );
         registry.insert(
             "gpt4o".to_string(),
-            crate::yaml_types::ModelRegistryEntry { model: "gpt-4o".to_string(), tool: Some("oai-runner".to_string()) },
+            crate::yaml_types::ModelRegistryEntry {
+                model: "gpt-4o".to_string(),
+                tool: Some("oai-runner".to_string()),
+            },
         );
         registry.insert(
             "o4-mini".to_string(),
-            crate::yaml_types::ModelRegistryEntry { model: "o4-mini".to_string(), tool: None },
+            crate::yaml_types::ModelRegistryEntry {
+                model: "o4-mini".to_string(),
+                tool: None,
+            },
         );
         registry
     }
@@ -1084,9 +1226,18 @@ mod tests {
 
         assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(profile.tool.as_deref(), Some("claude"));
-        assert_eq!(profile.fallback_models.clone().unwrap_or_default(), vec!["gpt-4o"]);
-        assert_eq!(profile.fallback_tools.clone().unwrap_or_default(), vec!["oai-runner"]);
-        assert!(profile.models.is_none(), "name list should be cleared after expansion");
+        assert_eq!(
+            profile.fallback_models.clone().unwrap_or_default(),
+            vec!["gpt-4o"]
+        );
+        assert_eq!(
+            profile.fallback_tools.clone().unwrap_or_default(),
+            vec!["oai-runner"]
+        );
+        assert!(
+            profile.models.is_none(),
+            "name list should be cleared after expansion"
+        );
     }
 
     #[test]
@@ -1103,8 +1254,16 @@ mod tests {
             Some(protocol::tool_for_model_id("o4-mini")),
             "no explicit tool in registry → derived from the model id"
         );
-        assert!(profile.fallback_models.as_deref().unwrap_or_default().is_empty());
-        assert!(profile.fallback_tools.as_deref().unwrap_or_default().is_empty());
+        assert!(profile
+            .fallback_models
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty());
+        assert!(profile
+            .fallback_tools
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty());
     }
 
     #[test]
@@ -1116,9 +1275,16 @@ mod tests {
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
-        assert_eq!(profile.fallback_models.clone().unwrap_or_default(), vec!["deepseek-v3"]);
+        assert_eq!(
+            profile.fallback_models.clone().unwrap_or_default(),
+            vec!["deepseek-v3"]
+        );
         // deepseek-v3 isn't in registry, so no explicit fallback_tool
-        assert!(profile.fallback_tools.as_deref().unwrap_or_default().is_empty());
+        assert!(profile
+            .fallback_tools
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty());
     }
 
     #[test]
@@ -1130,7 +1296,11 @@ mod tests {
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("existing-model"));
-        assert!(profile.fallback_models.as_deref().unwrap_or_default().is_empty());
+        assert!(profile
+            .fallback_models
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty());
     }
 
     #[test]
@@ -1143,19 +1313,30 @@ mod tests {
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("hardcoded-model"));
-        assert_eq!(profile.fallback_models.clone().unwrap_or_default(), vec!["hardcoded-fallback"]);
+        assert_eq!(
+            profile.fallback_models.clone().unwrap_or_default(),
+            vec!["hardcoded-fallback"]
+        );
     }
 
     #[test]
     fn model_registry_skips_empty_name_entries() {
         let registry = make_test_registry();
         let mut profile = make_empty_profile();
-        profile.models = Some(vec!["".to_string(), "claude-opus".to_string(), "  ".to_string()]);
+        profile.models = Some(vec![
+            "".to_string(),
+            "claude-opus".to_string(),
+            "  ".to_string(),
+        ]);
 
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
-        assert!(profile.fallback_models.as_deref().unwrap_or_default().is_empty());
+        assert!(profile
+            .fallback_models
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty());
     }
 
     #[test]
@@ -1197,11 +1378,20 @@ phases:
     directive: "Implement."
 "#;
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
-        let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
+        let swe = config
+            .agent_profiles
+            .get("swe")
+            .expect("swe agent should exist");
         assert_eq!(swe.model.as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(swe.tool.as_deref(), Some("claude"));
-        assert_eq!(swe.fallback_models.clone().unwrap_or_default(), vec!["gpt-4o"]);
-        assert_eq!(swe.fallback_tools.clone().unwrap_or_default(), vec!["oai-runner"]);
+        assert_eq!(
+            swe.fallback_models.clone().unwrap_or_default(),
+            vec!["gpt-4o"]
+        );
+        assert_eq!(
+            swe.fallback_tools.clone().unwrap_or_default(),
+            vec!["oai-runner"]
+        );
     }
 
     #[test]
@@ -1239,7 +1429,10 @@ workflows:
   phases: [design]
 "#;
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
-        let architect = config.agent_profiles.get("architect").expect("architect agent");
+        let architect = config
+            .agent_profiles
+            .get("architect")
+            .expect("architect agent");
         assert_eq!(architect.name.as_deref(), Some("Mira"));
         assert!(architect.memory.clone().unwrap_or_default().enabled);
         assert!(architect.communication.clone().unwrap_or_default().enabled);
@@ -1264,9 +1457,15 @@ phases:
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
         let swe = config.agent_profiles.get("swe").expect("swe agent");
         let policy = swe.approval_policy.clone().expect("approval policy");
-        assert_eq!(policy.auto_allow, vec!["git.*".to_string(), "cargo *".to_string()]);
+        assert_eq!(
+            policy.auto_allow,
+            vec!["git.*".to_string(), "cargo *".to_string()]
+        );
         assert_eq!(policy.auto_deny, vec!["*force*".to_string()]);
-        assert_eq!(policy.default, crate::agent_types::ApprovalPolicyDefault::Ask);
+        assert_eq!(
+            policy.default,
+            crate::agent_types::ApprovalPolicyDefault::Ask
+        );
     }
 
     #[test]
@@ -1290,10 +1489,19 @@ phases:
     directive: "Implement."
 "#;
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
-        let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
+        let swe = config
+            .agent_profiles
+            .get("swe")
+            .expect("swe agent should exist");
         assert_eq!(swe.model.as_deref(), Some("claude-sonnet-4-20250514"));
-        assert_eq!(swe.fallback_models.clone().unwrap_or_default(), vec!["gpt-4o", "o4-mini"]);
-        assert_eq!(swe.fallback_tools.clone().unwrap_or_default(), vec!["oai-runner"]);
+        assert_eq!(
+            swe.fallback_models.clone().unwrap_or_default(),
+            vec!["gpt-4o", "o4-mini"]
+        );
+        assert_eq!(
+            swe.fallback_tools.clone().unwrap_or_default(),
+            vec!["oai-runner"]
+        );
     }
 
     #[test]
@@ -1318,7 +1526,10 @@ phases:
         - oai-runner
 "#;
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
-        let impl_phase = config.phase_definitions.get("impl").expect("impl phase should exist");
+        let impl_phase = config
+            .phase_definitions
+            .get("impl")
+            .expect("impl phase should exist");
         let runtime = impl_phase.runtime.as_ref().expect("runtime should exist");
         assert_eq!(runtime.model.as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(runtime.fallback_models, vec!["gpt-4o", "o4-mini"]);
@@ -1354,12 +1565,21 @@ phases:
     directive: "Implement."
 "#;
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
-        let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
+        let swe = config
+            .agent_profiles
+            .get("swe")
+            .expect("swe agent should exist");
         assert_eq!(swe.model.as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(swe.tool.as_deref(), Some("claude"));
-        assert_eq!(swe.fallback_models.clone().unwrap_or_default(), vec!["gpt-4o", "o4-mini"]);
+        assert_eq!(
+            swe.fallback_models.clone().unwrap_or_default(),
+            vec!["gpt-4o", "o4-mini"]
+        );
         // Only secondary has explicit tool; tertiary has none → only "oai-runner" in fallback_tools
-        assert_eq!(swe.fallback_tools.clone().unwrap_or_default(), vec!["oai-runner"]);
+        assert_eq!(
+            swe.fallback_tools.clone().unwrap_or_default(),
+            vec!["oai-runner"]
+        );
     }
 
     #[test]
@@ -1377,9 +1597,16 @@ phases:
     directive: "Implement."
 "#;
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
-        let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
+        let swe = config
+            .agent_profiles
+            .get("swe")
+            .expect("swe agent should exist");
         assert!(swe.model.is_none());
-        assert!(swe.fallback_models.as_deref().unwrap_or_default().is_empty());
+        assert!(swe
+            .fallback_models
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty());
     }
 
     #[test]
@@ -1410,7 +1637,10 @@ phases:
             .expect("parse yaml with source path");
         let analyst = config.agent_profiles.get("analyst").expect("analyst agent");
         assert_eq!(analyst.system_prompt.as_deref(), Some(prompt_body));
-        assert!(analyst.system_prompt_file.is_none(), "system_prompt_file should be consumed");
+        assert!(
+            analyst.system_prompt_file.is_none(),
+            "system_prompt_file should be consumed"
+        );
     }
 
     #[test]
@@ -1437,10 +1667,14 @@ phases:
 
         let yaml_path = temp.path().join("nested").join("workflows.yaml");
         let base = builtin_workflow_config();
-        let config = parse_yaml_workflow_config_with_base_and_source(&yaml, &base, Some(&yaml_path))
-            .expect("parse yaml with absolute path");
+        let config =
+            parse_yaml_workflow_config_with_base_and_source(&yaml, &base, Some(&yaml_path))
+                .expect("parse yaml with absolute path");
         let analyst = config.agent_profiles.get("analyst").expect("analyst agent");
-        assert_eq!(analyst.system_prompt.as_deref(), Some("absolute prompt body"));
+        assert_eq!(
+            analyst.system_prompt.as_deref(),
+            Some("absolute prompt body")
+        );
     }
 
     #[test]
@@ -1470,7 +1704,10 @@ phases:
         let msg = format!("{:#}", err);
         assert!(msg.contains("analyst"), "missing agent id: {msg}");
         assert!(msg.contains("system_prompt"), "missing field name: {msg}");
-        assert!(msg.contains(&yaml_path.display().to_string()), "missing source path: {msg}");
+        assert!(
+            msg.contains(&yaml_path.display().to_string()),
+            "missing source path: {msg}"
+        );
         assert!(msg.contains("line"), "missing line number: {msg}");
     }
 
@@ -1495,7 +1732,10 @@ phases:
             .expect_err("missing file should error");
         let msg = format!("{:#}", err);
         let resolved = temp.path().join("prompts").join("missing.md");
-        assert!(msg.contains(&resolved.display().to_string()), "missing resolved path: {msg}");
+        assert!(
+            msg.contains(&resolved.display().to_string()),
+            "missing resolved path: {msg}"
+        );
         assert!(msg.contains("analyst"), "missing agent id: {msg}");
     }
 
@@ -1523,8 +1763,14 @@ phases:
         let err = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
             .expect_err("oversize should error");
         let msg = format!("{:#}", err);
-        assert!(msg.contains("1 MiB") || msg.contains("maximum"), "missing size cap: {msg}");
-        assert!(msg.contains(&prompt_path.display().to_string()), "missing resolved path: {msg}");
+        assert!(
+            msg.contains("1 MiB") || msg.contains("maximum"),
+            "missing size cap: {msg}"
+        );
+        assert!(
+            msg.contains(&prompt_path.display().to_string()),
+            "missing resolved path: {msg}"
+        );
     }
 
     #[test]
@@ -1550,7 +1796,10 @@ phases:
         let err = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
             .expect_err("non-utf8 should error");
         let msg = format!("{:#}", err);
-        assert!(msg.contains("UTF-8") || msg.contains("utf-8"), "missing utf-8 marker: {msg}");
+        assert!(
+            msg.contains("UTF-8") || msg.contains("utf-8"),
+            "missing utf-8 marker: {msg}"
+        );
     }
 
     #[test]
@@ -1576,7 +1825,15 @@ phases:
         let base = builtin_workflow_config();
         let config = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
             .expect("parse should succeed");
-        assert_eq!(config.agent_profiles.get("analyst").unwrap().system_prompt.as_deref(), Some(body));
+        assert_eq!(
+            config
+                .agent_profiles
+                .get("analyst")
+                .unwrap()
+                .system_prompt
+                .as_deref(),
+            Some(body)
+        );
     }
 
     #[test]
@@ -1586,7 +1843,10 @@ phases:
         profile.system_prompt_file = Some("prompts/agent.md".to_string());
 
         let json = serde_json::to_string(&profile).expect("serialize");
-        assert!(json.contains("system_prompt_file"), "field should be present: {json}");
+        assert!(
+            json.contains("system_prompt_file"),
+            "field should be present: {json}"
+        );
         let back: AgentProfileOverlay = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.system_prompt_file.as_deref(), Some("prompts/agent.md"));
     }
@@ -1595,7 +1855,10 @@ phases:
     fn agent_profile_serde_omits_system_prompt_file_when_none() {
         let profile = make_empty_profile();
         let json = serde_json::to_string(&profile).expect("serialize");
-        assert!(!json.contains("system_prompt_file"), "field should be skipped when None: {json}");
+        assert!(
+            !json.contains("system_prompt_file"),
+            "field should be skipped when None: {json}"
+        );
     }
 
     #[test]
@@ -1617,7 +1880,8 @@ phases:
         let yaml_path = temp.path().join("workflows.yaml");
         let base = builtin_workflow_config();
         let with_path =
-            parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path)).expect("parse with source");
+            parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
+                .expect("parse with source");
         assert_eq!(
             with_source.agent_profiles.get("swe").unwrap().system_prompt,
             with_path.agent_profiles.get("swe").unwrap().system_prompt

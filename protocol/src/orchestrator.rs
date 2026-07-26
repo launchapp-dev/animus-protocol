@@ -359,7 +359,11 @@ pub struct RequirementsDraftInput {
 
 impl Default for RequirementsDraftInput {
     fn default() -> Self {
-        Self { include_codebase_scan: true, append_only: true, max_requirements: default_requirements_limit() }
+        Self {
+            include_codebase_scan: true,
+            append_only: true,
+            max_requirements: default_requirements_limit(),
+        }
     }
 }
 
@@ -465,7 +469,11 @@ pub struct ResourceRequirements {
 
 impl Default for ResourceRequirements {
     fn default() -> Self {
-        Self { max_cpu_percent: None, max_memory_mb: None, requires_network: true }
+        Self {
+            max_cpu_percent: None,
+            max_memory_mb: None,
+            requires_network: true,
+        }
     }
 }
 
@@ -575,13 +583,38 @@ pub struct OrchestratorTask {
     pub dispatch_history: Vec<DispatchHistoryEntry>,
 }
 
-const FRONTEND_TAGS: &[&str] =
-    &["frontend", "ui", "ux", "design", "react", "web", "landing-page", "design-system", "nextjs"];
+const FRONTEND_TAGS: &[&str] = &[
+    "frontend",
+    "ui",
+    "ux",
+    "design",
+    "react",
+    "web",
+    "landing-page",
+    "design-system",
+    "nextjs",
+];
 
-const FRONTEND_TOKENS: &[&str] =
-    &["frontend", "ui", "ux", "react", "tailwind", "css", "component", "storybook", "wireframe", "mockup", "nextjs"];
+const FRONTEND_TOKENS: &[&str] = &[
+    "frontend",
+    "ui",
+    "ux",
+    "react",
+    "tailwind",
+    "css",
+    "component",
+    "storybook",
+    "wireframe",
+    "mockup",
+    "nextjs",
+];
 
-const FRONTEND_PHRASES: &[&str] = &["user interface", "user experience", "design system", "landing page"];
+const FRONTEND_PHRASES: &[&str] = &[
+    "user interface",
+    "user experience",
+    "design system",
+    "landing page",
+];
 
 pub fn is_frontend_related_content(tags: &[String], text: &str) -> bool {
     if tags.iter().any(|tag| {
@@ -592,15 +625,25 @@ pub fn is_frontend_related_content(tags: &[String], text: &str) -> bool {
     }
 
     let haystack = text.to_ascii_lowercase();
-    let tokenized: String =
-        haystack.chars().map(|character| if character.is_ascii_alphanumeric() { character } else { ' ' }).collect();
+    let tokenized: String = haystack
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect();
     let tokens: HashSet<&str> = tokenized.split_whitespace().collect();
 
     if FRONTEND_TOKENS.iter().any(|needle| tokens.contains(needle)) {
         return true;
     }
 
-    FRONTEND_PHRASES.iter().any(|needle| haystack.contains(needle))
+    FRONTEND_PHRASES
+        .iter()
+        .any(|needle| haystack.contains(needle))
 }
 
 impl OrchestratorTask {
@@ -609,7 +652,11 @@ impl OrchestratorTask {
             return true;
         }
 
-        if self.impact_area.iter().any(|area| matches!(area, ImpactArea::Frontend)) {
+        if self
+            .impact_area
+            .iter()
+            .any(|area| matches!(area, ImpactArea::Frontend))
+        {
             return true;
         }
 
@@ -692,7 +739,10 @@ pub struct ListPageRequest {
 
 impl ListPageRequest {
     pub const fn unbounded() -> Self {
-        Self { limit: None, offset: 0 }
+        Self {
+            limit: None,
+            offset: 0,
+        }
     }
 
     pub fn bounds(self, total: usize) -> (usize, usize) {
@@ -724,7 +774,15 @@ impl<T> ListPage<T> {
         let has_more = offset.saturating_add(returned) < total;
         let next_offset = has_more.then_some(offset.saturating_add(returned));
 
-        Self { items, total, limit: request.limit, offset, returned, has_more, next_offset }
+        Self {
+            items,
+            total,
+            limit: request.limit,
+            offset,
+            returned,
+            has_more,
+            next_offset,
+        }
     }
 }
 
@@ -848,7 +906,10 @@ pub struct ProjectModelPreferences {
 impl Default for ProjectModelPreferences {
     fn default() -> Self {
         Self {
-            allowed_models: crate::default_model_specs().into_iter().map(|(model_id, _tool)| model_id).collect(),
+            allowed_models: crate::default_model_specs()
+                .into_iter()
+                .map(|(model_id, _tool)| model_id)
+                .collect(),
             default_model: crate::default_model_for_tool("claude").map(str::to_string),
             phase_overrides: HashMap::new(),
         }
@@ -863,7 +924,10 @@ pub struct ProjectConcurrencyLimits {
 
 impl Default for ProjectConcurrencyLimits {
     fn default() -> Self {
-        Self { max_workflows: 3, max_agents: 10 }
+        Self {
+            max_workflows: 3,
+            max_agents: 10,
+        }
     }
 }
 
@@ -1338,6 +1402,13 @@ pub struct PhaseDecision {
     pub commit_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_phase: Option<String>,
+    /// Custom routing key emitted by an agent or command phase when the
+    /// verdict string is not one of the built-in `advance`/`rework`/`skip`/
+    /// `fail` values. Carries the raw verdict verbatim (e.g. `needs-research`)
+    /// so the workflow executor can route it through the phase's `on_verdict`
+    /// map to an arbitrary target phase. `None` for built-in verdicts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1492,8 +1563,10 @@ pub struct OrchestratorWorkflow {
     pub id: String,
     pub task_id: String,
     pub workflow_ref: Option<String>,
-    #[serde(default = "default_workflow_subject_ref")]
-    pub subject: SubjectRef,
+    /// The subject this workflow run targets, or `None` for a subjectless run.
+    /// Omitted from the wire when absent; older records always carry a subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<SubjectRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -1517,10 +1590,6 @@ pub struct OrchestratorWorkflow {
     pub total_reworks: u32,
     #[serde(default)]
     pub decision_history: Vec<WorkflowDecisionRecord>,
-}
-
-fn default_workflow_subject_ref() -> SubjectRef {
-    SubjectRef::task(String::new())
 }
 
 impl OrchestratorWorkflow {
@@ -1606,7 +1675,8 @@ const fn default_high_priority_budget_percent() -> u8 {
 }
 
 pub use animus_subject_protocol::{
-    SubjectDispatch, SubjectRef, WorkflowSubject, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
+    SubjectDispatch, SubjectRef, WorkflowSubject, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT,
+    SUBJECT_KIND_TASK,
 };
 
 pub trait SubjectDispatchExt: Sized {
@@ -1638,7 +1708,12 @@ pub trait SubjectDispatchExt: Sized {
 
 impl SubjectDispatchExt for SubjectDispatch {
     fn for_task(task_id: impl Into<String>, workflow_ref: impl Into<String>) -> Self {
-        <Self as SubjectDispatchExt>::for_task_with_metadata(task_id, workflow_ref, "ready-queue", Utc::now())
+        <Self as SubjectDispatchExt>::for_task_with_metadata(
+            task_id,
+            workflow_ref,
+            "ready-queue",
+            Utc::now(),
+        )
     }
 
     fn for_task_with_metadata(
@@ -1685,19 +1760,27 @@ impl SubjectDispatchExt for SubjectDispatch {
     }
 
     fn to_workflow_run_input(&self) -> WorkflowRunInput {
-        let mut input = match self.subject.kind() {
-            SUBJECT_KIND_TASK => WorkflowRunInput::for_task(self.subject.id.clone(), Some(self.workflow_ref.clone())),
-            SUBJECT_KIND_REQUIREMENT => {
-                WorkflowRunInput::for_requirement(self.subject.id.clone(), Some(self.workflow_ref.clone()))
-            }
-            _ => WorkflowRunInput::for_custom(
-                self.subject.title.clone().unwrap_or_else(|| self.subject.id.clone()),
-                self.subject.description.clone().unwrap_or_default(),
-                Some(self.workflow_ref.clone()),
-            ),
+        let mut input = match self.subject.as_ref() {
+            None => WorkflowRunInput::subjectless(Some(self.workflow_ref.clone())),
+            Some(subject) => match subject.kind() {
+                SUBJECT_KIND_TASK => {
+                    WorkflowRunInput::for_task(subject.id.clone(), Some(self.workflow_ref.clone()))
+                }
+                SUBJECT_KIND_REQUIREMENT => WorkflowRunInput::for_requirement(
+                    subject.id.clone(),
+                    Some(self.workflow_ref.clone()),
+                ),
+                _ => WorkflowRunInput::for_custom(
+                    subject.title.clone().unwrap_or_else(|| subject.id.clone()),
+                    subject.description.clone().unwrap_or_default(),
+                    Some(self.workflow_ref.clone()),
+                ),
+            },
         };
         input.subject = self.subject.clone();
-        input.with_input(self.input.clone()).with_vars(self.vars.clone())
+        input
+            .with_input(self.input.clone())
+            .with_vars(self.vars.clone())
     }
 }
 
@@ -1761,8 +1844,10 @@ impl SubjectExecutionFact {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunInput {
-    #[serde(default = "default_workflow_subject_ref")]
-    pub subject: SubjectRef,
+    /// The subject this run targets, or `None` for a subjectless run. Omitted
+    /// from the wire when absent; older payloads always carry a subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<SubjectRef>,
     #[serde(default)]
     pub workflow_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "input_json")]
@@ -1785,7 +1870,31 @@ impl WorkflowRunInput {
         let requirement_id = subject.requirement_id().map(ToOwned::to_owned);
         let title = subject.title.clone();
         let description = subject.description.clone();
-        Self { subject, task_id, workflow_ref, input: None, vars: HashMap::new(), requirement_id, title, description }
+        Self {
+            subject: Some(subject),
+            task_id,
+            workflow_ref,
+            input: None,
+            vars: HashMap::new(),
+            requirement_id,
+            title,
+            description,
+        }
+    }
+
+    /// Construct a subjectless run input (no bound subject). All subject-derived
+    /// fields are empty/absent so downstream subject template vars are absent.
+    pub fn subjectless(workflow_ref: Option<String>) -> Self {
+        Self {
+            subject: None,
+            task_id: String::new(),
+            workflow_ref,
+            input: None,
+            vars: HashMap::new(),
+            requirement_id: None,
+            title: None,
+            description: None,
+        }
     }
 
     pub fn for_task(task_id: String, workflow_ref: Option<String>) -> Self {
@@ -1800,16 +1909,16 @@ impl WorkflowRunInput {
         Self::for_subject(SubjectRef::custom(title, description), workflow_ref)
     }
 
-    pub fn subject(&self) -> &SubjectRef {
-        &self.subject
+    pub fn subject(&self) -> Option<&SubjectRef> {
+        self.subject.as_ref()
     }
 
-    pub fn subject_id(&self) -> &str {
-        self.subject.id()
+    pub fn subject_id(&self) -> Option<&str> {
+        self.subject.as_ref().map(SubjectRef::id)
     }
 
-    pub fn subject_kind(&self) -> &str {
-        self.subject.kind()
+    pub fn subject_kind(&self) -> Option<&str> {
+        self.subject.as_ref().map(SubjectRef::kind)
     }
 
     pub fn workflow_ref(&self) -> Option<&str> {
@@ -1839,25 +1948,48 @@ mod tests {
 
     #[test]
     fn list_page_request_bounds_clamp_to_available_items() {
-        let request = ListPageRequest { limit: Some(5), offset: 8 };
+        let request = ListPageRequest {
+            limit: Some(5),
+            offset: 8,
+        };
         assert_eq!(request.bounds(10), (8, 10));
 
-        let request = ListPageRequest { limit: None, offset: 3 };
+        let request = ListPageRequest {
+            limit: None,
+            offset: 3,
+        };
         assert_eq!(request.bounds(10), (3, 10));
 
-        let request = ListPageRequest { limit: Some(5), offset: 20 };
+        let request = ListPageRequest {
+            limit: Some(5),
+            offset: 20,
+        };
         assert_eq!(request.bounds(10), (10, 10));
     }
 
     #[test]
     fn list_page_metadata_tracks_next_offset() {
-        let page = ListPage::new(vec![1, 2, 3], 10, ListPageRequest { limit: Some(3), offset: 3 });
+        let page = ListPage::new(
+            vec![1, 2, 3],
+            10,
+            ListPageRequest {
+                limit: Some(3),
+                offset: 3,
+            },
+        );
         assert_eq!(page.returned, 3);
         assert_eq!(page.offset, 3);
         assert!(page.has_more);
         assert_eq!(page.next_offset, Some(6));
 
-        let final_page = ListPage::new(vec![7, 8], 8, ListPageRequest { limit: Some(3), offset: 6 });
+        let final_page = ListPage::new(
+            vec![7, 8],
+            8,
+            ListPageRequest {
+                limit: Some(3),
+                offset: 6,
+            },
+        );
         assert_eq!(final_page.returned, 2);
         assert!(!final_page.has_more);
         assert_eq!(final_page.next_offset, None);
@@ -1875,7 +2007,10 @@ mod tests {
                 linked_task_id: Some("TASK-590".to_string()),
                 search_text: Some("query".to_string()),
             },
-            page: ListPageRequest { limit: Some(25), offset: 50 },
+            page: ListPageRequest {
+                limit: Some(25),
+                offset: 50,
+            },
             sort: RequirementQuerySort::UpdatedAt,
         };
 
@@ -1891,13 +2026,15 @@ mod tests {
             sort: WorkflowQuerySort::Status,
         };
 
-        let requirement_value = serde_json::to_value(&requirement_query).expect("requirement query should serialize");
+        let requirement_value =
+            serde_json::to_value(&requirement_query).expect("requirement query should serialize");
         assert_eq!(requirement_value["filter"]["status"], "in-progress");
         assert_eq!(requirement_value["filter"]["priority"], "must");
         assert_eq!(requirement_value["filter"]["type"], "technical");
         assert_eq!(requirement_value["sort"], "updated_at");
 
-        let workflow_value = serde_json::to_value(&workflow_query).expect("workflow query should serialize");
+        let workflow_value =
+            serde_json::to_value(&workflow_query).expect("workflow query should serialize");
         assert_eq!(workflow_value["filter"]["status"], "running");
         assert_eq!(workflow_value["filter"]["workflow_ref"], "standard");
         assert_eq!(workflow_value["sort"], "status");
@@ -1913,7 +2050,14 @@ mod tests {
 
     #[test]
     fn list_page_handles_zero_total() {
-        let page: ListPage<String> = ListPage::new(Vec::new(), 0, ListPageRequest { limit: Some(10), offset: 5 });
+        let page: ListPage<String> = ListPage::new(
+            Vec::new(),
+            0,
+            ListPageRequest {
+                limit: Some(10),
+                offset: 5,
+            },
+        );
         assert_eq!(page.offset, 0);
         assert_eq!(page.returned, 0);
         assert!(!page.has_more);
@@ -1965,12 +2109,19 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 3, 10, 9, 30, 0).unwrap(),
         );
 
-        let serialized = serde_json::to_value(&dispatch).expect("generic dispatch should serialize");
+        let serialized =
+            serde_json::to_value(&dispatch).expect("generic dispatch should serialize");
         assert_eq!(serialized["subject"]["kind"], "pack.review");
         assert_eq!(serialized["subject"]["id"], "REV-1");
-        assert_eq!(dispatch.subject_kind(), "pack.review");
-        assert_eq!(dispatch.subject_key(), "pack.review::REV-1");
-        assert_eq!(dispatch.to_workflow_run_input().subject(), &SubjectRef::new("pack.review", "REV-1"));
+        assert_eq!(dispatch.subject_kind(), Some("pack.review"));
+        assert_eq!(
+            dispatch.subject_key().as_deref(),
+            Some("pack.review::REV-1")
+        );
+        assert_eq!(
+            dispatch.to_workflow_run_input().subject(),
+            Some(&SubjectRef::new("pack.review", "REV-1"))
+        );
     }
 
     #[test]
@@ -1987,9 +2138,42 @@ mod tests {
         }))
         .expect("legacy requirement dispatch should deserialize");
 
-        assert_eq!(dispatch.subject_kind(), SUBJECT_KIND_REQUIREMENT);
-        assert_eq!(dispatch.subject_id(), "REQ-39");
-        assert_eq!(dispatch.subject_key(), "REQ-39");
+        assert_eq!(dispatch.subject_kind(), Some(SUBJECT_KIND_REQUIREMENT));
+        assert_eq!(dispatch.subject_id(), Some("REQ-39"));
+        assert_eq!(dispatch.subject_key().as_deref(), Some("REQ-39"));
+    }
+
+    #[test]
+    fn subjectless_dispatch_maps_to_subjectless_run_input() {
+        let dispatch = SubjectDispatch::subjectless(
+            "relate",
+            "manual",
+            Utc.with_ymd_and_hms(2026, 3, 10, 9, 30, 0).unwrap(),
+        );
+        assert!(dispatch.subject().is_none());
+        assert_eq!(dispatch.subject_id(), None);
+
+        // Subjectless dispatch omits `subject` from the wire entirely.
+        let serialized = serde_json::to_value(&dispatch).expect("subjectless dispatch serializes");
+        assert!(
+            serialized.get("subject").is_none(),
+            "subject must be absent: {serialized}"
+        );
+
+        // ... and lowers to a subjectless run input (all subject-derived fields
+        // empty/absent).
+        let input = dispatch.to_workflow_run_input();
+        assert!(input.subject().is_none());
+        assert_eq!(input.subject_id(), None);
+        assert!(input.task_id.is_empty());
+        assert_eq!(input.requirement_id, None);
+        assert_eq!(input.workflow_ref(), Some("relate"));
+
+        let input_value = serde_json::to_value(&input).expect("subjectless run input serializes");
+        assert!(
+            input_value.get("subject").is_none(),
+            "run input subject must be absent: {input_value}"
+        );
     }
 
     #[test]
@@ -2018,6 +2202,9 @@ mod tests {
         health.paused_at = Some("2026-06-11T00:00:00+00:00".to_string());
         let value = serde_json::to_value(&health).expect("serialize");
         assert_eq!(value["runtime_paused"], serde_json::json!(true));
-        assert_eq!(value["paused_at"], serde_json::json!("2026-06-11T00:00:00+00:00"));
+        assert_eq!(
+            value["paused_at"],
+            serde_json::json!("2026-06-11T00:00:00+00:00")
+        );
     }
 }

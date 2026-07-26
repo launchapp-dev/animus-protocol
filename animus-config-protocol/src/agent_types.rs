@@ -17,6 +17,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use animus_application_protocol::validate_application_configured_ref;
+pub use animus_application_protocol::{
+    ApplicationPermissionIntent as ApplicationChatPermissionIntent,
+    ApplicationReasoningEffort as ApplicationChatReasoningEffort,
+    MAX_APPLICATION_CHAT_CONTROL_REF_BYTES,
+};
+
 use crate::workflow_types::WorktreeConfig;
 
 /// `crate::types::*` in the original kernel module resolved to
@@ -56,8 +63,13 @@ pub struct PhaseOutputContract {
 
 impl PhaseOutputContract {
     pub fn requires_field(&self, field: &str) -> bool {
-        self.required_fields.iter().any(|candidate| candidate.eq_ignore_ascii_case(field))
-            || self.fields.iter().any(|(name, definition)| definition.required && name.eq_ignore_ascii_case(field))
+        self.required_fields
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(field))
+            || self
+                .fields
+                .iter()
+                .any(|(name, definition)| definition.required && name.eq_ignore_ascii_case(field))
     }
 }
 
@@ -234,7 +246,11 @@ pub struct AgentToolPolicy {
 
 impl AgentToolPolicy {
     pub fn is_tool_permitted(&self, tool_name: &str) -> bool {
-        let allowed = if self.allow.is_empty() { true } else { self.allow.iter().any(|p| glob_match(p, tool_name)) };
+        let allowed = if self.allow.is_empty() {
+            true
+        } else {
+            self.allow.iter().any(|p| glob_match(p, tool_name))
+        };
 
         if !allowed {
             return false;
@@ -374,10 +390,18 @@ pub struct ApprovalPolicy {
 
 impl ApprovalPolicy {
     pub fn evaluate(&self, subject: &str) -> ApprovalPolicyDecision {
-        if self.auto_deny.iter().any(|pattern| glob_match(pattern, subject)) {
+        if self
+            .auto_deny
+            .iter()
+            .any(|pattern| glob_match(pattern, subject))
+        {
             return ApprovalPolicyDecision::Deny;
         }
-        if self.auto_allow.iter().any(|pattern| glob_match(pattern, subject)) {
+        if self
+            .auto_allow
+            .iter()
+            .any(|pattern| glob_match(pattern, subject))
+        {
             return ApprovalPolicyDecision::Allow;
         }
         match self.default {
@@ -398,7 +422,10 @@ pub fn glob_match(pattern: &str, value: &str) -> bool {
 fn glob_match_inner(pat: &[u8], val: &[u8]) -> bool {
     match (pat.first(), val.first()) {
         (None, None) => true,
-        (Some(b'*'), _) => glob_match_inner(&pat[1..], val) || (!val.is_empty() && glob_match_inner(pat, &val[1..])),
+        (Some(b'*'), _) => {
+            glob_match_inner(&pat[1..], val)
+                || (!val.is_empty() && glob_match_inner(pat, &val[1..]))
+        }
         (Some(&p), Some(&v)) if p == v => glob_match_inner(&pat[1..], &val[1..]),
         _ => false,
     }
@@ -456,7 +483,11 @@ pub const AGENT_CAPABILITY_MEMORY: &str = "memory";
 /// spawned agent's runtime contract. See [`AgentCapabilities`] for the catalog of recognized
 /// capability keys.
 pub fn agent_memory_capability_enabled(profile: &AgentProfile) -> bool {
-    profile.capabilities.get(AGENT_CAPABILITY_MEMORY).copied().unwrap_or(false)
+    profile
+        .capabilities
+        .get(AGENT_CAPABILITY_MEMORY)
+        .copied()
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -528,6 +559,144 @@ pub struct AgentProjectOverrides {
     pub env: BTreeMap<String, String>,
 }
 
+pub const MAX_APPLICATION_CHAT_CONTROL_SKILL_REFS: usize = 100;
+
+/// Portal-authored allowlist for typed application chat controls.
+///
+/// `None` on an agent profile preserves the pre-policy config contract. Within
+/// a declared policy, omitted lists inherit the canonical application defaults
+/// while explicitly empty lists deny that control.
+#[derive(Debug, Clone, Serialize, Default, PartialEq, Eq)]
+pub struct ApplicationChatControlsPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<Vec<ApplicationChatReasoningEffort>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_intents: Option<Vec<ApplicationChatPermissionIntent>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_permissive_intents: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_refs: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationChatControlsPolicyWire {
+    #[serde(default)]
+    approvals: Option<bool>,
+    #[serde(default)]
+    reasoning_efforts: Option<Vec<ApplicationChatReasoningEffort>>,
+    #[serde(default)]
+    permission_intents: Option<Vec<ApplicationChatPermissionIntent>>,
+    #[serde(default)]
+    allow_permissive_intents: bool,
+    #[serde(default)]
+    skill_refs: Option<Vec<String>>,
+}
+
+impl<'de> Deserialize<'de> for ApplicationChatControlsPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = ApplicationChatControlsPolicyWire::deserialize(deserializer)?;
+        let policy = Self {
+            approvals: wire.approvals,
+            reasoning_efforts: wire.reasoning_efforts,
+            permission_intents: wire.permission_intents,
+            allow_permissive_intents: wire.allow_permissive_intents,
+            skill_refs: wire.skill_refs,
+        };
+        if !policy.within_bounds() {
+            return Err(serde::de::Error::custom(
+                "application_chat_controls exceeds bounds, contains duplicates, or has an invalid configured reference",
+            ));
+        }
+        Ok(policy)
+    }
+}
+
+impl ApplicationChatControlsPolicy {
+    pub fn within_bounds(&self) -> bool {
+        self.reasoning_efforts
+            .as_ref()
+            .is_none_or(|values| values.len() <= 3 && no_duplicates(values))
+            && self
+                .permission_intents
+                .as_ref()
+                .is_none_or(|values| values.len() <= 4 && no_duplicates(values))
+            && self.skill_refs.as_ref().is_none_or(|values| {
+                values.len() <= MAX_APPLICATION_CHAT_CONTROL_SKILL_REFS
+                    && no_duplicates(values)
+                    && values
+                        .iter()
+                        .all(|value| valid_application_chat_control_ref(value))
+            })
+    }
+}
+
+fn no_duplicates<T: PartialEq>(values: &[T]) -> bool {
+    values
+        .iter()
+        .enumerate()
+        .all(|(index, value)| !values[..index].contains(value))
+}
+
+fn valid_application_chat_control_ref(value: &str) -> bool {
+    validate_application_configured_ref(value).is_ok()
+}
+
+/// Presence-aware patch value for nullable profile fields.
+///
+/// An omitted overlay field inherits, JSON/YAML `null` clears, and a concrete
+/// value replaces. This is deliberately distinct from `Option<T>`, whose
+/// serde representation cannot distinguish omission from explicit null.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AgentProfilePatch<T> {
+    #[default]
+    Inherit,
+    Clear,
+    Set(T),
+}
+
+impl<T> AgentProfilePatch<T> {
+    pub fn is_inherit(&self) -> bool {
+        matches!(self, Self::Inherit)
+    }
+
+    pub fn into_set(self) -> Option<T> {
+        match self {
+            Self::Set(value) => Some(value),
+            Self::Inherit | Self::Clear => None,
+        }
+    }
+}
+
+impl<T: Serialize> Serialize for AgentProfilePatch<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Inherit | Self::Clear => serializer.serialize_none(),
+            Self::Set(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for AgentProfilePatch<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(match Option::<T>::deserialize(deserializer)? {
+            Some(value) => Self::Set(value),
+            None => Self::Clear,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -559,6 +728,8 @@ pub struct AgentProfile {
     pub hooks: AgentHooksConfig,
     #[serde(default)]
     pub skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_chat_controls: Option<ApplicationChatControlsPolicy>,
     #[serde(default)]
     pub capabilities: BTreeMap<String, bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -659,6 +830,8 @@ pub struct AgentProfileOverlay {
     pub hooks: Option<AgentHooksConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "AgentProfilePatch::is_inherit")]
+    pub application_chat_controls: AgentProfilePatch<ApplicationChatControlsPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<BTreeMap<String, bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -763,6 +936,9 @@ impl AgentProfileOverlay {
             codex_config_overrides,
             max_continuations,
         );
+        if !overlay.application_chat_controls.is_inherit() {
+            self.application_chat_controls = overlay.application_chat_controls.clone();
+        }
     }
 }
 
@@ -782,6 +958,9 @@ impl From<AgentProfile> for AgentProfileOverlay {
             approval_policy: profile.approval_policy,
             hooks: Some(profile.hooks),
             skills: Some(profile.skills),
+            application_chat_controls: profile
+                .application_chat_controls
+                .map_or(AgentProfilePatch::Clear, AgentProfilePatch::Set),
             capabilities: Some(profile.capabilities),
             mcp_server_configs: profile.mcp_server_configs,
             structured_capabilities: profile.structured_capabilities,
@@ -1026,6 +1205,11 @@ pub fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfileOverla
     if let Some(skills) = &overlay.skills {
         base.skills = skills.clone();
     }
+    match &overlay.application_chat_controls {
+        AgentProfilePatch::Inherit => {}
+        AgentProfilePatch::Clear => base.application_chat_controls = None,
+        AgentProfilePatch::Set(policy) => base.application_chat_controls = Some(policy.clone()),
+    }
     if let Some(capabilities) = &overlay.capabilities {
         base.capabilities = capabilities.clone();
     }
@@ -1113,9 +1297,13 @@ retry_on:
 no_retry_on:
   - auth_error
 "#;
-        let cfg: AgentRuntimeOverrides = serde_yaml::from_str(yaml).expect("parse runtime overrides");
+        let cfg: AgentRuntimeOverrides =
+            serde_yaml::from_str(yaml).expect("parse runtime overrides");
         assert_eq!(cfg.max_attempts, Some(5));
-        assert_eq!(cfg.retry_on, vec!["transient".to_string(), "rate_limit".to_string()]);
+        assert_eq!(
+            cfg.retry_on,
+            vec!["transient".to_string(), "rate_limit".to_string()]
+        );
         assert_eq!(cfg.no_retry_on, vec!["auth_error".to_string()]);
     }
 
@@ -1123,10 +1311,17 @@ no_retry_on:
     fn back_compat_config_without_classification_fields_parses() {
         // A pre-existing config that never heard of retry_on / no_retry_on.
         let yaml = "max_attempts: 2\n";
-        let cfg: AgentRuntimeOverrides = serde_yaml::from_str(yaml).expect("parse legacy runtime overrides");
+        let cfg: AgentRuntimeOverrides =
+            serde_yaml::from_str(yaml).expect("parse legacy runtime overrides");
         assert_eq!(cfg.max_attempts, Some(2));
-        assert!(cfg.retry_on.is_empty(), "absent retry_on defaults to empty (retry-all behavior)");
-        assert!(cfg.no_retry_on.is_empty(), "absent no_retry_on defaults to empty");
+        assert!(
+            cfg.retry_on.is_empty(),
+            "absent retry_on defaults to empty (retry-all behavior)"
+        );
+        assert!(
+            cfg.no_retry_on.is_empty(),
+            "absent no_retry_on defaults to empty"
+        );
     }
 
     #[test]
@@ -1135,8 +1330,14 @@ no_retry_on:
         // round-trips and golden artifacts stay byte-stable.
         let cfg = AgentRuntimeOverrides::default();
         let json = serde_json::to_string(&cfg).expect("serialize default");
-        assert!(!json.contains("retry_on"), "empty retry_on must be skipped: {json}");
-        assert!(!json.contains("no_retry_on"), "empty no_retry_on must be skipped: {json}");
+        assert!(
+            !json.contains("retry_on"),
+            "empty retry_on must be skipped: {json}"
+        );
+        assert!(
+            !json.contains("no_retry_on"),
+            "empty no_retry_on must be skipped: {json}"
+        );
     }
 
     #[test]
@@ -1179,7 +1380,154 @@ no_retry_on:
             ..Default::default()
         };
         merge_agent_profile(&mut base, &overlay);
-        assert_eq!(base.retry_on, vec!["network".to_string()], "overlay retry_on wins");
+        assert_eq!(
+            base.retry_on,
+            vec!["network".to_string()],
+            "overlay retry_on wins"
+        );
         assert_eq!(base.no_retry_on, vec!["validation".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod application_chat_controls_policy_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_policy_preserves_legacy_profile_serialization() {
+        let profile = AgentProfile::default();
+        let json = serde_json::to_string(&profile).expect("serialize profile");
+        assert!(!json.contains("application_chat_controls"));
+
+        let legacy: AgentProfile = serde_json::from_value(serde_json::json!({
+            "tool": "codex",
+            "skills": ["review"]
+        }))
+        .expect("deserialize legacy profile");
+        assert!(legacy.application_chat_controls.is_none());
+    }
+
+    #[test]
+    fn typed_policy_round_trips_and_overlay_replaces_the_whole_policy() {
+        let overlay: AgentProfileOverlay = serde_json::from_value(serde_json::json!({
+            "application_chat_controls": {
+                "approvals": false,
+                "reasoning_efforts": ["high"],
+                "permission_intents": ["default", "review"],
+                "skill_refs": ["security-review"]
+            }
+        }))
+        .expect("deserialize policy overlay");
+        let declared = overlay
+            .application_chat_controls
+            .clone()
+            .into_set()
+            .expect("declared policy");
+        assert!(declared.within_bounds());
+
+        let json = serde_json::to_string(&overlay).expect("serialize overlay");
+        let round_trip: AgentProfileOverlay =
+            serde_json::from_str(&json).expect("deserialize overlay");
+        assert_eq!(
+            round_trip.application_chat_controls,
+            AgentProfilePatch::Set(declared.clone())
+        );
+
+        let mut base = AgentProfile {
+            application_chat_controls: Some(ApplicationChatControlsPolicy {
+                approvals: Some(true),
+                reasoning_efforts: Some(vec![ApplicationChatReasoningEffort::Low]),
+                permission_intents: Some(vec![ApplicationChatPermissionIntent::Unrestricted]),
+                allow_permissive_intents: true,
+                skill_refs: Some(vec!["old".to_string()]),
+            }),
+            ..Default::default()
+        };
+        merge_agent_profile(&mut base, &round_trip);
+        assert_eq!(base.application_chat_controls, Some(declared));
+    }
+
+    #[test]
+    fn explicit_null_clears_policy_while_omission_inherits() {
+        let omitted: AgentProfileOverlay = serde_json::from_value(serde_json::json!({})).unwrap();
+        let cleared: AgentProfileOverlay = serde_json::from_value(serde_json::json!({
+            "application_chat_controls": null
+        }))
+        .unwrap();
+        assert_eq!(
+            omitted.application_chat_controls,
+            AgentProfilePatch::Inherit
+        );
+        assert_eq!(cleared.application_chat_controls, AgentProfilePatch::Clear);
+
+        let mut layered = AgentProfileOverlay {
+            application_chat_controls: AgentProfilePatch::Set(
+                ApplicationChatControlsPolicy::default(),
+            ),
+            ..Default::default()
+        };
+        layered.merge_from(&omitted);
+        assert!(matches!(
+            layered.application_chat_controls,
+            AgentProfilePatch::Set(_)
+        ));
+        layered.merge_from(&cleared);
+        assert_eq!(layered.application_chat_controls, AgentProfilePatch::Clear);
+
+        let mut profile = AgentProfile {
+            application_chat_controls: Some(ApplicationChatControlsPolicy::default()),
+            ..Default::default()
+        };
+        merge_agent_profile(&mut profile, &cleared);
+        assert!(profile.application_chat_controls.is_none());
+        assert_eq!(
+            serde_json::to_value(&cleared).unwrap()["application_chat_controls"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn policy_bounds_reject_oversized_reference_sets_and_values() {
+        let too_many = ApplicationChatControlsPolicy {
+            skill_refs: Some(vec![
+                "skill".to_string();
+                MAX_APPLICATION_CHAT_CONTROL_SKILL_REFS + 1
+            ]),
+            ..Default::default()
+        };
+        assert!(!too_many.within_bounds());
+        let too_long = ApplicationChatControlsPolicy {
+            skill_refs: Some(vec!["x".repeat(MAX_APPLICATION_CHAT_CONTROL_REF_BYTES + 1)]),
+            ..Default::default()
+        };
+        assert!(!too_long.within_bounds());
+        for refs in [
+            vec!["duplicate".to_string(), "duplicate".to_string()],
+            vec!["../escape".to_string()],
+            vec!["not/allowed".to_string()],
+            vec!["é".to_string()],
+        ] {
+            assert!(!ApplicationChatControlsPolicy {
+                skill_refs: Some(refs),
+                ..Default::default()
+            }
+            .within_bounds());
+        }
+    }
+
+    #[test]
+    fn policy_deserialization_fails_closed_on_unknown_or_invalid_input() {
+        for value in [
+            serde_json::json!({ "approval": true }),
+            serde_json::json!({ "reasoning_efforts": ["high", "high"] }),
+            serde_json::json!({ "permission_intents": ["review", "review"] }),
+            serde_json::json!({ "skill_refs": ["../escape"] }),
+            serde_json::json!({ "skill_refs": ["duplicate", "duplicate"] }),
+        ] {
+            assert!(
+                serde_json::from_value::<ApplicationChatControlsPolicy>(value.clone()).is_err(),
+                "policy must reject {value}"
+            );
+        }
     }
 }

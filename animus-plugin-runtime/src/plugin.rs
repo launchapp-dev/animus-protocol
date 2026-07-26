@@ -204,6 +204,7 @@ pub struct Plugin {
     mcp_tools: Vec<animus_plugin_protocol::McpTool>,
     env_required: Vec<animus_plugin_protocol::EnvRequirement>,
     notification_buffer_size: Option<usize>,
+    supports_mcp: Option<bool>,
     kind_capabilities: HashMap<String, KindCapability>,
 
     method_handlers: HashMap<String, MethodHandler>,
@@ -239,6 +240,7 @@ impl Plugin {
             mcp_tools: Vec::new(),
             env_required: Vec::new(),
             notification_buffer_size: None,
+            supports_mcp: None,
             kind_capabilities: HashMap::new(),
             method_handlers: HashMap::new(),
             notification_handlers: HashMap::new(),
@@ -335,6 +337,16 @@ impl Plugin {
     /// Author-supplied broadcast channel hint reported in the manifest.
     pub fn notification_buffer_size(mut self, size: usize) -> Self {
         self.notification_buffer_size = Some(size);
+        self
+    }
+
+    /// Declare whether this plugin consumes host-injected MCP servers.
+    ///
+    /// Sets [`PluginManifest::supports_mcp`]. Leaving it unset (the default)
+    /// omits the field so the kernel applies its historical default; call this
+    /// to explicitly opt in or out (REQUIREMENT-039).
+    pub fn supports_mcp(mut self, supports_mcp: bool) -> Self {
+        self.supports_mcp = Some(supports_mcp);
         self
     }
 
@@ -487,11 +499,13 @@ impl Plugin {
             name: self.name.clone(),
             version: self.version.clone(),
             plugin_kind: self.plugin_kind.clone(),
+            plugin_kinds: Vec::new(),
             description: self.description.clone(),
             protocol_version: self.protocol_version.clone(),
             capabilities,
             env_required: self.env_required.clone(),
             notification_buffer_size: self.notification_buffer_size,
+            supports_mcp: self.supports_mcp,
         }
     }
 
@@ -506,6 +520,7 @@ impl Plugin {
                 name: self.name.clone(),
                 version: self.version.clone(),
                 plugin_kind: self.plugin_kind.clone(),
+                plugin_kinds: Vec::new(),
                 description: if self.description.is_empty() {
                     None
                 } else {

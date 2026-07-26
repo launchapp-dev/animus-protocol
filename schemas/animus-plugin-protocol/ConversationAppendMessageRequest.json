@@ -19,6 +19,17 @@
       "description": "The turn to append.",
       "$ref": "#/$defs/ChatMessage"
     },
+    "operation_fence": {
+      "description": "Required for assistant messages produced by a keyed operation on a\nshared backend. Omitted for ordinary messages and legacy/local\nstores. Supporting backends advertise\n[`CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConversationOperationAppendFence"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "project_root": {
       "description": "Absolute project root path of the calling CLI/daemon.",
       "type": [
@@ -32,6 +43,15 @@
         "string",
         "null"
       ]
+    },
+    "tenant_id": {
+      "description": "Opaque server-selected tenant/workspace partition key.\n\nThe authenticated application layer derives this value from its\nsession and forwards the same value in the transport actor. A user\nsupplied workspace id is not authoritative. Authenticated stores\nMUST fail closed if this field is absent or disagrees with the\ntransport-asserted actor tenant. Omission remains wire-compatible\nonly for explicitly configured single-tenant legacy stores.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128,
+      "minLength": 1
     }
   },
   "required": [
@@ -97,6 +117,29 @@
         "role",
         "content",
         "recorded_at"
+      ]
+    },
+    "ConversationOperationAppendFence": {
+      "description": "Lease identity required when a shared-authority runtime persists the\nassistant message produced by a keyed operation.\n\nA backend advertising\n[`CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1`] MUST append the\nmessage in one transaction whose predicate matches the authenticated\ntenant and actor, repository and conversation, caller key, operation\nid, lease token, unexpired backend-clock lease, `user_accepted` state,\nand the conversation's active operation reservation. A stale fence is\nrejected without inserting a message or changing conversation meta.",
+      "type": "object",
+      "properties": {
+        "caller_key": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "caller_key",
+        "operation_id",
+        "lease_token"
       ]
     }
   }

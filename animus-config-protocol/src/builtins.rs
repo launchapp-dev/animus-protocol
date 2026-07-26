@@ -38,10 +38,14 @@ pub fn builtin_workflow_config_base() -> WorkflowConfig {
         triggers: Vec::new(),
         daemon: None,
         secrets: BTreeMap::new(),
+        workspaces: BTreeMap::new(),
+        environment_routing: None,
     }
 }
 
 pub fn builtin_workflow_config() -> WorkflowConfig {
     static BUILTIN_CONFIG: OnceLock<WorkflowConfig> = OnceLock::new();
-    BUILTIN_CONFIG.get_or_init(builtin_workflow_config_base).clone()
+    BUILTIN_CONFIG
+        .get_or_init(builtin_workflow_config_base)
+        .clone()
 }

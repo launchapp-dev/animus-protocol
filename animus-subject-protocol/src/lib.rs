@@ -38,6 +38,7 @@
 use std::collections::BTreeMap;
 use std::pin::Pin;
 
+use animus_actor::Actor;
 use animus_plugin_protocol::{error_codes, HealthCheckResult, RpcError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -81,6 +82,38 @@ pub const METHOD_SUBJECT_UNWATCH: &str = "subject/unwatch";
 
 /// `subject/schema` — capability declaration; returns [`SubjectSchema`].
 pub const METHOD_SUBJECT_SCHEMA: &str = "subject/schema";
+
+/// Actor-scoped v2 `subject/list`.
+///
+/// V2 has a distinct method family so an authenticated caller can never
+/// downgrade into a v1 backend that ignores unknown actor fields.
+pub const METHOD_SUBJECT_LIST_V2: &str = "subject/v2/list";
+
+/// Actor-scoped v2 `subject/get`.
+pub const METHOD_SUBJECT_GET_V2: &str = "subject/v2/get";
+
+/// Actor-scoped v2 `subject/create`.
+pub const METHOD_SUBJECT_CREATE_V2: &str = "subject/v2/create";
+
+/// Actor-scoped v2 `subject/update`.
+pub const METHOD_SUBJECT_UPDATE_V2: &str = "subject/v2/update";
+
+/// Actor-scoped v2 `subject/status`.
+pub const METHOD_SUBJECT_STATUS_V2: &str = "subject/v2/status";
+
+/// Actor-scoped v2 `subject/delete`.
+pub const METHOD_SUBJECT_DELETE_V2: &str = "subject/v2/delete";
+
+/// Actor-scoped subject wire version.
+pub const SUBJECT_ACTOR_PROTOCOL_VERSION: u32 = 2;
+
+/// Build an actor-scoped v2 method for a concrete subject kind.
+///
+/// For example, `subject_v2_kind_method("task", "list")` returns
+/// `"task/v2/list"`.
+pub fn subject_v2_kind_method(kind: &str, verb: &str) -> String {
+    format!("{kind}/v2/{verb}")
+}
 
 /// `subject/changed` — notification method emitted by `subject/watch`
 /// streams.
@@ -366,6 +399,115 @@ pub struct SubjectList {
     /// When the backend snapshot was taken. Used by the daemon for cache
     /// freshness reasoning.
     pub fetched_at: DateTime<Utc>,
+}
+
+// =====================================================================
+// Actor-scoped v2 requests
+// =====================================================================
+
+/// Authenticated request context asserted by the application transport.
+///
+/// The actor is required on every v2 subject call. Correlation and
+/// idempotency values are opaque transport identifiers: the kernel relays
+/// them and the owning backend decides how to record or enforce them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubjectRequestContext {
+    /// Authenticated caller. Claims remain advisory; ownership is the stable
+    /// `(user_id, tenant_id)` pair.
+    pub actor: Actor,
+
+    /// Optional request identifier for tracing one transport request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+
+    /// Optional correlation identifier spanning related requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
+
+    /// Optional idempotency key for a mutation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+}
+
+impl SubjectRequestContext {
+    /// Construct a context for an authenticated actor.
+    pub fn for_actor(actor: Actor) -> Self {
+        Self {
+            actor,
+            request_id: None,
+            correlation_id: None,
+            idempotency_key: None,
+        }
+    }
+}
+
+/// Actor-scoped v2 list request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SubjectListRequestV2 {
+    /// Authenticated request context.
+    pub context: SubjectRequestContext,
+    /// Subject filters. Ownership is always an additional backend-enforced
+    /// predicate and cannot be overridden by this filter.
+    #[serde(default)]
+    pub filter: SubjectFilter,
+}
+
+/// Actor-scoped v2 get request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubjectGetRequestV2 {
+    /// Authenticated request context.
+    pub context: SubjectRequestContext,
+    /// Subject identifier.
+    pub id: SubjectId,
+}
+
+/// Actor-scoped v2 create request.
+///
+/// `payload` is backend-defined so dynamic subject kinds retain their
+/// schema-driven fields while the authentication envelope stays typed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SubjectCreateRequestV2 {
+    /// Authenticated request context.
+    pub context: SubjectRequestContext,
+    /// Kind for the canonical `subject/v2/create` form. A kind-prefixed
+    /// method may omit this and derive it from the method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Backend-defined create fields.
+    #[serde(default)]
+    pub payload: Value,
+}
+
+/// Actor-scoped v2 update request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SubjectUpdateRequestV2 {
+    /// Authenticated request context.
+    pub context: SubjectRequestContext,
+    /// Subject identifier.
+    pub id: SubjectId,
+    /// Backend-defined update patch.
+    #[serde(default)]
+    pub patch: Value,
+}
+
+/// Actor-scoped v2 status mutation request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SubjectStatusRequestV2 {
+    /// Authenticated request context.
+    pub context: SubjectRequestContext,
+    /// Subject identifier.
+    pub id: SubjectId,
+    /// Backend-native or normalized status token.
+    pub status: String,
+}
+
+/// Actor-scoped v2 delete request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubjectDeleteRequestV2 {
+    /// Authenticated request context.
+    pub context: SubjectRequestContext,
+    /// Subject identifier.
+    pub id: SubjectId,
 }
 
 // =====================================================================
@@ -800,6 +942,36 @@ pub trait SubjectBackend: Send + Sync + 'static {
     async fn health(&self) -> Result<HealthCheckResult, BackendError>;
 }
 
+/// Actor-scoped v2 subject backend contract.
+///
+/// This trait is intentionally separate from [`SubjectBackend`]. The legacy
+/// trait remains the v1 compatibility edge; authenticated application calls
+/// use the distinct v2 method family and this trait, so a backend cannot
+/// silently discard identity by implementing only v1.
+#[async_trait]
+pub trait ActorScopedSubjectBackend: Send + Sync + 'static {
+    /// Return only subjects owned by the request actor.
+    async fn list_v2(&self, request: SubjectListRequestV2) -> Result<SubjectList, BackendError>;
+
+    /// Fetch a subject owned by the request actor.
+    async fn get_v2(&self, request: SubjectGetRequestV2) -> Result<Subject, BackendError>;
+
+    /// Create a subject owned by the request actor.
+    async fn create_v2(&self, request: SubjectCreateRequestV2) -> Result<Subject, BackendError>;
+
+    /// Update a subject owned by the request actor.
+    async fn update_v2(&self, request: SubjectUpdateRequestV2) -> Result<Subject, BackendError>;
+
+    /// Change status for a subject owned by the request actor.
+    async fn status_v2(&self, request: SubjectStatusRequestV2) -> Result<Subject, BackendError>;
+
+    /// Delete a subject owned by the request actor.
+    async fn delete_v2(
+        &self,
+        request: SubjectDeleteRequestV2,
+    ) -> Result<DeleteSubjectResponse, BackendError>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1061,6 +1233,51 @@ mod tests {
         assert_eq!(v, serde_json::json!({ "id": "linear:ENG-123" }));
         let back: DeleteSubjectRequest = serde_json::from_value(v).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn actor_scoped_v2_request_requires_typed_context() {
+        let actor = Actor {
+            user_id: "alice".into(),
+            tenant_id: Some("tenant-a".into()),
+            claims: vec!["advisory".into()],
+        };
+        let request = SubjectGetRequestV2 {
+            context: SubjectRequestContext {
+                actor: actor.clone(),
+                request_id: Some("request-1".into()),
+                correlation_id: Some("workflow-7".into()),
+                idempotency_key: None,
+            },
+            id: SubjectId::new("task:TASK-1"),
+        };
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["context"]["actor"]["user_id"], "alice");
+        assert_eq!(value["context"]["actor"]["tenant_id"], "tenant-a");
+        assert_eq!(value["context"]["correlation_id"], "workflow-7");
+        assert!(
+            serde_json::from_value::<SubjectGetRequestV2>(serde_json::json!({
+                "id": "task:TASK-1"
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::from_value::<SubjectGetRequestV2>(value).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn actor_scoped_methods_are_distinct_from_legacy_v1() {
+        assert_eq!(SUBJECT_ACTOR_PROTOCOL_VERSION, 2);
+        assert_eq!(METHOD_SUBJECT_LIST_V2, "subject/v2/list");
+        assert_eq!(METHOD_SUBJECT_GET_V2, "subject/v2/get");
+        assert_eq!(METHOD_SUBJECT_CREATE_V2, "subject/v2/create");
+        assert_eq!(METHOD_SUBJECT_UPDATE_V2, "subject/v2/update");
+        assert_eq!(METHOD_SUBJECT_STATUS_V2, "subject/v2/status");
+        assert_eq!(METHOD_SUBJECT_DELETE_V2, "subject/v2/delete");
+        assert_eq!(subject_v2_kind_method("task", "list"), "task/v2/list");
+        assert_ne!(METHOD_SUBJECT_LIST_V2, METHOD_SUBJECT_LIST);
     }
 
     #[test]
@@ -1480,8 +1697,13 @@ fn subject_metadata_is_empty(value: &Value) -> bool {
 /// ao-cli's `protocol` crate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SubjectDispatch {
-    /// The subject this dispatch targets.
-    pub subject: SubjectRef,
+    /// The subject this dispatch targets, or `None` for a genuinely
+    /// subjectless run — a workflow dispatched with NO bound subject (subject
+    /// template vars are simply absent downstream). Omitted from the wire when
+    /// absent; older payloads always carry a subject, so this stays
+    /// backward-tolerant on deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<SubjectRef>,
     /// Workflow YAML ref to execute (e.g., `"standard"`, `"quick-fix"`).
     pub workflow_ref: String,
     /// Optional initial input JSON for workflow variables.
@@ -1498,6 +1720,13 @@ pub struct SubjectDispatch {
     pub trigger_source: String,
     /// When the dispatch was created.
     pub requested_at: DateTime<Utc>,
+    /// Caller identity this dispatch runs as. `None` is a system/global run
+    /// (the legacy default). Owner-scoped schedules attach a kernel-minted
+    /// [`Actor`] here (see the schedule's `owner_id`); the daemon relays it to
+    /// the workflow runner so downstream provider + plugin channels scope to
+    /// the owner. Additive and back-compat: omitted from the wire when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Actor>,
 }
 
 impl SubjectDispatch {
@@ -1510,45 +1739,72 @@ impl SubjectDispatch {
         requested_at: DateTime<Utc>,
     ) -> Self {
         Self {
-            subject,
+            subject: Some(subject),
             workflow_ref: workflow_ref.into(),
             input: None,
             vars: std::collections::HashMap::new(),
             priority: None,
             trigger_source: trigger_source.into(),
             requested_at,
+            actor: None,
         }
     }
 
-    /// Borrow the subject id.
-    pub fn subject_id(&self) -> &str {
-        self.subject.id()
+    /// Construct a genuinely subjectless dispatch (no bound subject). The run
+    /// carries NO subject identity; downstream subject template vars are simply
+    /// absent.
+    pub fn subjectless(
+        workflow_ref: impl Into<String>,
+        trigger_source: impl Into<String>,
+        requested_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            subject: None,
+            workflow_ref: workflow_ref.into(),
+            input: None,
+            vars: std::collections::HashMap::new(),
+            priority: None,
+            trigger_source: trigger_source.into(),
+            requested_at,
+            actor: None,
+        }
     }
 
-    /// Borrow the subject kind.
-    pub fn subject_kind(&self) -> &str {
-        self.subject.kind()
+    /// Borrow the subject, or `None` for a subjectless dispatch.
+    pub fn subject(&self) -> Option<&SubjectRef> {
+        self.subject.as_ref()
     }
 
-    /// Return the stable queue-key form for this dispatch.
-    pub fn subject_key(&self) -> String {
-        self.subject.subject_key()
+    /// Borrow the subject id, or `None` for a subjectless dispatch.
+    pub fn subject_id(&self) -> Option<&str> {
+        self.subject.as_ref().map(SubjectRef::id)
+    }
+
+    /// Borrow the subject kind, or `None` for a subjectless dispatch.
+    pub fn subject_kind(&self) -> Option<&str> {
+        self.subject.as_ref().map(SubjectRef::kind)
+    }
+
+    /// Return the stable queue-key form for this dispatch, or `None` for a
+    /// subjectless dispatch (nothing to key/dedup on).
+    pub fn subject_key(&self) -> Option<String> {
+        self.subject.as_ref().map(SubjectRef::subject_key)
     }
 
     /// Return the task id if this dispatch's subject is a built-in task.
     pub fn task_id(&self) -> Option<&str> {
-        self.subject.task_id()
+        self.subject.as_ref().and_then(SubjectRef::task_id)
     }
 
     /// Return the requirement id if this dispatch's subject is a built-in
     /// requirement.
     pub fn requirement_id(&self) -> Option<&str> {
-        self.subject.requirement_id()
+        self.subject.as_ref().and_then(SubjectRef::requirement_id)
     }
 
     /// Return the schedule id if this dispatch's subject is schedule-driven.
     pub fn schedule_id(&self) -> Option<&str> {
-        self.subject.schedule_id()
+        self.subject.as_ref().and_then(SubjectRef::schedule_id)
     }
 
     /// Attach input JSON (fluent builder).
@@ -1560,6 +1816,13 @@ impl SubjectDispatch {
     /// Attach variables (fluent builder).
     pub fn with_vars(mut self, vars: std::collections::HashMap<String, String>) -> Self {
         self.vars = vars;
+        self
+    }
+
+    /// Attach the caller identity this dispatch runs as (fluent builder).
+    /// `None` leaves the dispatch as a system/global run.
+    pub fn with_actor(mut self, actor: Option<Actor>) -> Self {
+        self.actor = actor;
         self
     }
 }
@@ -1598,10 +1861,28 @@ mod subject_ref_dispatch_tests {
             "ready-queue",
             Utc::now(),
         );
-        assert_eq!(d.subject_id(), "TASK-1");
-        assert_eq!(d.subject_kind(), SUBJECT_KIND_TASK);
+        assert_eq!(d.subject_id(), Some("TASK-1"));
+        assert_eq!(d.subject_kind(), Some(SUBJECT_KIND_TASK));
         assert_eq!(d.task_id(), Some("TASK-1"));
         assert_eq!(d.requirement_id(), None);
+    }
+
+    #[test]
+    fn subjectless_dispatch_has_absent_subject() {
+        let d = SubjectDispatch::subjectless("relate", "manual", Utc::now());
+        assert!(d.subject().is_none());
+        assert_eq!(d.subject_id(), None);
+        assert_eq!(d.subject_kind(), None);
+        assert_eq!(d.subject_key(), None);
+        assert_eq!(d.task_id(), None);
+
+        // Subjectless dispatch omits `subject` from the wire entirely.
+        let v = serde_json::to_value(&d).unwrap();
+        assert!(v.get("subject").is_none(), "subject must be absent: {v}");
+
+        // ... and round-trips back to an absent subject.
+        let back: SubjectDispatch = serde_json::from_value(v).unwrap();
+        assert!(back.subject().is_none());
     }
 
     #[test]

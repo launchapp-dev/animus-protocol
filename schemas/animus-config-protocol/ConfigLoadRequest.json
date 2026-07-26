@@ -4,6 +4,17 @@
   "description": "Parameters for [`METHOD_CONFIG_LOAD`].\n\nCarries the project context the in-tree YAML scan reads from today: the\nproject root (where `.animus/` lives) and the `repo-scope` the kernel uses\nto locate scoped runtime state and keychain entries. A Postgres/API source\nuses `repo_scope` to select the right rows; the YAML source uses\n`project_root` to find the overlay files.",
   "type": "object",
   "properties": {
+    "actor": {
+      "description": "Transport-asserted caller identity, relayed verbatim by the kernel. A\nconfig source MAY use it to scope which config it returns (per-user or\nper-tenant overlays). `None` for daemon/system loads with no actor.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Actor"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "project_root": {
       "description": "Absolute path to the project root (the directory whose `.animus/`\ncarries the config). The YAML source scans `.animus/workflows.yaml` +\n`.animus/workflows/*.yaml` under this root.",
       "type": "string"
@@ -18,5 +29,34 @@
   },
   "required": [
     "project_root"
-  ]
+  ],
+  "$defs": {
+    "Actor": {
+      "description": "An opaque, transport-asserted caller identity.\n\nConstructed by the transport after it authenticates the caller, relayed\nverbatim by the kernel, and consumed only by plugins for data scoping. See\nthe [crate-level docs](crate) for the full contract.",
+      "type": "object",
+      "properties": {
+        "claims": {
+          "description": "Transport-asserted claims (e.g. `[\"admin\"]`). Advisory only: the kernel\nnever branches on these. A plugin MAY consult them for its own\nauthorization decisions. Omitted from the wire when empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tenant_id": {
+          "description": "Optional tenant / organization partition the user belongs to. Plugins\nuse it for multi-tenant data isolation. Omitted from the wire when\nabsent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_id": {
+          "description": "Stable identifier for the authenticated user. Opaque to the kernel;\nplugins use it to scope owned rows to a user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id"
+      ]
+    }
+  }
 }
