@@ -528,6 +528,63 @@ pub struct AgentProjectOverrides {
     pub env: BTreeMap<String, String>,
 }
 
+pub const MAX_APPLICATION_CHAT_CONTROL_REF_BYTES: usize = 64;
+pub const MAX_APPLICATION_CHAT_CONTROL_SKILL_REFS: usize = 64;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationChatReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationChatPermissionIntent {
+    Default,
+    Review,
+    AutoEdit,
+    Unrestricted,
+}
+
+/// Portal-authored allowlist for typed application chat controls.
+///
+/// `None` on an agent profile preserves the pre-policy config contract. Within
+/// a declared policy, omitted lists inherit the canonical application defaults
+/// while explicitly empty lists deny that control.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ApplicationChatControlsPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<Vec<ApplicationChatReasoningEffort>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_intents: Option<Vec<ApplicationChatPermissionIntent>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_permissive_intents: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_refs: Option<Vec<String>>,
+}
+
+impl ApplicationChatControlsPolicy {
+    pub fn within_bounds(&self) -> bool {
+        self.reasoning_efforts
+            .as_ref()
+            .is_none_or(|values| values.len() <= 3)
+            && self
+                .permission_intents
+                .as_ref()
+                .is_none_or(|values| values.len() <= 4)
+            && self.skill_refs.as_ref().is_none_or(|values| {
+                values.len() <= MAX_APPLICATION_CHAT_CONTROL_SKILL_REFS
+                    && values
+                        .iter()
+                        .all(|value| value.len() <= MAX_APPLICATION_CHAT_CONTROL_REF_BYTES)
+            })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -559,6 +616,8 @@ pub struct AgentProfile {
     pub hooks: AgentHooksConfig,
     #[serde(default)]
     pub skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_chat_controls: Option<ApplicationChatControlsPolicy>,
     #[serde(default)]
     pub capabilities: BTreeMap<String, bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -660,6 +719,8 @@ pub struct AgentProfileOverlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_chat_controls: Option<ApplicationChatControlsPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<BTreeMap<String, bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_server_configs: Option<BTreeMap<String, AgentMcpServerConfig>>,
@@ -741,6 +802,7 @@ impl AgentProfileOverlay {
             approval_policy,
             hooks,
             skills,
+            application_chat_controls,
             capabilities,
             mcp_server_configs,
             structured_capabilities,
@@ -782,6 +844,7 @@ impl From<AgentProfile> for AgentProfileOverlay {
             approval_policy: profile.approval_policy,
             hooks: Some(profile.hooks),
             skills: Some(profile.skills),
+            application_chat_controls: profile.application_chat_controls,
             capabilities: Some(profile.capabilities),
             mcp_server_configs: profile.mcp_server_configs,
             structured_capabilities: profile.structured_capabilities,
@@ -1026,6 +1089,9 @@ pub fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfileOverla
     if let Some(skills) = &overlay.skills {
         base.skills = skills.clone();
     }
+    if overlay.application_chat_controls.is_some() {
+        base.application_chat_controls = overlay.application_chat_controls.clone();
+    }
     if let Some(capabilities) = &overlay.capabilities {
         base.capabilities = capabilities.clone();
     }
@@ -1181,5 +1247,77 @@ no_retry_on:
         merge_agent_profile(&mut base, &overlay);
         assert_eq!(base.retry_on, vec!["network".to_string()], "overlay retry_on wins");
         assert_eq!(base.no_retry_on, vec!["validation".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod application_chat_controls_policy_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_policy_preserves_legacy_profile_serialization() {
+        let profile = AgentProfile::default();
+        let json = serde_json::to_string(&profile).expect("serialize profile");
+        assert!(!json.contains("application_chat_controls"));
+
+        let legacy: AgentProfile = serde_json::from_value(serde_json::json!({
+            "tool": "codex",
+            "skills": ["review"]
+        }))
+        .expect("deserialize legacy profile");
+        assert!(legacy.application_chat_controls.is_none());
+    }
+
+    #[test]
+    fn typed_policy_round_trips_and_overlay_replaces_the_whole_policy() {
+        let overlay: AgentProfileOverlay = serde_json::from_value(serde_json::json!({
+            "application_chat_controls": {
+                "approvals": false,
+                "reasoning_efforts": ["high"],
+                "permission_intents": ["default", "review"],
+                "skill_refs": ["security-review"]
+            }
+        }))
+        .expect("deserialize policy overlay");
+        let declared = overlay
+            .application_chat_controls
+            .clone()
+            .expect("declared policy");
+        assert!(declared.within_bounds());
+
+        let json = serde_json::to_string(&overlay).expect("serialize overlay");
+        let round_trip: AgentProfileOverlay =
+            serde_json::from_str(&json).expect("deserialize overlay");
+        assert_eq!(round_trip.application_chat_controls, Some(declared.clone()));
+
+        let mut base = AgentProfile {
+            application_chat_controls: Some(ApplicationChatControlsPolicy {
+                approvals: Some(true),
+                reasoning_efforts: Some(vec![ApplicationChatReasoningEffort::Low]),
+                permission_intents: Some(vec![ApplicationChatPermissionIntent::Unrestricted]),
+                allow_permissive_intents: true,
+                skill_refs: Some(vec!["old".to_string()]),
+            }),
+            ..Default::default()
+        };
+        merge_agent_profile(&mut base, &round_trip);
+        assert_eq!(base.application_chat_controls, Some(declared));
+    }
+
+    #[test]
+    fn policy_bounds_reject_oversized_reference_sets_and_values() {
+        let too_many = ApplicationChatControlsPolicy {
+            skill_refs: Some(vec![
+                "skill".to_string();
+                MAX_APPLICATION_CHAT_CONTROL_SKILL_REFS + 1
+            ]),
+            ..Default::default()
+        };
+        assert!(!too_many.within_bounds());
+        let too_long = ApplicationChatControlsPolicy {
+            skill_refs: Some(vec!["x".repeat(MAX_APPLICATION_CHAT_CONTROL_REF_BYTES + 1)]),
+            ..Default::default()
+        };
+        assert!(!too_long.within_bounds());
     }
 }
