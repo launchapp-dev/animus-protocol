@@ -1,6 +1,6 @@
 [package]
 name = "animus-workflow-runner-protocol"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 authors = ["Launchapp.dev"]
@@ -11,6 +11,7 @@ description = "Workflow runner plugin-kind protocol types for Animus v0.5 (`work
 [dependencies]
 animus-plugin-protocol = { path = "../animus-plugin-protocol" }
 animus-subject-protocol = { path = "../animus-subject-protocol" }
+animus-execution-protocol = { path = "../animus-execution-protocol" }
 animus-actor = { path = "../animus-actor" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

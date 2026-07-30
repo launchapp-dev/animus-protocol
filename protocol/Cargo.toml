@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 animus-subject-protocol = { path = "../animus-subject-protocol" }
+animus-execution-protocol = { path = "../animus-execution-protocol" }
 anyhow = "1.0"
 dirs = "6.0"
 serde = { version = "1.0", features = ["derive"] }

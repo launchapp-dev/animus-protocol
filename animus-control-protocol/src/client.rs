@@ -62,17 +62,17 @@ mod imp {
     use crate::method;
     use crate::types::{
         AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest,
-        DaemonAgentsResponse, DaemonEventsRequest, DaemonHealthResponse, DaemonLogEntry,
-        DaemonLogsRequest, DaemonRunEvent, DaemonStatusResponse, PluginBrowseRequest,
-        PluginCallRequest, PluginCallResponse, PluginInfo, PluginInfoRequest, PluginInstallRequest,
-        PluginInstallResponse, PluginListRequest, PluginListResponse, PluginPingRequest,
-        PluginPingResponse, PluginSearchRequest, PluginSearchResponse, PluginUninstallRequest,
-        PluginUpdateRequest, PluginUpdateResponse, ProjectInfo, ProjectInitRequest,
-        ProjectSetupRequest, ProjectStatusResponse, QueueDropRequest, QueueEnqueueRequest,
-        QueueEntry, QueueHoldRequest, QueueListRequest, QueueListResponse, QueueReleaseRequest,
-        QueueReorderRequest, QueueStats, SubjectCreateRequest, SubjectGetRequest,
-        SubjectListRequest, SubjectListResponse, SubjectNextRequest, SubjectNextResponse,
-        SubjectStatusRequest, SubjectUpdateRequest, SubjectWatchRequest, Unit,
+        CodingFleetStatusResponse, DaemonAgentsResponse, DaemonEventsRequest, DaemonHealthResponse,
+        DaemonLogEntry, DaemonLogsRequest, DaemonRunEvent, DaemonStatusResponse,
+        PluginBrowseRequest, PluginCallRequest, PluginCallResponse, PluginInfo, PluginInfoRequest,
+        PluginInstallRequest, PluginInstallResponse, PluginListRequest, PluginListResponse,
+        PluginPingRequest, PluginPingResponse, PluginSearchRequest, PluginSearchResponse,
+        PluginUninstallRequest, PluginUpdateRequest, PluginUpdateResponse, ProjectInfo,
+        ProjectInitRequest, ProjectSetupRequest, ProjectStatusResponse, QueueDropRequest,
+        QueueEnqueueRequest, QueueEntry, QueueHoldRequest, QueueListRequest, QueueListResponse,
+        QueueReleaseRequest, QueueReorderRequest, QueueStats, SubjectCreateRequest,
+        SubjectGetRequest, SubjectListRequest, SubjectListResponse, SubjectNextRequest,
+        SubjectNextResponse, SubjectStatusRequest, SubjectUpdateRequest, SubjectWatchRequest, Unit,
         WorkflowCancelRequest, WorkflowEvent, WorkflowEventsRequest, WorkflowExecuteRequest,
         WorkflowGetRequest, WorkflowListRequest, WorkflowListResponse, WorkflowPauseRequest,
         WorkflowResumeRequest, WorkflowRun, WorkflowRunRequest, WorkflowRunStart,
@@ -309,6 +309,11 @@ mod imp {
         /// Call `daemon/health`.
         pub async fn daemon_health(&self) -> Result<DaemonHealthResponse> {
             self.rpc_no_params(method::METHOD_DAEMON_HEALTH).await
+        }
+
+        /// Call `fleet/status`.
+        pub async fn fleet_status(&self) -> Result<CodingFleetStatusResponse> {
+            self.rpc_no_params(method::METHOD_FLEET_STATUS).await
         }
 
         /// Call `daemon/start`.

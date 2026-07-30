@@ -27,6 +27,72 @@
       ],
       "type": "object"
     },
+    "ExecutionFence": {
+      "additionalProperties": false,
+      "description": "Complete ownership envelope for one workflow execution generation.",
+      "properties": {
+        "queue_lease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueueLeaseFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Queue lease CAS identity. Direct execution may omit it."
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepositoryReservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Repository/ref reservation. Non-code workflows may omit it; coding\nschedulers must require it before workspace preparation."
+        },
+        "schema": {
+          "description": "Stable schema id; must equal [`EXECUTION_FENCE_SCHEMA_ID`].",
+          "type": "string"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Subject generation, absent only for a genuinely subjectless workflow."
+        },
+        "version": {
+          "description": "Schema version; must equal [`EXECUTION_FENCE_VERSION`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_generation": {
+          "description": "Positive workflow generation. Reattachment keeps it; an intentional new\nexecution generation must increment it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_id": {
+          "description": "Stable workflow id. Recovery preserves this id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "version",
+        "workflow_id",
+        "workflow_generation"
+      ],
+      "type": "object"
+    },
     "PhaseEvent": {
       "description": "Event emitted by the runner during a workflow. Daemon callers receive\nthe full vector in [`WorkflowExecuteResult::phase_events`]; real-time\nstreaming is deferred to v0.6.",
       "oneOf": [
@@ -385,6 +451,62 @@
       "title": "PublicationSubjectGeneration",
       "type": "object"
     },
+    "QueueLeaseFence": {
+      "additionalProperties": false,
+      "description": "Compare-and-swap identity for the queue lease currently owning a workflow.",
+      "properties": {
+        "entry_id": {
+          "description": "Stable queue-entry id.",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "Backend-clock expiry. Expiry makes the lease recoverable, never an\nordinary fresh-leasing candidate.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "generation": {
+          "description": "Positive monotonic lease generation. Recovery transfers ownership by\nincrementing this value, fencing the previous daemon instance.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner_id": {
+          "description": "Daemon/scheduler instance currently authorized to renew or terminalize\nthe lease.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id",
+        "owner_id",
+        "generation",
+        "expires_at"
+      ],
+      "type": "object"
+    },
+    "RepositoryReservation": {
+      "additionalProperties": false,
+      "description": "Repository/ref ownership reserved for one execution generation.",
+      "properties": {
+        "base_ref": {
+          "description": "Fully-qualified base ref, for example `refs/heads/main`.",
+          "type": "string"
+        },
+        "head_ref": {
+          "description": "Fully-qualified mutable head ref owned by this run, for example\n`refs/heads/animus/TASK-1175`.",
+          "type": "string"
+        },
+        "repository": {
+          "description": "Canonical repository identity. Hosts SHOULD use a normalized remote URL\nor provider `owner/name` identity and compare it case-insensitively where\nthe provider does.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "base_ref",
+        "head_ref"
+      ],
+      "type": "object"
+    },
     "SubjectDispatch": {
       "description": "Full dispatch envelope handed off from queue / scheduler / trigger to the\nworkflow runner.\n\nCarries the subject identity (`subject`), the workflow ref to run, and\noptional input + variables + priority + trigger source + requested-at\ntimestamp. The shape is wire-compatible with the previous home in\nao-cli's `protocol` crate.",
       "properties": {
@@ -448,6 +570,27 @@
       ],
       "type": "object"
     },
+    "SubjectGeneration": {
+      "additionalProperties": false,
+      "description": "A canonical subject identity and the immutable generation being executed.",
+      "properties": {
+        "generation": {
+          "description": "Positive backend/queue generation. A later generation cannot be\nsatisfied by work or proof from an earlier one.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "qualified_id": {
+          "description": "Canonical qualified id in `<kind>:<native-id>` form.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "qualified_id",
+        "generation"
+      ],
+      "type": "object"
+    },
     "SubjectRef": {
       "description": "Backend-qualified subject reference with optional display metadata.",
       "properties": {
@@ -503,6 +646,17 @@
             "string",
             "null"
           ]
+        },
+        "execution_fence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exact generation/lease/reservation authority for this execution. Hosts\nrequiring resilient coding MUST provide it and runners MUST fail closed\nwhen it is absent or mismatched. Optional only for legacy/non-fenced\nworkflows during migration."
         },
         "input": {
           "description": "Initial input JSON for workflow variables."
@@ -617,6 +771,17 @@
         "execution_cwd": {
           "description": "Working directory used for phases.",
           "type": "string"
+        },
+        "execution_fence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Echo of the validated execution fence. A parent uses this to ensure the\nterminal result and publication receipt belong to the leased generation."
         },
         "phase_events": {
           "default": [],
@@ -735,6 +900,17 @@
           "description": "Execution working directory for the phase.",
           "type": "string"
         },
+        "execution_fence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exact execution authority inherited from the full workflow request."
+        },
         "mcp_config": {
           "description": "Opaque MCP runtime config — same shape as\n[`WorkflowExecuteRequest::mcp_config`]. Lets phase-level retries\npass MCP server config to the agent runner."
         },
@@ -845,6 +1021,17 @@
           "minimum": 0,
           "type": "integer"
         },
+        "execution_fence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Echo of the validated execution fence for parent-side generation checks."
+        },
         "metadata": {
           "description": "Backend-specific metadata."
         },
@@ -902,6 +1089,11 @@
         "crash_recovery": {
           "default": false,
           "description": "Plugin replays persisted phase markers on restart.",
+          "type": "boolean"
+        },
+        "execution_fence_v1": {
+          "default": false,
+          "description": "Validates and echoes `animus.execution-fence.v1`, and validates any\npublication receipt against its workflow/subject generation.",
           "type": "boolean"
         },
         "manual_pause_support": {

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RepositoryReservation",
+  "description": "Repository/ref ownership reserved for one execution generation.",
+  "type": "object",
+  "properties": {
+    "base_ref": {
+      "description": "Fully-qualified base ref, for example `refs/heads/main`.",
+      "type": "string"
+    },
+    "head_ref": {
+      "description": "Fully-qualified mutable head ref owned by this run, for example\n`refs/heads/animus/TASK-1175`.",
+      "type": "string"
+    },
+    "repository": {
+      "description": "Canonical repository identity. Hosts SHOULD use a normalized remote URL\nor provider `owner/name` identity and compare it case-insensitively where\nthe provider does.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "repository",
+    "base_ref",
+    "head_ref"
+  ]
+}

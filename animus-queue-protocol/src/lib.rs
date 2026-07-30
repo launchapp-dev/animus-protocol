@@ -18,6 +18,7 @@
 
 #![warn(missing_docs)]
 
+use animus_execution_protocol::{ExecutionFence, RepositoryReservation, SubjectGeneration};
 use animus_subject_protocol::{SubjectDispatch, SubjectId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,7 @@ use serde::{Deserialize, Serialize};
 pub const KIND: &str = "queue";
 
 /// Per-crate semver protocol version.
-pub const PROTOCOL_VERSION: &str = "0.3.2";
+pub const PROTOCOL_VERSION: &str = "0.4.0";
 
 /// Add a dispatch to the queue.
 pub const METHOD_QUEUE_ENQUEUE: &str = "queue/enqueue";
@@ -61,6 +62,20 @@ pub const METHOD_QUEUE_RELEASE_PENDING: &str = "queue/release_pending";
 /// of relying on its heartbeat. No params. Returns
 /// [`QueueNextDeadlineResponse`].
 pub const METHOD_QUEUE_NEXT_DEADLINE: &str = "queue/next_deadline";
+/// Generation-fenced enqueue with durable idempotency and repository ownership.
+pub const METHOD_QUEUE_ENQUEUE_V2: &str = "queue/v2/enqueue";
+/// Generation-fenced atomic lease. Only Pending entries are eligible; expired
+/// assigned leases require explicit recovery through [`METHOD_QUEUE_LEASE_RECOVER`].
+pub const METHOD_QUEUE_LEASE_V2: &str = "queue/v2/lease";
+/// Renew an exact live lease using compare-and-swap ownership.
+pub const METHOD_QUEUE_LEASE_RENEW: &str = "queue/v2/lease/renew";
+/// Transfer an expired lease to a new daemon owner while preserving workflow
+/// and subject generations.
+pub const METHOD_QUEUE_LEASE_RECOVER: &str = "queue/v2/lease/recover";
+/// Generation-fenced completion.
+pub const METHOD_QUEUE_COMPLETION_V2: &str = "queue/v2/completion";
+/// Generation-fenced return to Pending.
+pub const METHOD_QUEUE_RELEASE_PENDING_V2: &str = "queue/v2/release_pending";
 
 // =====================================================================
 // Status vocabulary
@@ -249,6 +264,335 @@ pub struct QueueLeaseResponse {
     pub leased: Vec<QueueEntry>,
 }
 
+// =====================================================================
+// Generation-fenced queue v2
+// =====================================================================
+
+/// Enqueue request for the generation-fenced scheduler.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueEnqueueV2Request {
+    /// Full dispatch envelope to enqueue.
+    pub subject_dispatch: SubjectDispatch,
+    /// Stable producer idempotency key (for example a GitHub delivery id plus
+    /// trigger id). Repeating a key returns the original entry and generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    /// Exact repository/head-ref reservation for coding work. Non-code queue
+    /// entries may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<RepositoryReservation>,
+    /// Optional RFC 3339 earliest-dispatch time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_at: Option<String>,
+    /// Optional grace window after `run_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire_after_secs: Option<u64>,
+}
+
+impl QueueEnqueueV2Request {
+    /// Validate fields the queue can check before allocating a generation.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.subject_dispatch.subject.is_none() {
+            return Err("generation-fenced enqueue requires a subject".to_string());
+        }
+        if self.subject_dispatch.workflow_ref.trim().is_empty() {
+            return Err("generation-fenced enqueue requires workflow_ref".to_string());
+        }
+        if self
+            .idempotency_key
+            .as_ref()
+            .is_some_and(|key| key.trim().is_empty())
+        {
+            return Err("idempotency_key must not be empty when present".to_string());
+        }
+        if let Some(repository) = &self.repository {
+            repository.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Enqueue response carrying the immutable subject generation allocated to the
+/// entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueEnqueueV2Response {
+    /// `true` when this call created the entry; `false` for an idempotent replay.
+    pub enqueued: bool,
+    /// Stable queue entry id.
+    pub entry_id: String,
+    /// Immutable subject generation allocated to the entry.
+    pub subject: SubjectGeneration,
+    /// Optional advisory that does not weaken the generation fence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+/// One queue entry paired with its complete execution ownership fence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FencedQueueEntry {
+    /// Existing queue entry payload/display shape.
+    pub entry: QueueEntry,
+    /// Exact generation and CAS lease ownership.
+    pub execution: ExecutionFence,
+}
+
+impl FencedQueueEntry {
+    /// Validate the fence and its correspondence to the queue entry.
+    pub fn validate(&self) -> Result<(), String> {
+        self.execution.validate_queue_backed()?;
+        let lease = self
+            .execution
+            .queue_lease
+            .as_ref()
+            .expect("validated queue lease");
+        if lease.entry_id != self.entry.entry_id {
+            return Err("execution queue entry id does not match entry".to_string());
+        }
+        if self.entry.workflow_id.as_deref() != Some(self.execution.workflow_id.as_str()) {
+            return Err("execution workflow id does not match entry".to_string());
+        }
+        if let Some(subject) = &self.execution.subject {
+            let expected_suffix = format!(":{}", self.entry.subject_id);
+            if subject.qualified_id != self.entry.subject_id
+                && !subject.qualified_id.ends_with(&expected_suffix)
+            {
+                return Err("execution subject id does not match entry".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Request for generation-fenced atomic leasing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueLeaseV2Request {
+    /// Maximum number of entries to lease.
+    pub max: usize,
+    /// Stable daemon/scheduler instance id that will own new leases.
+    pub owner_id: String,
+    /// Kernel-preallocated workflow ids. Length must equal `max`; a queue entry
+    /// that already owns a workflow id keeps it and does not consume a new id.
+    pub workflow_ids: Vec<String>,
+    /// Active execution fences to exclude from selection and collision checks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<ExecutionFence>,
+}
+
+impl QueueLeaseV2Request {
+    /// Validate count, owner, workflow ids, and all exclusion fences.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max == 0 {
+            return Err("queue lease max must be greater than zero".to_string());
+        }
+        if self.owner_id.trim().is_empty() {
+            return Err("queue lease owner_id must not be empty".to_string());
+        }
+        if self.workflow_ids.len() != self.max {
+            return Err(format!(
+                "workflow_ids length {} did not match max {}",
+                self.workflow_ids.len(),
+                self.max
+            ));
+        }
+        let mut unique = std::collections::HashSet::new();
+        for workflow_id in &self.workflow_ids {
+            if workflow_id.trim().is_empty() || !unique.insert(workflow_id) {
+                return Err("workflow_ids must be non-empty and unique".to_string());
+            }
+        }
+        for fence in &self.exclude {
+            fence.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Why a v2 lease candidate was left untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueLeaseBlockReason {
+    /// The exact subject generation already has an active execution.
+    SubjectGenerationActive,
+    /// Another active execution owns the repository/head ref.
+    RepositoryRefCollision,
+    /// The entry has an expired assignment that must be reconciled/recovered,
+    /// never handed out as fresh work.
+    ExpiredLeaseRecoveryRequired,
+    /// The stored entry lacks the identity needed for fail-closed scheduling.
+    MissingExecutionIdentity,
+}
+
+/// A candidate intentionally not leased by the v2 scheduler.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueLeaseBlock {
+    /// Queue entry that remained untouched.
+    pub entry_id: String,
+    /// Typed collision/recovery reason.
+    pub reason: QueueLeaseBlockReason,
+    /// Existing execution that caused the conflict, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflicts_with: Option<ExecutionFence>,
+}
+
+/// Response for [`METHOD_QUEUE_LEASE_V2`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueLeaseV2Response {
+    /// Newly leased entries with complete ownership fences.
+    pub leased: Vec<FencedQueueEntry>,
+    /// Candidates intentionally left in place due to a typed fence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<QueueLeaseBlock>,
+}
+
+/// Request to renew an exact, still-owned lease.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueLeaseRenewRequest {
+    /// Current full execution fence.
+    pub execution: ExecutionFence,
+    /// Optional requested TTL; the backend may clamp it to policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<u64>,
+}
+
+impl QueueLeaseRenewRequest {
+    /// Validate the current queue-backed fence and requested TTL.
+    pub fn validate(&self) -> Result<(), String> {
+        self.execution.validate_queue_backed()?;
+        if self.ttl_secs == Some(0) {
+            return Err("lease renewal ttl_secs must be greater than zero".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Request to transfer an expired lease to a new daemon owner.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueLeaseRecoverRequest {
+    /// Last durable execution fence. The backend CAS-checks its owner and lease
+    /// generation, then preserves workflow/subject generations.
+    pub execution: ExecutionFence,
+    /// New daemon/scheduler instance id.
+    pub new_owner_id: String,
+    /// Optional requested TTL; the backend may clamp it to policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<u64>,
+}
+
+impl QueueLeaseRecoverRequest {
+    /// Validate an ownership-transfer request without weakening the execution
+    /// generation.
+    pub fn validate(&self) -> Result<(), String> {
+        self.execution.validate_queue_backed()?;
+        if self.new_owner_id.trim().is_empty() {
+            return Err("lease recovery new_owner_id must not be empty".to_string());
+        }
+        let current_owner = &self
+            .execution
+            .queue_lease
+            .as_ref()
+            .expect("validated queue lease")
+            .owner_id;
+        if current_owner == &self.new_owner_id {
+            return Err("lease recovery must transfer to a different owner_id".to_string());
+        }
+        if self.ttl_secs == Some(0) {
+            return Err("lease recovery ttl_secs must be greater than zero".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Result category for a generation-fenced queue mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueLeaseMutationOutcome {
+    /// Mutation succeeded and the response contains the current fence.
+    Applied,
+    /// The entry is already in the requested terminal/pending state.
+    AlreadyApplied,
+    /// No entry exists.
+    NotFound,
+    /// Owner, lease generation, workflow generation, or subject generation did
+    /// not match. The caller has no authority to mutate the entry.
+    StaleFence,
+    /// Recovery was requested before backend-clock expiry.
+    LeaseStillLive,
+    /// Entry exists but is not assigned.
+    NotAssigned,
+}
+
+/// Response shared by renew, recover, completion, and release-pending v2.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueLeaseMutationResponse {
+    /// Typed mutation outcome.
+    pub outcome: QueueLeaseMutationOutcome,
+    /// Current fence after success, including a transferred/incremented lease
+    /// generation after recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionFence>,
+    /// Human-readable diagnostic safe for logs/UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Generation-fenced terminal completion request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueCompletionV2Request {
+    /// Exact current execution fence.
+    pub execution: ExecutionFence,
+    /// Terminal status from [`completion_status`].
+    pub status: String,
+    /// Workflow ref that ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_ref: Option<String>,
+}
+
+impl QueueCompletionV2Request {
+    /// Validate the exact fence and terminal status vocabulary.
+    pub fn validate(&self) -> Result<(), String> {
+        self.execution.validate_queue_backed()?;
+        if !matches!(
+            self.status.as_str(),
+            completion_status::COMPLETED | completion_status::FAILED | completion_status::CANCELLED
+        ) {
+            return Err("queue completion status is not terminal".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Generation-fenced return-to-pending request. The queue preserves the
+/// canonical workflow id/generation for the next lease attempt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueReleasePendingV2Request {
+    /// Exact current execution fence.
+    pub execution: ExecutionFence,
+    /// Auditable reason for returning the entry to Pending.
+    pub reason: String,
+}
+
+impl QueueReleasePendingV2Request {
+    /// Validate the exact fence and auditable reason.
+    pub fn validate(&self) -> Result<(), String> {
+        self.execution.validate_queue_backed()?;
+        if self.reason.trim().is_empty() {
+            return Err("queue release-pending reason must not be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Request for [`METHOD_QUEUE_HOLD`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueHoldRequest {
@@ -371,6 +715,11 @@ pub struct QueueCapabilities {
     /// requested `max` to this value.
     #[serde(default)]
     pub max_lease_batch: u32,
+    /// Supports `queue/v2/*`: monotonic subject/workflow/lease generations,
+    /// CAS renew/recovery/mutations, durable idempotency, and repository-ref
+    /// collision fencing.
+    #[serde(default)]
+    pub generation_fenced_leases_v1: bool,
 }
 
 // =====================================================================
@@ -399,6 +748,10 @@ pub mod error_codes {
     /// pending or held entry). The error `data` payload SHOULD include the
     /// entry's actual status.
     pub const QUEUE_ENTRY_NOT_ASSIGNED: i32 = -32208;
+    /// A generation-fenced mutation was attempted by a stale owner/generation.
+    pub const QUEUE_STALE_FENCE: i32 = -32209;
+    /// An expired assignment requires explicit reconcile/recover, not fresh lease.
+    pub const QUEUE_RECOVERY_REQUIRED: i32 = -32210;
 }
 
 #[cfg(test)]
@@ -607,5 +960,93 @@ mod tests {
         assert_eq!(back.exclude_subjects, None);
         assert_eq!(back.workflow_ids, None);
         assert_eq!(back.max, 1);
+    }
+
+    fn sample_execution(entry_id: &str, workflow_id: &str) -> ExecutionFence {
+        use animus_execution_protocol::{
+            QueueLeaseFence, EXECUTION_FENCE_SCHEMA_ID, EXECUTION_FENCE_VERSION,
+        };
+        ExecutionFence {
+            schema: EXECUTION_FENCE_SCHEMA_ID.to_string(),
+            version: EXECUTION_FENCE_VERSION,
+            workflow_id: workflow_id.to_string(),
+            workflow_generation: 1,
+            subject: Some(SubjectGeneration {
+                qualified_id: "task:TASK-1175".to_string(),
+                generation: 4,
+            }),
+            queue_lease: Some(QueueLeaseFence {
+                entry_id: entry_id.to_string(),
+                owner_id: "daemon-a".to_string(),
+                generation: 2,
+                expires_at: "2030-01-01T00:00:00Z".parse().unwrap(),
+            }),
+            repository: Some(RepositoryReservation {
+                repository: "https://github.com/launchapp-dev/animus-cli.git".to_string(),
+                base_ref: "refs/heads/main".to_string(),
+                head_ref: "refs/heads/animus/TASK-1175".to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn v2_lease_requires_unique_preallocated_ids() {
+        let request = QueueLeaseV2Request {
+            max: 2,
+            owner_id: "daemon-a".to_string(),
+            workflow_ids: vec!["wf-1".to_string(), "wf-1".to_string()],
+            exclude: Vec::new(),
+        };
+        assert!(request.validate().unwrap_err().contains("unique"));
+
+        let request = QueueLeaseV2Request {
+            workflow_ids: vec!["wf-1".to_string(), "wf-2".to_string()],
+            ..request
+        };
+        request.validate().unwrap();
+    }
+
+    #[test]
+    fn fenced_entry_round_trips_and_matches_queue_identity() {
+        let fenced = FencedQueueEntry {
+            entry: QueueEntry {
+                entry_id: "entry-1".to_string(),
+                subject_id: "TASK-1175".to_string(),
+                task_id: Some("TASK-1175".to_string()),
+                subject_dispatch: sample_dispatch("TASK-1175"),
+                status: status::ASSIGNED.to_string(),
+                workflow_id: Some("workflow-1".to_string()),
+                enqueued_at: "2029-12-31T00:00:00Z".to_string(),
+                assigned_at: Some("2029-12-31T01:00:00Z".to_string()),
+                held_at: None,
+                run_at: None,
+                expire_after_secs: None,
+            },
+            execution: sample_execution("entry-1", "workflow-1"),
+        };
+        fenced.validate().unwrap();
+        let value = serde_json::to_value(&fenced).unwrap();
+        assert_eq!(
+            serde_json::from_value::<FencedQueueEntry>(value).unwrap(),
+            fenced
+        );
+
+        let mut stale = fenced;
+        stale.execution.workflow_id = "workflow-2".to_string();
+        assert!(stale.validate().unwrap_err().contains("workflow id"));
+    }
+
+    #[test]
+    fn recovery_request_preserves_execution_and_names_new_owner() {
+        let request = QueueLeaseRecoverRequest {
+            execution: sample_execution("entry-1", "workflow-1"),
+            new_owner_id: "daemon-b".to_string(),
+            ttl_secs: Some(600),
+        };
+        request.validate().unwrap();
+        let value = serde_json::to_value(&request).unwrap();
+        let decoded: QueueLeaseRecoverRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.execution.workflow_generation, 1);
+        assert_eq!(decoded.new_owner_id, "daemon-b");
     }
 }

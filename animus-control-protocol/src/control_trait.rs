@@ -23,8 +23,8 @@ use animus_subject_protocol::{Subject, SubjectChangedEvent};
 use crate::error::ControlError;
 use crate::types::{
     AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest,
-    DaemonAgentsResponse, DaemonEventsRequest, DaemonHealthResponse, DaemonLogEntry,
-    DaemonLogsRequest, DaemonRunEvent, DaemonStatusResponse, PluginBrowseRequest,
+    CodingFleetStatusResponse, DaemonAgentsResponse, DaemonEventsRequest, DaemonHealthResponse,
+    DaemonLogEntry, DaemonLogsRequest, DaemonRunEvent, DaemonStatusResponse, PluginBrowseRequest,
     PluginCallRequest, PluginCallResponse, PluginInfo, PluginInfoRequest, PluginInstallRequest,
     PluginInstallResponse, PluginListRequest, PluginListResponse, PluginPingRequest,
     PluginPingResponse, PluginSearchRequest, PluginSearchResponse, PluginUninstallRequest,
@@ -160,6 +160,9 @@ pub trait ControlSurface: Send + Sync + 'static {
 
     /// List currently active agents.
     async fn daemon_agents(&self) -> Result<DaemonAgentsResponse, ControlError>;
+
+    /// Return generation-fenced coding fleet capacity and reservations.
+    async fn fleet_status(&self) -> Result<CodingFleetStatusResponse, ControlError>;
 
     /// Open a stream of daemon run events.
     async fn daemon_events(

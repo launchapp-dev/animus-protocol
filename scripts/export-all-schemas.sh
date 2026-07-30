@@ -21,6 +21,7 @@ cd "${WORKSPACE_ROOT}"
 # convention.
 CRATES=(
     "animus-application-protocol"
+    "animus-execution-protocol"
     "animus-plugin-protocol"
     "animus-subject-protocol"
     "animus-provider-protocol"

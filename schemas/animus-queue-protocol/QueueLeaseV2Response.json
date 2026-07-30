@@ -1,142 +1,28 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "WorkflowExecuteRequest",
-  "description": "Parameters for [`METHOD_WORKFLOW_EXECUTE`].\n\nEither `subject_dispatch` must be set OR (`subject_ref` + one of\n`task_id` / `requirement_id` / (`title` + `description`)). Generic\nsubject backends MUST use `subject_dispatch`; task and requirement\nbackends MAY use the convenience fields.",
+  "title": "QueueLeaseV2Response",
+  "description": "Response for [`METHOD_QUEUE_LEASE_V2`].",
   "type": "object",
   "properties": {
-    "actor": {
-      "description": "Transport-asserted caller identity, relayed verbatim from the daemon so\nthe runner can pass it to subject/journal/config plugins for scoping.\n`None` for system-initiated runs with no actor.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Actor"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "description": {
-      "description": "For custom ad-hoc subjects.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "execution_fence": {
-      "description": "Exact generation/lease/reservation authority for this execution. Hosts\nrequiring resilient coding MUST provide it and runners MUST fail closed\nwhen it is absent or mismatched. Optional only for legacy/non-fenced\nworkflows during migration.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ExecutionFence"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "input": {
-      "description": "Initial input JSON for workflow variables."
-    },
-    "mcp_config": {
-      "description": "Opaque MCP runtime config."
-    },
-    "model": {
-      "description": "Force a specific model.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "phase_filter": {
-      "description": "Single-phase filter: run only this phase id.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "phase_routing": {
-      "description": "Opaque phase routing config (backend-specific)."
-    },
-    "phase_timeout_secs": {
-      "description": "Per-phase timeout in seconds.",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint64",
-      "minimum": 0
-    },
-    "requirement_id": {
-      "description": "Requirement id.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "subject_dispatch": {
-      "description": "Generic dispatch envelope (preferred for non-task/requirement subjects).",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SubjectDispatch"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "subject_ref": {
-      "description": "Identifies which subject to run when `subject_dispatch` is not set.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SubjectRef"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "task_id": {
-      "description": "Task id (used only when `subject_dispatch` is None and\n`subject_ref.kind == \"animus.task\"`).",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "title": {
-      "description": "For custom ad-hoc subjects without an existing `subject_ref`.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "tool": {
-      "description": "Force a specific tool (`\"claude\"`, `\"codex\"`, `\"gemini\"`, ...).",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "vars": {
-      "description": "Workflow scalar variables.",
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
+    "blocked": {
+      "description": "Candidates intentionally left in place due to a typed fence.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/QueueLeaseBlock"
       }
     },
-    "workflow_id": {
-      "description": "Existing workflow id to resume, or `None` to start a fresh run.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "workflow_ref": {
-      "description": "Workflow YAML ref (e.g., `\"standard\"`, `\"research-first\"`).",
-      "type": [
-        "string",
-        "null"
-      ]
+    "leased": {
+      "description": "Newly leased entries with complete ownership fences.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FencedQueueEntry"
+      }
     }
   },
+  "additionalProperties": false,
+  "required": [
+    "leased"
+  ],
   "$defs": {
     "Actor": {
       "description": "An opaque, transport-asserted caller identity.\n\nConstructed by the transport after it authenticates the caller, relayed\nverbatim by the kernel, and consumed only by plugins for data scoping. See\nthe [crate-level docs](crate) for the full contract.",
@@ -229,6 +115,157 @@
         "version",
         "workflow_id",
         "workflow_generation"
+      ]
+    },
+    "FencedQueueEntry": {
+      "description": "One queue entry paired with its complete execution ownership fence.",
+      "type": "object",
+      "properties": {
+        "entry": {
+          "description": "Existing queue entry payload/display shape.",
+          "$ref": "#/$defs/QueueEntry"
+        },
+        "execution": {
+          "description": "Exact generation and CAS lease ownership.",
+          "$ref": "#/$defs/ExecutionFence"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entry",
+        "execution"
+      ]
+    },
+    "QueueEntry": {
+      "description": "A queue entry shape returned by list / lease.",
+      "type": "object",
+      "properties": {
+        "assigned_at": {
+          "description": "RFC 3339 assignment timestamp.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enqueued_at": {
+          "description": "RFC 3339 enqueue timestamp.",
+          "type": "string"
+        },
+        "entry_id": {
+          "description": "Stable entry id (unique within the project queue). Mutation calls\ntarget this id.",
+          "type": "string"
+        },
+        "expire_after_secs": {
+          "description": "Grace window in seconds after `run_at` before the entry is expired\nand dropped on sweep. `None` means never expire. Ignored when\n`run_at` is `None`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "held_at": {
+          "description": "RFC 3339 hold timestamp.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_at": {
+          "description": "RFC 3339 earliest-dispatch time for a deferred entry. While `now`\nis before this instant the entry is pending-but-not-leasable.\n`None` for ordinary (dispatch-ASAP) entries.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Status value from [`status`].",
+          "type": "string"
+        },
+        "subject_dispatch": {
+          "description": "Full dispatch envelope — included so the daemon can lease an entry\nand start work without a second roundtrip.",
+          "$ref": "#/$defs/SubjectDispatch"
+        },
+        "subject_id": {
+          "description": "Subject id from the dispatch envelope.",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Task id, if this entry's subject is a built-in task.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow_id": {
+          "description": "Workflow id attached to an Assigned entry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entry_id",
+        "subject_id",
+        "subject_dispatch",
+        "status",
+        "enqueued_at"
+      ]
+    },
+    "QueueLeaseBlock": {
+      "description": "A candidate intentionally not leased by the v2 scheduler.",
+      "type": "object",
+      "properties": {
+        "conflicts_with": {
+          "description": "Existing execution that caused the conflict, when applicable.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionFence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "entry_id": {
+          "description": "Queue entry that remained untouched.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Typed collision/recovery reason.",
+          "$ref": "#/$defs/QueueLeaseBlockReason"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entry_id",
+        "reason"
+      ]
+    },
+    "QueueLeaseBlockReason": {
+      "description": "Why a v2 lease candidate was left untouched.",
+      "oneOf": [
+        {
+          "description": "The exact subject generation already has an active execution.",
+          "type": "string",
+          "const": "subject_generation_active"
+        },
+        {
+          "description": "Another active execution owns the repository/head ref.",
+          "type": "string",
+          "const": "repository_ref_collision"
+        },
+        {
+          "description": "The entry has an expired assignment that must be reconciled/recovered,\nnever handed out as fresh work.",
+          "type": "string",
+          "const": "expired_lease_recovery_required"
+        },
+        {
+          "description": "The stored entry lacks the identity needed for fail-closed scheduling.",
+          "type": "string",
+          "const": "missing_execution_identity"
+        }
       ]
     },
     "QueueLeaseFence": {

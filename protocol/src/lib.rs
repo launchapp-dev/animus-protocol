@@ -28,6 +28,10 @@ pub mod test_utils;
 pub use agent_runner::*;
 pub use common::*;
 // Explicit re-exports for config helpers used across crates
+pub use animus_execution_protocol::{
+    ExecutionFence, QueueLeaseFence, RepositoryReservation, SubjectGeneration,
+    EXECUTION_FENCE_SCHEMA_ID, EXECUTION_FENCE_VERSION,
+};
 pub use config::{
     cli_tracker_path, daemon_events_log_path, default_allowed_tool_prefixes, metrics_env_disabled,
     parse_env_bool, parse_env_bool_opt, AutoUpdateChannel, AutoUpdateConfig, AutoUpdateMode,

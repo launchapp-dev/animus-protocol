@@ -185,6 +185,10 @@ pub const METHOD_QUEUE_REORDER: &str = "queue/reorder";
 /// `queue/stats` — return per-status counts and recent throughput.
 pub const METHOD_QUEUE_STATS: &str = "queue/stats";
 
+/// `fleet/status` — generation-fenced coding scheduler capacity, reservations,
+/// lease expiry, and recovery state.
+pub const METHOD_FLEET_STATUS: &str = "fleet/status";
+
 // =====================================================================
 // Project operations
 // =====================================================================

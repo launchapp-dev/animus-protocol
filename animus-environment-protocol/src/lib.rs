@@ -47,6 +47,7 @@
 
 use std::collections::BTreeMap;
 
+use animus_execution_protocol::ExecutionFence;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -338,6 +339,37 @@ pub struct ExecSessionRequest {
     /// the legacy behavior (the node mints its own run id).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
+
+    /// Exact workflow/subject/queue generation authority delegated to the
+    /// remote node. Generation-aware environments MUST validate that
+    /// `workflow_id` matches this fence and pass it unchanged to node Animus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_fence: Option<ExecutionFence>,
+}
+
+impl ExecSessionRequest {
+    /// Validate the optional/required execution fence before the environment
+    /// dispatches to node Animus.
+    pub fn validate_execution_fence(&self, required: bool) -> Result<(), String> {
+        let Some(execution) = self.execution_fence.as_ref() else {
+            return if required {
+                Err("remote execution session requires execution_fence".to_string())
+            } else {
+                Ok(())
+            };
+        };
+        execution.validate()?;
+        if self.workflow_id.as_deref() != Some(execution.workflow_id.as_str()) {
+            return Err("exec_session workflow_id does not match execution fence".to_string());
+        }
+        if let Some(subject) = execution.subject.as_ref() {
+            let suffix = format!(":{}", self.subject_id);
+            if subject.qualified_id != self.subject_id && !subject.qualified_id.ends_with(&suffix) {
+                return Err("exec_session subject_id does not match execution fence".to_string());
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Response payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`]: the node-local run
@@ -347,6 +379,11 @@ pub struct ExecSessionResponse {
     /// The node-local workflow run id, when one was spawned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
+
+    /// Echo of the generation fence validated by the node. The parent rejects
+    /// a terminal response that omits or changes a required fence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_fence: Option<ExecutionFence>,
 
     /// Terminal status of the node-local run (e.g. `completed`, `failed`,
     /// `escalated`, `cancelled`, or `no-run` when nothing was dispatched).
@@ -697,5 +734,40 @@ mod tests {
     fn teardown_response_is_empty_object() {
         let value = serde_json::to_value(TeardownResponse::default()).expect("serializes");
         assert_eq!(value, serde_json::json!({}));
+    }
+
+    #[test]
+    fn exec_session_round_trips_execution_fence() {
+        use animus_execution_protocol::{
+            ExecutionFence, SubjectGeneration, EXECUTION_FENCE_SCHEMA_ID, EXECUTION_FENCE_VERSION,
+        };
+        let fence = ExecutionFence {
+            schema: EXECUTION_FENCE_SCHEMA_ID.to_string(),
+            version: EXECUTION_FENCE_VERSION,
+            workflow_id: "workflow-1".to_string(),
+            workflow_generation: 1,
+            subject: Some(SubjectGeneration {
+                qualified_id: "task:TASK-1175".to_string(),
+                generation: 3,
+            }),
+            queue_lease: None,
+            repository: None,
+        };
+        let request = ExecSessionRequest {
+            handle: EnvironmentHandle {
+                id: "node-1".to_string(),
+                workspace_root: "/workspace".to_string(),
+                metadata: Value::Null,
+            },
+            subject_id: "task:TASK-1175".to_string(),
+            workflow_ref: Some("coding".to_string()),
+            dispatch_input: None,
+            workflow_id: Some("workflow-1".to_string()),
+            execution_fence: Some(fence.clone()),
+        };
+        request.validate_execution_fence(true).unwrap();
+        let decoded: ExecSessionRequest =
+            serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+        assert_eq!(decoded.execution_fence, Some(fence));
     }
 }

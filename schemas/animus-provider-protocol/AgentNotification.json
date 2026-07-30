@@ -147,6 +147,88 @@
         "message",
         "recoverable"
       ]
+    },
+    {
+      "description": "Agent surfaced a native human-in-the-loop interaction. Maps to\n[`NOTIFICATION_AGENT_INTERACTION_REQUESTED`]. Added in v0.1.13.5.\n\nThe field is named `interaction_kind` Rust-side because the enum's\nserde tag already claims `kind`; the wire payload (see\n[`AgentNotification::payload`]) emits it as `kind` per spec.",
+      "type": "object",
+      "properties": {
+        "expires_at": {
+          "description": "RFC 3339 expiry, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "interaction_id": {
+          "description": "Plugin-assigned interaction id.",
+          "type": "string"
+        },
+        "interaction_kind": {
+          "description": "Interaction kind: `\"approval\"` or `\"question\"`.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "interactionRequested"
+        },
+        "payload": {
+          "description": "Kind-specific detail.",
+          "$ref": "#/$defs/InteractionRequestPayload",
+          "default": {}
+        },
+        "session_id": {
+          "description": "Stable session id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "session_id",
+        "interaction_id",
+        "interaction_kind"
+      ]
     }
-  ]
+  ],
+  "$defs": {
+    "InteractionRequestPayload": {
+      "description": "Kind-specific detail inside [`InteractionRequestedParams`]. Approval\ninteractions fill `action` (plus optionally `tool_name` / `arguments`);\nquestion interactions fill `question` (plus optionally `options`).",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "Human-readable description of the action awaiting approval.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "arguments": {
+          "description": "Arguments of the pending tool invocation, if known."
+        },
+        "options": {
+          "description": "Suggested answers (question interactions).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "question": {
+          "description": "The question text (question interactions).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "description": "Tool the agent wants to invoke, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
 }

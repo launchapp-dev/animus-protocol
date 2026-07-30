@@ -276,6 +276,17 @@
             "null"
           ]
         },
+        "execution_fence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exact workflow/subject/queue generation authority delegated to the\nremote node. Generation-aware environments MUST validate that\n`workflow_id` matches this fence and pass it unchanged to node Animus."
+        },
         "handle": {
           "$ref": "#/$defs/EnvironmentHandle",
           "description": "The prepared context (whose in-container animus runs the subject)."
@@ -309,6 +320,17 @@
     "ExecSessionResponse": {
       "description": "Response payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`]: the node-local run\nid the dispatch spawned and its terminal status.",
       "properties": {
+        "execution_fence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Echo of the generation fence validated by the node. The parent rejects\na terminal response that omits or changes a required fence."
+        },
         "status": {
           "description": "Terminal status of the node-local run (e.g. `completed`, `failed`,\n`escalated`, `cancelled`, or `no-run` when nothing was dispatched).",
           "type": "string"
@@ -342,6 +364,72 @@
         }
       ],
       "title": "ExecStream"
+    },
+    "ExecutionFence": {
+      "additionalProperties": false,
+      "description": "Complete ownership envelope for one workflow execution generation.",
+      "properties": {
+        "queue_lease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueueLeaseFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Queue lease CAS identity. Direct execution may omit it."
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepositoryReservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Repository/ref reservation. Non-code workflows may omit it; coding\nschedulers must require it before workspace preparation."
+        },
+        "schema": {
+          "description": "Stable schema id; must equal [`EXECUTION_FENCE_SCHEMA_ID`].",
+          "type": "string"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Subject generation, absent only for a genuinely subjectless workflow."
+        },
+        "version": {
+          "description": "Schema version; must equal [`EXECUTION_FENCE_VERSION`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_generation": {
+          "description": "Positive workflow generation. Reattachment keeps it; an intentional new\nexecution generation must increment it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_id": {
+          "description": "Stable workflow id. Recovery preserves this id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "version",
+        "workflow_id",
+        "workflow_generation"
+      ],
+      "type": "object"
     },
     "GetNodeRequest": {
       "description": "Request payload for [`METHOD_ENVIRONMENT_GET`].",
@@ -459,6 +547,38 @@
       "title": "PrepareResponse",
       "type": "object"
     },
+    "QueueLeaseFence": {
+      "additionalProperties": false,
+      "description": "Compare-and-swap identity for the queue lease currently owning a workflow.",
+      "properties": {
+        "entry_id": {
+          "description": "Stable queue-entry id.",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "Backend-clock expiry. Expiry makes the lease recoverable, never an\nordinary fresh-leasing candidate.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "generation": {
+          "description": "Positive monotonic lease generation. Recovery transfers ownership by\nincrementing this value, fencing the previous daemon instance.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner_id": {
+          "description": "Daemon/scheduler instance currently authorized to renew or terminalize\nthe lease.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id",
+        "owner_id",
+        "generation",
+        "expires_at"
+      ],
+      "type": "object"
+    },
     "ReapRequest": {
       "description": "Request payload for [`METHOD_ENVIRONMENT_REAP`]. With no fields set, reap\ndeletes only dead nodes (always safe — a live node is never dead).",
       "properties": {
@@ -545,6 +665,51 @@
         "url"
       ],
       "title": "RepoRef",
+      "type": "object"
+    },
+    "RepositoryReservation": {
+      "additionalProperties": false,
+      "description": "Repository/ref ownership reserved for one execution generation.",
+      "properties": {
+        "base_ref": {
+          "description": "Fully-qualified base ref, for example `refs/heads/main`.",
+          "type": "string"
+        },
+        "head_ref": {
+          "description": "Fully-qualified mutable head ref owned by this run, for example\n`refs/heads/animus/TASK-1175`.",
+          "type": "string"
+        },
+        "repository": {
+          "description": "Canonical repository identity. Hosts SHOULD use a normalized remote URL\nor provider `owner/name` identity and compare it case-insensitively where\nthe provider does.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "base_ref",
+        "head_ref"
+      ],
+      "type": "object"
+    },
+    "SubjectGeneration": {
+      "additionalProperties": false,
+      "description": "A canonical subject identity and the immutable generation being executed.",
+      "properties": {
+        "generation": {
+          "description": "Positive backend/queue generation. A later generation cannot be\nsatisfied by work or proof from an earlier one.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "qualified_id": {
+          "description": "Canonical qualified id in `<kind>:<native-id>` form.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "qualified_id",
+        "generation"
+      ],
       "type": "object"
     },
     "TeardownNodeRequest": {

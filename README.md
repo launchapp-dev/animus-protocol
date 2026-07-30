@@ -10,6 +10,7 @@
 |---|---|---|
 | `animus-plugin-protocol` | yes | Wire types only; no external Animus deps. |
 | `animus-application-protocol` | yes | Policy-neutral application wire types, generated JSON Schemas, and cross-language scalar limits. |
+| `animus-execution-protocol` | yes | Generation-fenced workflow, subject, queue-lease, and repository reservation identity. |
 | `animus-subject-protocol` | yes | Pure trait + schema definitions. |
 | `animus-provider-protocol` | yes | Pure trait + schema definitions. |
 | `animus-trigger-protocol` | yes | Pure trait + schema definitions for push-driven event sources (Slack, webhooks, file watchers, cron). |
@@ -26,6 +27,7 @@ The protocol + subject + provider + runtime crates are usable today via git path
 |---|---|
 | [`animus-plugin-protocol`](./animus-plugin-protocol) | Wire types every plugin uses: `RpcRequest`, `RpcResponse`, `RpcNotification`, `RpcError`, error codes, `InitializeParams` / `InitializeResult`, `PluginManifest`, `HealthCheckResult`. |
 | [`animus-application-protocol`](./animus-application-protocol) | Application-facing action/resource vocabularies, closed chat controls, durable chat receipts, and machine-readable UTF-8/numeric limits. Portals still own policy; spatial clients still own world state. |
+| [`animus-execution-protocol`](./animus-execution-protocol) | Shared `ExecutionFence`, subject/workflow generations, queue lease CAS identity, and repository/ref reservation contract used by the scheduler, runner, environments, Portal, and publication verifier. |
 | [`animus-subject-protocol`](./animus-subject-protocol) | `SubjectBackend` trait + normalized `Subject` schema for backends like Linear, Jira, GitHub Issues, Notion, Asana — anything with a system-of-record API. |
 | [`animus-provider-protocol`](./animus-provider-protocol) | `ProviderBackend` trait + `AgentRunRequest`/`AgentRunResponse` shapes for LLM provider plugins (Claude, Codex, Gemini, OpenAI-compatible, on-prem). |
 | [`animus-trigger-protocol`](./animus-trigger-protocol) | `TriggerBackend` trait + `TriggerEvent`/`TriggerSchema` shapes for push-driven event sources (Slack mentions, generic webhooks, file watchers, cron). |
@@ -44,6 +46,11 @@ Workflow publishers use the explicit single-owner configuration and durable
 receipt contract described in
 [`docs/workflow-publication-contract.md`](./docs/workflow-publication-contract.md).
 Publication is never inferred from workflow or phase names.
+
+Crash-safe coding schedulers use the generation and lease rules in
+[`docs/execution-fence.md`](./docs/execution-fence.md). An expired lease is a
+reconciliation signal; it is never permission to create a second workflow or
+node.
 
 ## Subject backend quickstart (Rust)
 

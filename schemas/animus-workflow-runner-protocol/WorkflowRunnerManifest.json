@@ -37,6 +37,11 @@
           "type": "boolean",
           "default": false
         },
+        "execution_fence_v1": {
+          "description": "Validates and echoes `animus.execution-fence.v1`, and validates any\npublication receipt against its workflow/subject generation.",
+          "type": "boolean",
+          "default": false
+        },
         "manual_pause_support": {
           "description": "Plugin honors `manual_pending` phase statuses.",
           "type": "boolean",

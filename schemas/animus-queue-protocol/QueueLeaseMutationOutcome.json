@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueLeaseMutationOutcome",
+  "description": "Result category for a generation-fenced queue mutation.",
+  "oneOf": [
+    {
+      "description": "Mutation succeeded and the response contains the current fence.",
+      "type": "string",
+      "const": "applied"
+    },
+    {
+      "description": "The entry is already in the requested terminal/pending state.",
+      "type": "string",
+      "const": "already_applied"
+    },
+    {
+      "description": "No entry exists.",
+      "type": "string",
+      "const": "not_found"
+    },
+    {
+      "description": "Owner, lease generation, workflow generation, or subject generation did\nnot match. The caller has no authority to mutate the entry.",
+      "type": "string",
+      "const": "stale_fence"
+    },
+    {
+      "description": "Recovery was requested before backend-clock expiry.",
+      "type": "string",
+      "const": "lease_still_live"
+    },
+    {
+      "description": "Entry exists but is not assigned.",
+      "type": "string",
+      "const": "not_assigned"
+    }
+  ]
+}
