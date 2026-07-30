@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueEnqueueV2Request",
+  "description": "Enqueue request for the generation-fenced scheduler.",
+  "type": "object",
+  "properties": {
+    "expire_after_secs": {
+      "description": "Optional grace window after `run_at`.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "idempotency_key": {
+      "description": "Stable producer idempotency key (for example a GitHub delivery id plus\ntrigger id). Repeating a key returns the original entry and generation.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repository": {
+      "description": "Exact repository/head-ref reservation for coding work. Non-code queue\nentries may omit it.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RepositoryReservation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "run_at": {
+      "description": "Optional RFC 3339 earliest-dispatch time.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "subject_dispatch": {
+      "description": "Full dispatch envelope to enqueue.",
+      "$ref": "#/$defs/SubjectDispatch"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "subject_dispatch"
+  ],
+  "$defs": {
+    "Actor": {
+      "description": "An opaque, transport-asserted caller identity.\n\nConstructed by the transport after it authenticates the caller, relayed\nverbatim by the kernel, and consumed only by plugins for data scoping. See\nthe [crate-level docs](crate) for the full contract.",
+      "type": "object",
+      "properties": {
+        "claims": {
+          "description": "Transport-asserted claims (e.g. `[\"admin\"]`). Advisory only: the kernel\nnever branches on these. A plugin MAY consult them for its own\nauthorization decisions. Omitted from the wire when empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tenant_id": {
+          "description": "Optional tenant / organization partition the user belongs to. Plugins\nuse it for multi-tenant data isolation. Omitted from the wire when\nabsent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user_id": {
+          "description": "Stable identifier for the authenticated user. Opaque to the kernel;\nplugins use it to scope owned rows to a user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id"
+      ]
+    },
+    "RepositoryReservation": {
+      "description": "Repository/ref ownership reserved for one execution generation.",
+      "type": "object",
+      "properties": {
+        "base_ref": {
+          "description": "Fully-qualified base ref, for example `refs/heads/main`.",
+          "type": "string"
+        },
+        "head_ref": {
+          "description": "Fully-qualified mutable head ref owned by this run, for example\n`refs/heads/animus/TASK-1175`.",
+          "type": "string"
+        },
+        "repository": {
+          "description": "Canonical repository identity. Hosts SHOULD use a normalized remote URL\nor provider `owner/name` identity and compare it case-insensitively where\nthe provider does.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "base_ref",
+        "head_ref"
+      ]
+    },
+    "SubjectDispatch": {
+      "description": "Full dispatch envelope handed off from queue / scheduler / trigger to the\nworkflow runner.\n\nCarries the subject identity (`subject`), the workflow ref to run, and\noptional input + variables + priority + trigger source + requested-at\ntimestamp. The shape is wire-compatible with the previous home in\nao-cli's `protocol` crate.",
+      "type": "object",
+      "properties": {
+        "actor": {
+          "description": "Caller identity this dispatch runs as. `None` is a system/global run\n(the legacy default). Owner-scoped schedules attach a kernel-minted\n[`Actor`] here (see the schedule's `owner_id`); the daemon relays it to\nthe workflow runner so downstream provider + plugin channels scope to\nthe owner. Additive and back-compat: omitted from the wire when absent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Actor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "Optional initial input JSON for workflow variables."
+        },
+        "priority": {
+          "description": "Optional priority hint (`\"low\"`, `\"medium\"`, `\"high\"`, `\"critical\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_at": {
+          "description": "When the dispatch was created.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "subject": {
+          "description": "The subject this dispatch targets, or `None` for a genuinely\nsubjectless run — a workflow dispatched with NO bound subject (subject\ntemplate vars are simply absent downstream). Omitted from the wire when\nabsent; older payloads always carry a subject, so this stays\nbackward-tolerant on deserialize.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger_source": {
+          "description": "Tag identifying which subsystem produced this dispatch\n(e.g., `\"ready-queue\"`, `\"trigger:slack\"`, `\"schedule:nightly\"`).",
+          "type": "string"
+        },
+        "vars": {
+          "description": "Workflow scalar variables.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "workflow_ref": {
+          "description": "Workflow YAML ref to execute (e.g., `\"standard\"`, `\"quick-fix\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workflow_ref",
+        "trigger_source",
+        "requested_at"
+      ]
+    },
+    "SubjectRef": {
+      "description": "Backend-qualified subject reference with optional display metadata.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metadata": true,
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    }
+  }
+}

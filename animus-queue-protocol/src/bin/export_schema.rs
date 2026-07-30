@@ -25,11 +25,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use animus_queue_protocol::{
-    QueueCapabilities, QueueCompletionRequest, QueueDropRequest, QueueEnqueueRequest,
-    QueueEnqueueResponse, QueueEntry, QueueHoldRequest, QueueLeaseRequest, QueueLeaseResponse,
-    QueueListRequest, QueueListResponse, QueueMarkAssignedRequest, QueueMutationResponse,
-    QueueNextDeadlineResponse, QueueReleasePendingParams, QueueReleasePendingResponse,
-    QueueReleaseRequest, QueueReorderRequest, QueueReorderResponse, QueueStats,
+    FencedQueueEntry, QueueCapabilities, QueueCompletionRequest, QueueCompletionV2Request,
+    QueueDropRequest, QueueEnqueueRequest, QueueEnqueueResponse, QueueEnqueueV2Request,
+    QueueEnqueueV2Response, QueueEntry, QueueHoldRequest, QueueLeaseBlock, QueueLeaseBlockReason,
+    QueueLeaseMutationOutcome, QueueLeaseMutationResponse, QueueLeaseRecoverRequest,
+    QueueLeaseRenewRequest, QueueLeaseRequest, QueueLeaseResponse, QueueLeaseV2Request,
+    QueueLeaseV2Response, QueueListRequest, QueueListResponse, QueueMarkAssignedRequest,
+    QueueMutationResponse, QueueNextDeadlineResponse, QueueReleasePendingParams,
+    QueueReleasePendingResponse, QueueReleasePendingV2Request, QueueReleaseRequest,
+    QueueReorderRequest, QueueReorderResponse, QueueStats,
 };
 use schemars::{schema_for, Schema};
 
@@ -71,6 +75,40 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("QueueStats", schema_for!(QueueStats)),
         ("QueueLeaseRequest", schema_for!(QueueLeaseRequest)),
         ("QueueLeaseResponse", schema_for!(QueueLeaseResponse)),
+        ("QueueEnqueueV2Request", schema_for!(QueueEnqueueV2Request)),
+        (
+            "QueueEnqueueV2Response",
+            schema_for!(QueueEnqueueV2Response),
+        ),
+        ("FencedQueueEntry", schema_for!(FencedQueueEntry)),
+        ("QueueLeaseV2Request", schema_for!(QueueLeaseV2Request)),
+        ("QueueLeaseV2Response", schema_for!(QueueLeaseV2Response)),
+        ("QueueLeaseBlock", schema_for!(QueueLeaseBlock)),
+        ("QueueLeaseBlockReason", schema_for!(QueueLeaseBlockReason)),
+        (
+            "QueueLeaseRenewRequest",
+            schema_for!(QueueLeaseRenewRequest),
+        ),
+        (
+            "QueueLeaseRecoverRequest",
+            schema_for!(QueueLeaseRecoverRequest),
+        ),
+        (
+            "QueueLeaseMutationOutcome",
+            schema_for!(QueueLeaseMutationOutcome),
+        ),
+        (
+            "QueueLeaseMutationResponse",
+            schema_for!(QueueLeaseMutationResponse),
+        ),
+        (
+            "QueueCompletionV2Request",
+            schema_for!(QueueCompletionV2Request),
+        ),
+        (
+            "QueueReleasePendingV2Request",
+            schema_for!(QueueReleasePendingV2Request),
+        ),
         ("QueueHoldRequest", schema_for!(QueueHoldRequest)),
         ("QueueMutationResponse", schema_for!(QueueMutationResponse)),
         ("QueueReleaseRequest", schema_for!(QueueReleaseRequest)),

@@ -4,6 +4,11 @@
   "description": "Capability flags for queue plugins.",
   "type": "object",
   "properties": {
+    "generation_fenced_leases_v1": {
+      "description": "Supports `queue/v2/*`: monotonic subject/workflow/lease generations,\nCAS renew/recovery/mutations, durable idempotency, and repository-ref\ncollision fencing.",
+      "type": "boolean",
+      "default": false
+    },
     "max_lease_batch": {
       "description": "Maximum batch size accepted on [`METHOD_QUEUE_LEASE`]. Hosts clamp\nrequested `max` to this value.",
       "type": "integer",

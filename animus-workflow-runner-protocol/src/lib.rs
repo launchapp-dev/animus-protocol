@@ -23,6 +23,7 @@
 #![warn(missing_docs)]
 
 pub use animus_actor::{Actor, CLAIM_ADMIN};
+use animus_execution_protocol::ExecutionFence;
 use animus_subject_protocol::{SubjectDispatch, SubjectRef};
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -41,7 +42,7 @@ pub const METHOD_WORKFLOW_RUN_PHASE: &str = "workflow/run_phase";
 
 /// Per-crate semver protocol version. Reported via
 /// [`animus_plugin_protocol::KindCapability::crate_version`].
-pub const PROTOCOL_VERSION: &str = "0.3.0";
+pub const PROTOCOL_VERSION: &str = "0.4.0";
 
 /// Stable schema id for a proof-carrying publication receipt.
 pub const PUBLICATION_RECEIPT_SCHEMA_ID: &str = "animus.publication-receipt.v1";
@@ -252,6 +253,28 @@ impl PublicationReceipt {
                 return Err(format!("publication receipt {label} must not be empty"));
             }
         }
+        if self.workflow_generation == 0 {
+            return Err(
+                "publication receipt workflow_generation must be greater than zero".to_string(),
+            );
+        }
+        if self.subject.generation == 0 {
+            return Err(
+                "publication receipt subject.generation must be greater than zero".to_string(),
+            );
+        }
+        let Some((kind, native_id)) = self.subject.qualified_id.split_once(':') else {
+            return Err(
+                "publication receipt subject.qualified_id must use <kind>:<native-id> form"
+                    .to_string(),
+            );
+        };
+        if kind.trim().is_empty() || native_id.trim().is_empty() {
+            return Err(
+                "publication receipt subject.qualified_id must use <kind>:<native-id> form"
+                    .to_string(),
+            );
+        }
         for (label, sha) in [
             ("commit_sha", self.commit_sha.as_str()),
             ("tree_sha", self.tree_sha.as_str()),
@@ -304,6 +327,46 @@ impl PublicationReceipt {
         }
         Ok(())
     }
+
+    /// Validate this proof against the exact execution generation authorized by
+    /// the queue/daemon. A structurally valid receipt for a stale generation is
+    /// still rejected.
+    pub fn validate_against_execution(&self, execution: &ExecutionFence) -> Result<(), String> {
+        self.validate()?;
+        execution.validate()?;
+        if self.workflow_id != execution.workflow_id {
+            return Err(
+                "publication receipt workflow_id does not match execution fence".to_string(),
+            );
+        }
+        if self.workflow_generation != execution.workflow_generation {
+            return Err(
+                "publication receipt workflow_generation does not match execution fence"
+                    .to_string(),
+            );
+        }
+        let Some(subject) = execution.subject.as_ref() else {
+            return Err(
+                "publication receipt requires a subject-bearing execution fence".to_string(),
+            );
+        };
+        if self.subject.qualified_id != subject.qualified_id
+            || self.subject.generation != subject.generation
+        {
+            return Err(
+                "publication receipt subject generation does not match execution fence".to_string(),
+            );
+        }
+        if let Some(repository) = execution.repository.as_ref() {
+            if self.remote_ref != repository.head_ref {
+                return Err(
+                    "publication receipt remote_ref does not match repository reservation"
+                        .to_string(),
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 fn is_git_object_id(value: &str) -> bool {
@@ -324,6 +387,12 @@ pub struct WorkflowExecuteRequest {
     /// Existing workflow id to resume, or `None` to start a fresh run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
+    /// Exact generation/lease/reservation authority for this execution. Hosts
+    /// requiring resilient coding MUST provide it and runners MUST fail closed
+    /// when it is absent or mismatched. Optional only for legacy/non-fenced
+    /// workflows during migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_fence: Option<ExecutionFence>,
     /// Generic dispatch envelope (preferred for non-task/requirement subjects).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_dispatch: Option<SubjectDispatch>,
@@ -377,11 +446,34 @@ pub struct WorkflowExecuteRequest {
     pub actor: Option<Actor>,
 }
 
+impl WorkflowExecuteRequest {
+    /// Validate the optional/required scheduler authority before a runner
+    /// creates or resumes journal state.
+    pub fn validate_execution_fence(&self, required: bool) -> Result<(), String> {
+        let Some(execution) = self.execution_fence.as_ref() else {
+            return if required {
+                Err("workflow execution requires execution_fence".to_string())
+            } else {
+                Ok(())
+            };
+        };
+        execution.validate()?;
+        if self.workflow_id.as_deref() != Some(execution.workflow_id.as_str()) {
+            return Err("workflow request workflow_id does not match execution fence".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Result of [`METHOD_WORKFLOW_EXECUTE`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkflowExecuteResult {
     /// Unique workflow id (echoed on resume or freshly allocated on start).
     pub workflow_id: String,
+    /// Echo of the validated execution fence. A parent uses this to ensure the
+    /// terminal result and publication receipt belong to the leased generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_fence: Option<ExecutionFence>,
     /// Resolved workflow ref.
     pub workflow_ref: String,
     /// Final status; one of [`workflow_status`] values.
@@ -488,6 +580,9 @@ pub struct WorkflowPhaseRunRequest {
     pub execution_cwd: String,
     /// Workflow id.
     pub workflow_id: String,
+    /// Exact execution authority inherited from the full workflow request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_fence: Option<ExecutionFence>,
     /// Workflow ref.
     pub workflow_ref: String,
     /// Subject id.
@@ -537,11 +632,32 @@ pub struct WorkflowPhaseRunRequest {
     pub actor: Option<Actor>,
 }
 
+impl WorkflowPhaseRunRequest {
+    /// Validate that a phase executes under the exact parent workflow fence.
+    pub fn validate_execution_fence(&self, required: bool) -> Result<(), String> {
+        let Some(execution) = self.execution_fence.as_ref() else {
+            return if required {
+                Err("workflow phase requires execution_fence".to_string())
+            } else {
+                Ok(())
+            };
+        };
+        execution.validate()?;
+        if self.workflow_id != execution.workflow_id {
+            return Err("workflow phase workflow_id does not match execution fence".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Result of [`METHOD_WORKFLOW_RUN_PHASE`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkflowPhaseRunResult {
     /// One of `"completed"`, `"manual_pending"`, `"failed"`.
     pub phase_status: String,
+    /// Echo of the validated execution fence for parent-side generation checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_fence: Option<ExecutionFence>,
     /// Duration in seconds.
     pub duration_secs: u64,
     /// Backend-specific outcome.
@@ -596,6 +712,10 @@ pub struct WorkflowRunnerCapabilities {
     /// explicit single-owner publication config.
     #[serde(default)]
     pub publication_receipt_v1: bool,
+    /// Validates and echoes `animus.execution-fence.v1`, and validates any
+    /// publication receipt against its workflow/subject generation.
+    #[serde(default)]
+    pub execution_fence_v1: bool,
     /// Plugin replays persisted phase markers on restart.
     #[serde(default)]
     pub crash_recovery: bool,
@@ -633,6 +753,7 @@ mod tests {
     fn execute_request_round_trip() {
         let req = WorkflowExecuteRequest {
             workflow_id: None,
+            execution_fence: None,
             subject_dispatch: None,
             subject_ref: None,
             task_id: Some("TASK-1".into()),
@@ -662,6 +783,7 @@ mod tests {
     fn execute_request_round_trips_with_actor() {
         let req = WorkflowExecuteRequest {
             workflow_id: None,
+            execution_fence: None,
             subject_dispatch: None,
             subject_ref: None,
             task_id: Some("TASK-1".into()),
@@ -709,6 +831,7 @@ mod tests {
         let req = WorkflowPhaseRunRequest {
             execution_cwd: "/tmp".into(),
             workflow_id: "wf_1".into(),
+            execution_fence: None,
             workflow_ref: "standard".into(),
             subject_id: "TASK-1".into(),
             subject_title: "t".into(),
@@ -740,6 +863,7 @@ mod tests {
         let req = WorkflowPhaseRunRequest {
             execution_cwd: "/tmp".into(),
             workflow_id: "wf_1".into(),
+            execution_fence: None,
             workflow_ref: "standard".into(),
             subject_id: "TASK-1".into(),
             subject_title: "t".into(),
@@ -874,5 +998,43 @@ mod tests {
         let error = serde_json::from_value::<PublicationReceipt>(json)
             .expect_err("unknown receipt fields must fail");
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn publication_receipt_is_fenced_to_exact_execution_generation() {
+        use animus_execution_protocol::{
+            QueueLeaseFence, RepositoryReservation, SubjectGeneration, EXECUTION_FENCE_SCHEMA_ID,
+            EXECUTION_FENCE_VERSION,
+        };
+        let execution = ExecutionFence {
+            schema: EXECUTION_FENCE_SCHEMA_ID.to_string(),
+            version: EXECUTION_FENCE_VERSION,
+            workflow_id: "wf-123".to_string(),
+            workflow_generation: 7,
+            subject: Some(SubjectGeneration {
+                qualified_id: "task:TASK-1173".to_string(),
+                generation: 4,
+            }),
+            queue_lease: Some(QueueLeaseFence {
+                entry_id: "entry-1".to_string(),
+                owner_id: "daemon-a".to_string(),
+                generation: 2,
+                expires_at: "2026-07-30T02:00:00Z".parse().unwrap(),
+            }),
+            repository: Some(RepositoryReservation {
+                repository: "https://github.com/launchapp-dev/animus-protocol.git".to_string(),
+                base_ref: "refs/heads/main".to_string(),
+                head_ref: "refs/heads/animus/TASK-1173".to_string(),
+            }),
+        };
+        let receipt = valid_publication_receipt();
+        receipt.validate_against_execution(&execution).unwrap();
+
+        let mut stale = execution;
+        stale.subject.as_mut().unwrap().generation += 1;
+        assert!(receipt
+            .validate_against_execution(&stale)
+            .unwrap_err()
+            .contains("subject generation"));
     }
 }

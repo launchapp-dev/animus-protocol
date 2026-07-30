@@ -1,6 +1,6 @@
 [package]
 name = "animus-queue-protocol"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 authors = ["Launchapp.dev"]
@@ -11,6 +11,7 @@ description = "Queue plugin-kind protocol types for Animus v0.5 (per-project Sub
 [dependencies]
 animus-plugin-protocol = { path = "../animus-plugin-protocol" }
 animus-subject-protocol = { path = "../animus-subject-protocol" }
+animus-execution-protocol = { path = "../animus-execution-protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1.0" }

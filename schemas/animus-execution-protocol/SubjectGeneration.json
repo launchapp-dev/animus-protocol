@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubjectGeneration",
+  "description": "A canonical subject identity and the immutable generation being executed.",
+  "type": "object",
+  "properties": {
+    "generation": {
+      "description": "Positive backend/queue generation. A later generation cannot be\nsatisfied by work or proof from an earlier one.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "qualified_id": {
+      "description": "Canonical qualified id in `<kind>:<native-id>` form.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "qualified_id",
+    "generation"
+  ]
+}

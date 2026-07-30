@@ -17,6 +17,7 @@ members = [
     "animus-memory-store-protocol",
     "animus-notifier-protocol",
     "animus-environment-protocol",
+    "animus-execution-protocol",
     "protocol",
     "animus-config-protocol",
     "animus-application-protocol",

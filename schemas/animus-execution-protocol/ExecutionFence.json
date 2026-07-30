@@ -1,102 +1,71 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ExecSessionResponse",
-  "description": "Response payload for [`METHOD_ENVIRONMENT_EXEC_SESSION`]: the node-local run\nid the dispatch spawned and its terminal status.",
+  "title": "ExecutionFence",
+  "description": "Complete ownership envelope for one workflow execution generation.",
   "type": "object",
   "properties": {
-    "execution_fence": {
-      "description": "Echo of the generation fence validated by the node. The parent rejects\na terminal response that omits or changes a required fence.",
+    "queue_lease": {
+      "description": "Queue lease CAS identity. Direct execution may omit it.",
       "anyOf": [
         {
-          "$ref": "#/$defs/ExecutionFence"
+          "$ref": "#/$defs/QueueLeaseFence"
         },
         {
           "type": "null"
         }
       ]
     },
-    "status": {
-      "description": "Terminal status of the node-local run (e.g. `completed`, `failed`,\n`escalated`, `cancelled`, or `no-run` when nothing was dispatched).",
+    "repository": {
+      "description": "Repository/ref reservation. Non-code workflows may omit it; coding\nschedulers must require it before workspace preparation.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RepositoryReservation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema": {
+      "description": "Stable schema id; must equal [`EXECUTION_FENCE_SCHEMA_ID`].",
       "type": "string"
     },
-    "workflow_id": {
-      "description": "The node-local workflow run id, when one was spawned.",
-      "type": [
-        "string",
-        "null"
-      ]
-    }
-  },
-  "required": [
-    "status"
-  ],
-  "$defs": {
-    "ExecutionFence": {
-      "description": "Complete ownership envelope for one workflow execution generation.",
-      "type": "object",
-      "properties": {
-        "queue_lease": {
-          "description": "Queue lease CAS identity. Direct execution may omit it.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/QueueLeaseFence"
-            },
-            {
-              "type": "null"
-            }
-          ]
+    "subject": {
+      "description": "Subject generation, absent only for a genuinely subjectless workflow.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubjectGeneration"
         },
-        "repository": {
-          "description": "Repository/ref reservation. Non-code workflows may omit it; coding\nschedulers must require it before workspace preparation.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RepositoryReservation"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "schema": {
-          "description": "Stable schema id; must equal [`EXECUTION_FENCE_SCHEMA_ID`].",
-          "type": "string"
-        },
-        "subject": {
-          "description": "Subject generation, absent only for a genuinely subjectless workflow.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SubjectGeneration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "version": {
-          "description": "Schema version; must equal [`EXECUTION_FENCE_VERSION`].",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "workflow_generation": {
-          "description": "Positive workflow generation. Reattachment keeps it; an intentional new\nexecution generation must increment it.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "workflow_id": {
-          "description": "Stable workflow id. Recovery preserves this id.",
-          "type": "string"
+        {
+          "type": "null"
         }
-      },
-      "additionalProperties": false,
-      "required": [
-        "schema",
-        "version",
-        "workflow_id",
-        "workflow_generation"
       ]
     },
+    "version": {
+      "description": "Schema version; must equal [`EXECUTION_FENCE_VERSION`].",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "workflow_generation": {
+      "description": "Positive workflow generation. Reattachment keeps it; an intentional new\nexecution generation must increment it.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "workflow_id": {
+      "description": "Stable workflow id. Recovery preserves this id.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "workflow_id",
+    "workflow_generation"
+  ],
+  "$defs": {
     "QueueLeaseFence": {
       "description": "Compare-and-swap identity for the queue lease currently owning a workflow.",
       "type": "object",

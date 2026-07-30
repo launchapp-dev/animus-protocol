@@ -1,168 +1,41 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "WorkflowPhaseRunRequest",
-  "description": "Parameters for [`METHOD_WORKFLOW_RUN_PHASE`].",
+  "title": "QueueLeaseV2Request",
+  "description": "Request for generation-fenced atomic leasing.",
   "type": "object",
   "properties": {
-    "actor": {
-      "description": "Transport-asserted caller identity (see [`WorkflowExecuteRequest::actor`]).",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Actor"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "dispatch_input": {
-      "description": "Dispatch input JSON (opaque).",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "execution_cwd": {
-      "description": "Execution working directory for the phase.",
-      "type": "string"
-    },
-    "execution_fence": {
-      "description": "Exact execution authority inherited from the full workflow request.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ExecutionFence"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "mcp_config": {
-      "description": "Opaque MCP runtime config — same shape as\n[`WorkflowExecuteRequest::mcp_config`]. Lets phase-level retries\npass MCP server config to the agent runner."
-    },
-    "model_override": {
-      "description": "Model override.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "phase_attempt": {
-      "description": "Attempt counter (0, 1, 2, ...).",
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
-    },
-    "phase_id": {
-      "description": "Phase id to run.",
-      "type": "string"
-    },
-    "phase_routing": {
-      "description": "Phase routing config (opaque)."
-    },
-    "phase_timeout_secs": {
-      "description": "Optional timeout override (seconds).",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint64",
-      "minimum": 0
-    },
-    "pipeline_vars": {
-      "description": "Pipeline variables.",
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
+    "exclude": {
+      "description": "Active execution fences to exclude from selection and collision checks.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExecutionFence"
       }
     },
-    "rework_context": {
-      "description": "Rework context from a prior phase's `rework` verdict.",
-      "type": [
-        "string",
-        "null"
-      ]
+    "max": {
+      "description": "Maximum number of entries to lease.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
     },
-    "schedule_input": {
-      "description": "Schedule input JSON (opaque).",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "subject_description": {
-      "description": "Subject description for prompts.",
+    "owner_id": {
+      "description": "Stable daemon/scheduler instance id that will own new leases.",
       "type": "string"
     },
-    "subject_id": {
-      "description": "Subject id.",
-      "type": "string"
-    },
-    "subject_title": {
-      "description": "Subject title for prompts.",
-      "type": "string"
-    },
-    "task_complexity": {
-      "description": "Task complexity hint: `\"minimal\" | \"low\" | \"medium\" | \"high\" | \"critical\"`.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "tool_override": {
-      "description": "Tool override.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "workflow_id": {
-      "description": "Workflow id.",
-      "type": "string"
-    },
-    "workflow_ref": {
-      "description": "Workflow ref.",
-      "type": "string"
+    "workflow_ids": {
+      "description": "Kernel-preallocated workflow ids. Length must equal `max`; a queue entry\nthat already owns a workflow id keeps it and does not consume a new id.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
+  "additionalProperties": false,
   "required": [
-    "execution_cwd",
-    "workflow_id",
-    "workflow_ref",
-    "subject_id",
-    "subject_title",
-    "subject_description",
-    "phase_id",
-    "phase_attempt"
+    "max",
+    "owner_id",
+    "workflow_ids"
   ],
   "$defs": {
-    "Actor": {
-      "description": "An opaque, transport-asserted caller identity.\n\nConstructed by the transport after it authenticates the caller, relayed\nverbatim by the kernel, and consumed only by plugins for data scoping. See\nthe [crate-level docs](crate) for the full contract.",
-      "type": "object",
-      "properties": {
-        "claims": {
-          "description": "Transport-asserted claims (e.g. `[\"admin\"]`). Advisory only: the kernel\nnever branches on these. A plugin MAY consult them for its own\nauthorization decisions. Omitted from the wire when empty.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "tenant_id": {
-          "description": "Optional tenant / organization partition the user belongs to. Plugins\nuse it for multi-tenant data isolation. Omitted from the wire when\nabsent.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "user_id": {
-          "description": "Stable identifier for the authenticated user. Opaque to the kernel;\nplugins use it to scope owned rows to a user.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "user_id"
-      ]
-    },
     "ExecutionFence": {
       "description": "Complete ownership envelope for one workflow execution generation.",
       "type": "object",

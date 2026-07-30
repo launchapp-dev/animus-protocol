@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueLeaseBlockReason",
+  "description": "Why a v2 lease candidate was left untouched.",
+  "oneOf": [
+    {
+      "description": "The exact subject generation already has an active execution.",
+      "type": "string",
+      "const": "subject_generation_active"
+    },
+    {
+      "description": "Another active execution owns the repository/head ref.",
+      "type": "string",
+      "const": "repository_ref_collision"
+    },
+    {
+      "description": "The entry has an expired assignment that must be reconciled/recovered,\nnever handed out as fresh work.",
+      "type": "string",
+      "const": "expired_lease_recovery_required"
+    },
+    {
+      "description": "The stored entry lacks the identity needed for fail-closed scheduling.",
+      "type": "string",
+      "const": "missing_execution_identity"
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+use animus_execution_protocol::ExecutionFence;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1561,6 +1562,11 @@ pub struct OrchestratorProject {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestratorWorkflow {
     pub id: String,
+    /// Immutable execution generation and current queue-lease authority. The
+    /// journal persists this with the run so restart reconciliation can reject
+    /// a stale process or a duplicate node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_fence: Option<ExecutionFence>,
     pub task_id: String,
     pub workflow_ref: Option<String>,
     /// The subject this workflow run targets, or `None` for a subjectless run.
@@ -1848,6 +1854,10 @@ pub struct WorkflowRunInput {
     /// from the wire when absent; older payloads always carry a subject.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<SubjectRef>,
+    /// Generation/lease/reservation authority supplied by the scheduler. Direct
+    /// legacy runs may omit it; resilient coding runs must provide it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_fence: Option<ExecutionFence>,
     #[serde(default)]
     pub workflow_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "input_json")]
@@ -1872,6 +1882,7 @@ impl WorkflowRunInput {
         let description = subject.description.clone();
         Self {
             subject: Some(subject),
+            execution_fence: None,
             task_id,
             workflow_ref,
             input: None,
@@ -1887,6 +1898,7 @@ impl WorkflowRunInput {
     pub fn subjectless(workflow_ref: Option<String>) -> Self {
         Self {
             subject: None,
+            execution_fence: None,
             task_id: String::new(),
             workflow_ref,
             input: None,
@@ -1911,6 +1923,12 @@ impl WorkflowRunInput {
 
     pub fn subject(&self) -> Option<&SubjectRef> {
         self.subject.as_ref()
+    }
+
+    /// Attach the scheduler-authoritative generation fence.
+    pub fn with_execution_fence(mut self, execution_fence: Option<ExecutionFence>) -> Self {
+        self.execution_fence = execution_fence;
+        self
     }
 
     pub fn subject_id(&self) -> Option<&str> {

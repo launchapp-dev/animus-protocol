@@ -9,6 +9,19 @@ source of truth for individual crate bumps. Tags map roughly to
 
 ### Added
 
+`animus-execution-protocol` 0.1.0 introduces
+`animus.execution-fence.v1`: one durable envelope binds workflow and subject
+generations, queue entry/owner/lease generation and expiry, and an exact
+repository base/head-ref reservation. `animus-queue-protocol` 0.4.0 adds an
+additive `queue/v2/*` surface for idempotent generation allocation, pending-only
+leasing, typed collision results, CAS renewal, explicit expired-lease recovery,
+fenced completion, and fenced return-to-pending. Recovery rotates the lease
+owner/generation while preserving the workflow id/generation; ordinary leasing
+cannot clone expired assigned work. Workflow runner 0.4.0 and environment 0.2.0
+carry and echo the fence, publication receipts validate against it, and the
+control protocol exposes typed fleet capacity/reservation/recovery state for
+Portal and MCP consumers. See `docs/execution-fence.md`.
+
 `animus-config-protocol` 0.2.0 and `animus-workflow-runner-protocol` 0.3.0 add
 the v1 single-owner workflow publication contract and proof-carrying receipt.
 Workflows explicitly select a runner or phase owner and a fail-safe cleanup

@@ -27,9 +27,100 @@
       ],
       "type": "object"
     },
+    "ExecutionFence": {
+      "additionalProperties": false,
+      "description": "Complete ownership envelope for one workflow execution generation.",
+      "properties": {
+        "queue_lease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueueLeaseFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Queue lease CAS identity. Direct execution may omit it."
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepositoryReservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Repository/ref reservation. Non-code workflows may omit it; coding\nschedulers must require it before workspace preparation."
+        },
+        "schema": {
+          "description": "Stable schema id; must equal [`EXECUTION_FENCE_SCHEMA_ID`].",
+          "type": "string"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Subject generation, absent only for a genuinely subjectless workflow."
+        },
+        "version": {
+          "description": "Schema version; must equal [`EXECUTION_FENCE_VERSION`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_generation": {
+          "description": "Positive workflow generation. Reattachment keeps it; an intentional new\nexecution generation must increment it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_id": {
+          "description": "Stable workflow id. Recovery preserves this id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "version",
+        "workflow_id",
+        "workflow_generation"
+      ],
+      "type": "object"
+    },
+    "FencedQueueEntry": {
+      "additionalProperties": false,
+      "description": "One queue entry paired with its complete execution ownership fence.",
+      "properties": {
+        "entry": {
+          "$ref": "#/$defs/QueueEntry",
+          "description": "Existing queue entry payload/display shape."
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionFence",
+          "description": "Exact generation and CAS lease ownership."
+        }
+      },
+      "required": [
+        "entry",
+        "execution"
+      ],
+      "title": "FencedQueueEntry",
+      "type": "object"
+    },
     "QueueCapabilities": {
       "description": "Capability flags for queue plugins.",
       "properties": {
+        "generation_fenced_leases_v1": {
+          "default": false,
+          "description": "Supports `queue/v2/*`: monotonic subject/workflow/lease generations,\nCAS renew/recovery/mutations, durable idempotency, and repository-ref\ncollision fencing.",
+          "type": "boolean"
+        },
         "max_lease_batch": {
           "default": 0,
           "description": "Maximum batch size accepted on [`METHOD_QUEUE_LEASE`]. Hosts clamp\nrequested `max` to this value.",
@@ -77,6 +168,33 @@
         "status"
       ],
       "title": "QueueCompletionRequest",
+      "type": "object"
+    },
+    "QueueCompletionV2Request": {
+      "additionalProperties": false,
+      "description": "Generation-fenced terminal completion request.",
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/ExecutionFence",
+          "description": "Exact current execution fence."
+        },
+        "status": {
+          "description": "Terminal status from [`completion_status`].",
+          "type": "string"
+        },
+        "workflow_ref": {
+          "description": "Workflow ref that ran.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "execution",
+        "status"
+      ],
+      "title": "QueueCompletionV2Request",
       "type": "object"
     },
     "QueueDropRequest": {
@@ -152,6 +270,87 @@
         "subject_id"
       ],
       "title": "QueueEnqueueResponse",
+      "type": "object"
+    },
+    "QueueEnqueueV2Request": {
+      "additionalProperties": false,
+      "description": "Enqueue request for the generation-fenced scheduler.",
+      "properties": {
+        "expire_after_secs": {
+          "description": "Optional grace window after `run_at`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "idempotency_key": {
+          "description": "Stable producer idempotency key (for example a GitHub delivery id plus\ntrigger id). Repeating a key returns the original entry and generation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepositoryReservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exact repository/head-ref reservation for coding work. Non-code queue\nentries may omit it."
+        },
+        "run_at": {
+          "description": "Optional RFC 3339 earliest-dispatch time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject_dispatch": {
+          "$ref": "#/$defs/SubjectDispatch",
+          "description": "Full dispatch envelope to enqueue."
+        }
+      },
+      "required": [
+        "subject_dispatch"
+      ],
+      "title": "QueueEnqueueV2Request",
+      "type": "object"
+    },
+    "QueueEnqueueV2Response": {
+      "additionalProperties": false,
+      "description": "Enqueue response carrying the immutable subject generation allocated to the\nentry.",
+      "properties": {
+        "enqueued": {
+          "description": "`true` when this call created the entry; `false` for an idempotent replay.",
+          "type": "boolean"
+        },
+        "entry_id": {
+          "description": "Stable queue entry id.",
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/SubjectGeneration",
+          "description": "Immutable subject generation allocated to the entry."
+        },
+        "warning": {
+          "description": "Optional advisory that does not weaken the generation fence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "enqueued",
+        "entry_id",
+        "subject"
+      ],
+      "title": "QueueEnqueueV2Response",
       "type": "object"
     },
     "QueueEntry": {
@@ -253,6 +452,217 @@
       "title": "QueueHoldRequest",
       "type": "object"
     },
+    "QueueLeaseBlock": {
+      "additionalProperties": false,
+      "description": "A candidate intentionally not leased by the v2 scheduler.",
+      "properties": {
+        "conflicts_with": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Existing execution that caused the conflict, when applicable."
+        },
+        "entry_id": {
+          "description": "Queue entry that remained untouched.",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/QueueLeaseBlockReason",
+          "description": "Typed collision/recovery reason."
+        }
+      },
+      "required": [
+        "entry_id",
+        "reason"
+      ],
+      "title": "QueueLeaseBlock",
+      "type": "object"
+    },
+    "QueueLeaseBlockReason": {
+      "description": "Why a v2 lease candidate was left untouched.",
+      "oneOf": [
+        {
+          "const": "subject_generation_active",
+          "description": "The exact subject generation already has an active execution.",
+          "type": "string"
+        },
+        {
+          "const": "repository_ref_collision",
+          "description": "Another active execution owns the repository/head ref.",
+          "type": "string"
+        },
+        {
+          "const": "expired_lease_recovery_required",
+          "description": "The entry has an expired assignment that must be reconciled/recovered,\nnever handed out as fresh work.",
+          "type": "string"
+        },
+        {
+          "const": "missing_execution_identity",
+          "description": "The stored entry lacks the identity needed for fail-closed scheduling.",
+          "type": "string"
+        }
+      ],
+      "title": "QueueLeaseBlockReason"
+    },
+    "QueueLeaseFence": {
+      "additionalProperties": false,
+      "description": "Compare-and-swap identity for the queue lease currently owning a workflow.",
+      "properties": {
+        "entry_id": {
+          "description": "Stable queue-entry id.",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "Backend-clock expiry. Expiry makes the lease recoverable, never an\nordinary fresh-leasing candidate.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "generation": {
+          "description": "Positive monotonic lease generation. Recovery transfers ownership by\nincrementing this value, fencing the previous daemon instance.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner_id": {
+          "description": "Daemon/scheduler instance currently authorized to renew or terminalize\nthe lease.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry_id",
+        "owner_id",
+        "generation",
+        "expires_at"
+      ],
+      "type": "object"
+    },
+    "QueueLeaseMutationOutcome": {
+      "description": "Result category for a generation-fenced queue mutation.",
+      "oneOf": [
+        {
+          "const": "applied",
+          "description": "Mutation succeeded and the response contains the current fence.",
+          "type": "string"
+        },
+        {
+          "const": "already_applied",
+          "description": "The entry is already in the requested terminal/pending state.",
+          "type": "string"
+        },
+        {
+          "const": "not_found",
+          "description": "No entry exists.",
+          "type": "string"
+        },
+        {
+          "const": "stale_fence",
+          "description": "Owner, lease generation, workflow generation, or subject generation did\nnot match. The caller has no authority to mutate the entry.",
+          "type": "string"
+        },
+        {
+          "const": "lease_still_live",
+          "description": "Recovery was requested before backend-clock expiry.",
+          "type": "string"
+        },
+        {
+          "const": "not_assigned",
+          "description": "Entry exists but is not assigned.",
+          "type": "string"
+        }
+      ],
+      "title": "QueueLeaseMutationOutcome"
+    },
+    "QueueLeaseMutationResponse": {
+      "additionalProperties": false,
+      "description": "Response shared by renew, recover, completion, and release-pending v2.",
+      "properties": {
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionFence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Current fence after success, including a transferred/incremented lease\ngeneration after recovery."
+        },
+        "outcome": {
+          "$ref": "#/$defs/QueueLeaseMutationOutcome",
+          "description": "Typed mutation outcome."
+        },
+        "reason": {
+          "description": "Human-readable diagnostic safe for logs/UI.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "title": "QueueLeaseMutationResponse",
+      "type": "object"
+    },
+    "QueueLeaseRecoverRequest": {
+      "additionalProperties": false,
+      "description": "Request to transfer an expired lease to a new daemon owner.",
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/ExecutionFence",
+          "description": "Last durable execution fence. The backend CAS-checks its owner and lease\ngeneration, then preserves workflow/subject generations."
+        },
+        "new_owner_id": {
+          "description": "New daemon/scheduler instance id.",
+          "type": "string"
+        },
+        "ttl_secs": {
+          "description": "Optional requested TTL; the backend may clamp it to policy.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "execution",
+        "new_owner_id"
+      ],
+      "title": "QueueLeaseRecoverRequest",
+      "type": "object"
+    },
+    "QueueLeaseRenewRequest": {
+      "additionalProperties": false,
+      "description": "Request to renew an exact, still-owned lease.",
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/ExecutionFence",
+          "description": "Current full execution fence."
+        },
+        "ttl_secs": {
+          "description": "Optional requested TTL; the backend may clamp it to policy.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "execution"
+      ],
+      "title": "QueueLeaseRenewRequest",
+      "type": "object"
+    },
     "QueueLeaseRequest": {
       "description": "Request for [`METHOD_QUEUE_LEASE`].",
       "properties": {
@@ -304,6 +714,68 @@
         "leased"
       ],
       "title": "QueueLeaseResponse",
+      "type": "object"
+    },
+    "QueueLeaseV2Request": {
+      "additionalProperties": false,
+      "description": "Request for generation-fenced atomic leasing.",
+      "properties": {
+        "exclude": {
+          "description": "Active execution fences to exclude from selection and collision checks.",
+          "items": {
+            "$ref": "#/$defs/ExecutionFence"
+          },
+          "type": "array"
+        },
+        "max": {
+          "description": "Maximum number of entries to lease.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner_id": {
+          "description": "Stable daemon/scheduler instance id that will own new leases.",
+          "type": "string"
+        },
+        "workflow_ids": {
+          "description": "Kernel-preallocated workflow ids. Length must equal `max`; a queue entry\nthat already owns a workflow id keeps it and does not consume a new id.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "max",
+        "owner_id",
+        "workflow_ids"
+      ],
+      "title": "QueueLeaseV2Request",
+      "type": "object"
+    },
+    "QueueLeaseV2Response": {
+      "additionalProperties": false,
+      "description": "Response for [`METHOD_QUEUE_LEASE_V2`].",
+      "properties": {
+        "blocked": {
+          "description": "Candidates intentionally left in place due to a typed fence.",
+          "items": {
+            "$ref": "#/$defs/QueueLeaseBlock"
+          },
+          "type": "array"
+        },
+        "leased": {
+          "description": "Newly leased entries with complete ownership fences.",
+          "items": {
+            "$ref": "#/$defs/FencedQueueEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "leased"
+      ],
+      "title": "QueueLeaseV2Response",
       "type": "object"
     },
     "QueueListRequest": {
@@ -459,6 +931,26 @@
       "title": "QueueReleasePendingResponse",
       "type": "object"
     },
+    "QueueReleasePendingV2Request": {
+      "additionalProperties": false,
+      "description": "Generation-fenced return-to-pending request. The queue preserves the\ncanonical workflow id/generation for the next lease attempt.",
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/ExecutionFence",
+          "description": "Exact current execution fence."
+        },
+        "reason": {
+          "description": "Auditable reason for returning the entry to Pending.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution",
+        "reason"
+      ],
+      "title": "QueueReleasePendingV2Request",
+      "type": "object"
+    },
     "QueueReleaseRequest": {
       "description": "Request for [`METHOD_QUEUE_RELEASE`].",
       "properties": {
@@ -550,6 +1042,30 @@
       "title": "QueueStats",
       "type": "object"
     },
+    "RepositoryReservation": {
+      "additionalProperties": false,
+      "description": "Repository/ref ownership reserved for one execution generation.",
+      "properties": {
+        "base_ref": {
+          "description": "Fully-qualified base ref, for example `refs/heads/main`.",
+          "type": "string"
+        },
+        "head_ref": {
+          "description": "Fully-qualified mutable head ref owned by this run, for example\n`refs/heads/animus/TASK-1175`.",
+          "type": "string"
+        },
+        "repository": {
+          "description": "Canonical repository identity. Hosts SHOULD use a normalized remote URL\nor provider `owner/name` identity and compare it case-insensitively where\nthe provider does.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "base_ref",
+        "head_ref"
+      ],
+      "type": "object"
+    },
     "SubjectDispatch": {
       "description": "Full dispatch envelope handed off from queue / scheduler / trigger to the\nworkflow runner.\n\nCarries the subject identity (`subject`), the workflow ref to run, and\noptional input + variables + priority + trigger source + requested-at\ntimestamp. The shape is wire-compatible with the previous home in\nao-cli's `protocol` crate.",
       "properties": {
@@ -610,6 +1126,27 @@
         "workflow_ref",
         "trigger_source",
         "requested_at"
+      ],
+      "type": "object"
+    },
+    "SubjectGeneration": {
+      "additionalProperties": false,
+      "description": "A canonical subject identity and the immutable generation being executed.",
+      "properties": {
+        "generation": {
+          "description": "Positive backend/queue generation. A later generation cannot be\nsatisfied by work or proof from an earlier one.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "qualified_id": {
+          "description": "Canonical qualified id in `<kind>:<native-id>` form.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "qualified_id",
+        "generation"
       ],
       "type": "object"
     },

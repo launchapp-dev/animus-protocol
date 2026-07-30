@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueueEnqueueV2Response",
+  "description": "Enqueue response carrying the immutable subject generation allocated to the\nentry.",
+  "type": "object",
+  "properties": {
+    "enqueued": {
+      "description": "`true` when this call created the entry; `false` for an idempotent replay.",
+      "type": "boolean"
+    },
+    "entry_id": {
+      "description": "Stable queue entry id.",
+      "type": "string"
+    },
+    "subject": {
+      "description": "Immutable subject generation allocated to the entry.",
+      "$ref": "#/$defs/SubjectGeneration"
+    },
+    "warning": {
+      "description": "Optional advisory that does not weaken the generation fence.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "enqueued",
+    "entry_id",
+    "subject"
+  ],
+  "$defs": {
+    "SubjectGeneration": {
+      "description": "A canonical subject identity and the immutable generation being executed.",
+      "type": "object",
+      "properties": {
+        "generation": {
+          "description": "Positive backend/queue generation. A later generation cannot be\nsatisfied by work or proof from an earlier one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "qualified_id": {
+          "description": "Canonical qualified id in `<kind>:<native-id>` form.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "qualified_id",
+        "generation"
+      ]
+    }
+  }
+}

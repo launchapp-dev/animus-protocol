@@ -445,6 +445,76 @@ pub struct DaemonAgentsResponse {
     pub agents: Vec<AgentInfo>,
 }
 
+/// Generation-fenced coding fleet state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CodingFleetStatusResponse {
+    /// Configured maximum simultaneous coding executions.
+    pub capacity: u32,
+    /// Slots with a live runner or a restart-recoverable retained execution.
+    pub active: u32,
+    /// Capacity remaining after active/reserved leases.
+    pub available: u32,
+    /// Stable daemon instance currently scheduling/renewing leases.
+    pub owner_id: String,
+    /// Exact durable reservations known to the scheduler.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reservations: Vec<CodingFleetReservation>,
+}
+
+/// Scheduler-visible state of one durable execution reservation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CodingFleetReservation {
+    /// Exact workflow/subject/queue/repository fence.
+    pub execution: animus_execution_protocol::ExecutionFence,
+    /// Current scheduler lifecycle state.
+    pub state: CodingFleetReservationState,
+    /// Environment handle/node id when prepared or retained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_handle: Option<String>,
+    /// Typed collision/recovery/block reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<CodingFleetBlockedReason>,
+    /// Last durable transition time.
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Durable scheduler reservation lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodingFleetReservationState {
+    /// Queue lease exists; workspace has not been prepared.
+    Leased,
+    /// Runner process is live.
+    Running,
+    /// Daemon restarted and must probe/reattach the exact runner/node.
+    Recovering,
+    /// Live node/workspace is retained because publication or operator proof is
+    /// incomplete.
+    Retained,
+    /// Terminal cleanup owns the node and is executing/retrying exactly once.
+    CleaningUp,
+    /// Terminal and fully cleaned.
+    Terminal,
+    /// Explicit typed block; no implementation rework is consumed.
+    Blocked,
+}
+
+/// Why an execution is blocked outside the implementation/rework loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodingFleetBlockedReason {
+    /// Exact subject generation is already owned.
+    DuplicateSubjectGeneration,
+    /// Repository/head ref is owned by another execution.
+    RepositoryRefCollision,
+    /// Lease expired and requires liveness reconciliation before transfer.
+    LeaseRecoveryRequired,
+    /// Durable execution identity is missing or malformed.
+    MissingExecutionIdentity,
+    /// Environment/node could not be proven live or dead.
+    EnvironmentUnknown,
+}
+
 /// One active agent session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentInfo {
