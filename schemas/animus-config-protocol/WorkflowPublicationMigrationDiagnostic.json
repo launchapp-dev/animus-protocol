@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowPublicationMigrationDiagnostic",
+  "description": "Explicit compatibility notice for workflows that have no publication\ncontract. It is intentionally data, not an implicit behavioral fallback.",
+  "type": "object",
+  "properties": {
+    "code": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "workflow_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "workflow_id",
+    "code",
+    "message"
+  ]
+}

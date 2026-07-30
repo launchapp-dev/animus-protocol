@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicationReceiptIssuer",
+  "description": "Component that issued a publication receipt.",
+  "oneOf": [
+    {
+      "description": "The workflow runner owns publication.",
+      "type": "object",
+      "properties": {
+        "component": {
+          "description": "Concrete runner/plugin name.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "runner"
+        },
+        "version": {
+          "description": "Concrete runner/plugin version.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "component",
+        "version"
+      ]
+    },
+    {
+      "description": "A named workflow phase owns publication.",
+      "type": "object",
+      "properties": {
+        "component": {
+          "description": "Component or command implementation that emitted the receipt.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "phase"
+        },
+        "phase_id": {
+          "description": "Phase id declared by the workflow publication contract.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Concrete component/command version.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "phase_id",
+        "component",
+        "version"
+      ]
+    }
+  ]
+}

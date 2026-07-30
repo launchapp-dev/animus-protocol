@@ -23,6 +23,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use animus_config_protocol::workflow_types::{
+    WorkflowPublicationCleanupPolicy, WorkflowPublicationConfig,
+    WorkflowPublicationMigrationDiagnostic, WorkflowPublicationOwner,
+};
 use animus_config_protocol::{
     CacheToken, ConfigChangedEvent, ConfigDiagnostic, ConfigLoadRequest, ConfigLoadResponse,
     ConfigModel, ConfigValidateRequest, ConfigValidateResponse, ConfigWriteRequest,
@@ -36,7 +40,7 @@ fn default_out_dir() -> PathBuf {
     // current working directory.
     let base = env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
-        .and_then(|dir| dir.parent().and_then(Path::parent).map(Path::to_path_buf))
+        .and_then(|dir| dir.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     base.join("schemas").join("animus-config-protocol")
 }
@@ -77,6 +81,22 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("ConfigWriteResponse", schema_for!(ConfigWriteResponse)),
         ("ConfigDiagnostic", schema_for!(ConfigDiagnostic)),
         ("DiagnosticSeverity", schema_for!(DiagnosticSeverity)),
+        (
+            "WorkflowPublicationConfig",
+            schema_for!(WorkflowPublicationConfig),
+        ),
+        (
+            "WorkflowPublicationOwner",
+            schema_for!(WorkflowPublicationOwner),
+        ),
+        (
+            "WorkflowPublicationCleanupPolicy",
+            schema_for!(WorkflowPublicationCleanupPolicy),
+        ),
+        (
+            "WorkflowPublicationMigrationDiagnostic",
+            schema_for!(WorkflowPublicationMigrationDiagnostic),
+        ),
     ]
 }
 
@@ -196,5 +216,21 @@ mod tests {
                     .unwrap_or(false),
             "ConfigModel schema should report object type, got {type_field}"
         );
+    }
+
+    #[test]
+    fn publication_config_schema_exposes_closed_owner_and_cleanup_vocabularies() {
+        let config_schema = serde_json::to_value(schema_for!(WorkflowPublicationConfig))
+            .expect("config schema serializes");
+        let encoded = serde_json::to_string(&config_schema).unwrap();
+        assert!(encoded.contains("after_remote_verified"));
+        assert!(encoded.contains("animus.workflow-publication.v1"));
+
+        let owner_schema = serde_json::to_value(schema_for!(WorkflowPublicationOwner))
+            .expect("owner schema serializes");
+        let owner_encoded = serde_json::to_string(&owner_schema).unwrap();
+        assert!(owner_encoded.contains("runner"));
+        assert!(owner_encoded.contains("phase"));
+        assert!(owner_encoded.contains("phase_id"));
     }
 }

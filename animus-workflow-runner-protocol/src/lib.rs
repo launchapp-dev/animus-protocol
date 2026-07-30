@@ -24,6 +24,7 @@
 
 pub use animus_actor::{Actor, CLAIM_ADMIN};
 use animus_subject_protocol::{SubjectDispatch, SubjectRef};
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -40,7 +41,12 @@ pub const METHOD_WORKFLOW_RUN_PHASE: &str = "workflow/run_phase";
 
 /// Per-crate semver protocol version. Reported via
 /// [`animus_plugin_protocol::KindCapability::crate_version`].
-pub const PROTOCOL_VERSION: &str = "0.2.0";
+pub const PROTOCOL_VERSION: &str = "0.3.0";
+
+/// Stable schema id for a proof-carrying publication receipt.
+pub const PUBLICATION_RECEIPT_SCHEMA_ID: &str = "animus.publication-receipt.v1";
+/// Current publication receipt version.
+pub const PUBLICATION_RECEIPT_VERSION: u32 = 1;
 
 // =====================================================================
 // Status vocabulary (referenced from string fields below).
@@ -130,6 +136,179 @@ pub mod phase_status {
 // =====================================================================
 // workflow/execute
 // =====================================================================
+
+/// Qualified subject identity and generation fenced into a publication.
+///
+/// `qualified_id` uses the canonical `<kind>:<native-id>` shape (for example
+/// `task:TASK-1173`). `generation` is the subject generation leased for this
+/// execution; a receipt for an older generation must never satisfy a newer run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PublicationSubjectGeneration {
+    /// Canonical qualified subject id.
+    pub qualified_id: String,
+    /// Subject generation leased by this workflow execution.
+    pub generation: u64,
+}
+
+/// Pull-request proof attached to a publication receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PublicationPullRequest {
+    /// Repository-local pull request number.
+    pub number: u64,
+    /// Canonical pull request URL.
+    pub url: String,
+    /// Head SHA observed from the pull request provider after create/update.
+    pub head_sha: String,
+}
+
+/// Component that issued a publication receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PublicationReceiptIssuer {
+    /// The workflow runner owns publication.
+    Runner {
+        /// Concrete runner/plugin name.
+        component: String,
+        /// Concrete runner/plugin version.
+        version: String,
+    },
+    /// A named workflow phase owns publication.
+    Phase {
+        /// Phase id declared by the workflow publication contract.
+        phase_id: String,
+        /// Component or command implementation that emitted the receipt.
+        component: String,
+        /// Concrete component/command version.
+        version: String,
+    },
+}
+
+/// Durable proof that exactly one owner published a workflow result.
+///
+/// Compatibility contract: v0.3+ consumers accept schema
+/// `animus.publication-receipt.v1`, version `1`. Unknown schema ids or versions
+/// fail closed. Older v0.2 consumers ignore the additive optional receipt field
+/// on runner results, but MUST NOT be used for workflows whose publication is
+/// required because they cannot verify this proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PublicationReceipt {
+    /// Stable schema id; must equal [`PUBLICATION_RECEIPT_SCHEMA_ID`].
+    pub schema: String,
+    /// Receipt version; must equal [`PUBLICATION_RECEIPT_VERSION`].
+    pub version: u32,
+    /// Workflow execution id.
+    pub workflow_id: String,
+    /// Workflow generation fenced into the publication lease.
+    pub workflow_generation: u64,
+    /// Qualified subject/task and its leased generation.
+    pub subject: PublicationSubjectGeneration,
+    /// Commit SHA produced by the workflow.
+    pub commit_sha: String,
+    /// Git tree SHA for the published commit.
+    pub tree_sha: String,
+    /// Canonical remote URL used for publication.
+    pub remote: String,
+    /// Fully qualified remote ref, for example `refs/heads/animus/TASK-1173`.
+    pub remote_ref: String,
+    /// SHA independently observed at `remote_ref` after publication.
+    pub observed_remote_sha: String,
+    /// Durable ref from which unpublished/recovery work can be restored.
+    pub recovery_ref: String,
+    /// Pull-request proof when the publication policy requires a PR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<PublicationPullRequest>,
+    /// Exact owner/component that issued this receipt.
+    pub issuer: PublicationReceiptIssuer,
+    /// UTC RFC 3339 issue timestamp.
+    pub issued_at: DateTime<Utc>,
+}
+
+impl PublicationReceipt {
+    /// Validate the version fence and the remote/PR proof relationships.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != PUBLICATION_RECEIPT_SCHEMA_ID {
+            return Err(format!(
+                "unsupported publication receipt schema '{}'; expected '{}'",
+                self.schema, PUBLICATION_RECEIPT_SCHEMA_ID
+            ));
+        }
+        if self.version != PUBLICATION_RECEIPT_VERSION {
+            return Err(format!(
+                "unsupported publication receipt version {}; expected {}",
+                self.version, PUBLICATION_RECEIPT_VERSION
+            ));
+        }
+        for (label, value) in [
+            ("workflow_id", self.workflow_id.as_str()),
+            ("subject.qualified_id", self.subject.qualified_id.as_str()),
+            ("remote", self.remote.as_str()),
+            ("remote_ref", self.remote_ref.as_str()),
+            ("recovery_ref", self.recovery_ref.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("publication receipt {label} must not be empty"));
+            }
+        }
+        for (label, sha) in [
+            ("commit_sha", self.commit_sha.as_str()),
+            ("tree_sha", self.tree_sha.as_str()),
+            ("observed_remote_sha", self.observed_remote_sha.as_str()),
+        ] {
+            if !is_git_object_id(sha) {
+                return Err(format!(
+                    "publication receipt {label} must be a 40- or 64-character hexadecimal git object id"
+                ));
+            }
+        }
+        if self.observed_remote_sha != self.commit_sha {
+            return Err(
+                "publication receipt observed_remote_sha must equal commit_sha".to_string(),
+            );
+        }
+        if let Some(pr) = &self.pull_request {
+            if pr.number == 0 {
+                return Err("publication receipt pull_request.number must be positive".to_string());
+            }
+            if pr.url.trim().is_empty() {
+                return Err("publication receipt pull_request.url must not be empty".to_string());
+            }
+            if !is_git_object_id(&pr.head_sha) {
+                return Err("publication receipt pull_request.head_sha must be a 40- or 64-character hexadecimal git object id".to_string());
+            }
+            if pr.head_sha != self.commit_sha {
+                return Err(
+                    "publication receipt pull_request.head_sha must equal commit_sha".to_string(),
+                );
+            }
+        }
+        match &self.issuer {
+            PublicationReceiptIssuer::Runner { component, version }
+            | PublicationReceiptIssuer::Phase {
+                component, version, ..
+            } => {
+                if component.trim().is_empty() || version.trim().is_empty() {
+                    return Err(
+                        "publication receipt issuer component and version must not be empty"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        if let PublicationReceiptIssuer::Phase { phase_id, .. } = &self.issuer {
+            if phase_id.trim().is_empty() {
+                return Err("publication receipt issuer phase_id must not be empty".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_git_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
 
 /// Parameters for [`METHOD_WORKFLOW_EXECUTE`].
 ///
@@ -221,8 +400,13 @@ pub struct WorkflowExecuteResult {
     pub total_duration_secs: u64,
     /// Per-phase results.
     pub phase_results: Vec<PhaseResultSnapshot>,
-    /// Post-success action outcome (push, PR creation, merge, etc.).
+    /// Legacy opaque post-success action outcome. New publication-aware
+    /// consumers use [`Self::publication_receipt`] instead.
     pub post_success: Value,
+    /// Typed, versioned publication proof. Required by the host before it marks
+    /// a workflow with `publication.required=true` completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_receipt: Option<PublicationReceipt>,
     /// True iff `workflow_status == COMPLETED`.
     pub success: bool,
     /// Phase events emitted during execution (replaces in-process callback).
@@ -243,6 +427,9 @@ pub struct PhaseResultSnapshot {
     pub outcome: Value,
     /// Backend-specific metadata payload.
     pub metadata: Value,
+    /// Receipt emitted by this phase when it is the declared publication owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_receipt: Option<PublicationReceipt>,
     /// Next phase id, if available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_phase_id: Option<String>,
@@ -361,6 +548,9 @@ pub struct WorkflowPhaseRunResult {
     pub outcome: Value,
     /// Backend-specific metadata.
     pub metadata: Value,
+    /// Receipt emitted by this phase when it is the declared publication owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_receipt: Option<PublicationReceipt>,
     /// Execution signals emitted during the phase.
     #[serde(default)]
     pub signals: Vec<Value>,
@@ -402,6 +592,10 @@ pub struct WorkflowRunnerCapabilities {
     /// Plugin executes post-success actions (push / merge / PR).
     #[serde(default)]
     pub post_success_actions: bool,
+    /// Plugin validates and returns `animus.publication-receipt.v1` and obeys
+    /// explicit single-owner publication config.
+    #[serde(default)]
+    pub publication_receipt_v1: bool,
     /// Plugin replays persisted phase markers on restart.
     #[serde(default)]
     pub crash_recovery: bool,
@@ -586,5 +780,99 @@ mod tests {
         assert_eq!(v.get("kind"), Some(&serde_json::json!("decision")));
         let back: PhaseEvent = serde_json::from_value(v).unwrap();
         assert_eq!(back, e);
+    }
+
+    fn valid_publication_receipt() -> PublicationReceipt {
+        let sha = "0123456789abcdef0123456789abcdef01234567".to_string();
+        PublicationReceipt {
+            schema: PUBLICATION_RECEIPT_SCHEMA_ID.to_string(),
+            version: PUBLICATION_RECEIPT_VERSION,
+            workflow_id: "wf-123".to_string(),
+            workflow_generation: 7,
+            subject: PublicationSubjectGeneration {
+                qualified_id: "task:TASK-1173".to_string(),
+                generation: 4,
+            },
+            commit_sha: sha.clone(),
+            tree_sha: "89abcdef0123456789abcdef0123456789abcdef".to_string(),
+            remote: "https://github.com/launchapp-dev/animus-protocol.git".to_string(),
+            remote_ref: "refs/heads/animus/TASK-1173".to_string(),
+            observed_remote_sha: sha.clone(),
+            recovery_ref: "refs/animus/recovery/wf-123".to_string(),
+            pull_request: Some(PublicationPullRequest {
+                number: 42,
+                url: "https://github.com/launchapp-dev/animus-protocol/pull/42".to_string(),
+                head_sha: sha,
+            }),
+            issuer: PublicationReceiptIssuer::Phase {
+                phase_id: "publish".to_string(),
+                component: "portal-code-open-pr".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            issued_at: "2026-07-30T01:00:00Z".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn publication_receipt_round_trips_without_loss_and_validates() {
+        let receipt = valid_publication_receipt();
+        receipt.validate().expect("valid receipt");
+        let json = serde_json::to_value(&receipt).expect("serialize");
+        assert_eq!(
+            json.get("schema"),
+            Some(&serde_json::json!(PUBLICATION_RECEIPT_SCHEMA_ID))
+        );
+        let decoded: PublicationReceipt = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(decoded, receipt);
+    }
+
+    #[test]
+    fn v02_execute_result_without_receipt_remains_wire_compatible() {
+        let legacy = serde_json::json!({
+            "workflow_id": "wf-legacy",
+            "workflow_ref": "standard",
+            "workflow_status": "completed",
+            "subject_id": "TASK-1",
+            "execution_cwd": "/tmp/work",
+            "phases_requested": ["implement"],
+            "phases_completed": 1,
+            "phases_total": 1,
+            "total_duration_secs": 2,
+            "phase_results": [],
+            "post_success": null,
+            "success": true,
+            "phase_events": []
+        });
+        let result: WorkflowExecuteResult =
+            serde_json::from_value(legacy).expect("v0.2 result still deserializes");
+        assert!(result.publication_receipt.is_none());
+    }
+
+    #[test]
+    fn publication_receipt_rejects_unverified_remote_sha() {
+        let mut receipt = valid_publication_receipt();
+        receipt.observed_remote_sha = "abcdef0123456789abcdef0123456789abcdef01".to_string();
+        let error = receipt.validate().expect_err("mismatched remote proof");
+        assert!(error.contains("observed_remote_sha must equal commit_sha"));
+    }
+
+    #[test]
+    fn publication_receipt_rejects_unknown_version() {
+        let mut receipt = valid_publication_receipt();
+        receipt.version = PUBLICATION_RECEIPT_VERSION + 1;
+        let error = receipt.validate().expect_err("unknown version must fail");
+        assert!(error.contains("unsupported publication receipt version"));
+    }
+
+    #[test]
+    fn publication_receipt_denies_unknown_fields() {
+        let receipt = valid_publication_receipt();
+        let mut json = serde_json::to_value(receipt).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .insert("untrusted".to_string(), serde_json::json!(true));
+        let error = serde_json::from_value::<PublicationReceipt>(json)
+            .expect_err("unknown receipt fields must fail");
+        assert!(error.to_string().contains("unknown field"));
     }
 }

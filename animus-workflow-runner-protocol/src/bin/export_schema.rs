@@ -25,9 +25,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use animus_workflow_runner_protocol::{
-    PhaseEvent, PhaseResultSnapshot, WorkflowExecuteRequest, WorkflowExecuteResult,
-    WorkflowPhaseRunRequest, WorkflowPhaseRunResult, WorkflowRunnerCapabilities,
-    WorkflowRunnerManifest,
+    PhaseEvent, PhaseResultSnapshot, PublicationPullRequest, PublicationReceipt,
+    PublicationReceiptIssuer, PublicationSubjectGeneration, WorkflowExecuteRequest,
+    WorkflowExecuteResult, WorkflowPhaseRunRequest, WorkflowPhaseRunResult,
+    WorkflowRunnerCapabilities, WorkflowRunnerManifest,
 };
 use schemars::{schema_for, Schema};
 
@@ -68,6 +69,19 @@ pub fn all_schemas() -> Vec<(&'static str, Schema)> {
         ("WorkflowExecuteResult", schema_for!(WorkflowExecuteResult)),
         ("PhaseResultSnapshot", schema_for!(PhaseResultSnapshot)),
         ("PhaseEvent", schema_for!(PhaseEvent)),
+        ("PublicationReceipt", schema_for!(PublicationReceipt)),
+        (
+            "PublicationSubjectGeneration",
+            schema_for!(PublicationSubjectGeneration),
+        ),
+        (
+            "PublicationPullRequest",
+            schema_for!(PublicationPullRequest),
+        ),
+        (
+            "PublicationReceiptIssuer",
+            schema_for!(PublicationReceiptIssuer),
+        ),
         (
             "WorkflowPhaseRunRequest",
             schema_for!(WorkflowPhaseRunRequest),
@@ -198,5 +212,35 @@ mod tests {
                     .unwrap_or(false),
             "WorkflowExecuteRequest schema should report object type, got {type_field}"
         );
+    }
+
+    #[test]
+    fn publication_receipt_schema_requires_remote_proof() {
+        let schema = schema_for!(PublicationReceipt);
+        let value = serde_json::to_value(schema).expect("serializes");
+        let required = value
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("receipt schema has required fields");
+        for field in [
+            "schema",
+            "version",
+            "workflow_id",
+            "workflow_generation",
+            "subject",
+            "commit_sha",
+            "tree_sha",
+            "remote",
+            "remote_ref",
+            "observed_remote_sha",
+            "recovery_ref",
+            "issuer",
+            "issued_at",
+        ] {
+            assert!(
+                required.iter().any(|value| value == field),
+                "receipt schema must require {field}"
+            );
+        }
     }
 }

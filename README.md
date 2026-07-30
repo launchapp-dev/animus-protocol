@@ -40,6 +40,11 @@ The generated `_limits.json` is normative alongside JSON Schema: JSON Schema
 `maxLength` counts Unicode characters, while Animus transport ceilings count
 encoded UTF-8 bytes. Downstream validators must enforce both.
 
+Workflow publishers use the explicit single-owner configuration and durable
+receipt contract described in
+[`docs/workflow-publication-contract.md`](./docs/workflow-publication-contract.md).
+Publication is never inferred from workflow or phase names.
+
 ## Subject backend quickstart (Rust)
 
 Cargo.toml:

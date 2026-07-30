@@ -9,6 +9,18 @@ source of truth for individual crate bumps. Tags map roughly to
 
 ### Added
 
+`animus-config-protocol` 0.2.0 and `animus-workflow-runner-protocol` 0.3.0 add
+the v1 single-owner workflow publication contract and proof-carrying receipt.
+Workflows explicitly select a runner or phase owner and a fail-safe cleanup
+policy; semantic validation rejects missing, repeated, unknown, manual, or
+opaque command owners. Runner results carry a versioned receipt fenced by
+workflow and qualified-subject generations with commit/tree, observed remote,
+recovery-ref, PR, issuer, and timestamp proof. Legacy configs remain readable
+but publication is disabled and exposed through an explicit migration
+diagnostic—workflow or phase names are never treated as publication intent.
+Committed JSON Schemas and the cross-version compatibility contract are
+documented in `docs/workflow-publication-contract.md`.
+
 `animus-config-protocol` 0.1.2: optional, typed
 `AgentProfile.application_chat_controls` policy with bounded control enums and
 configured references. Profile omission remains backward-compatible; overlay

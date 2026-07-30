@@ -143,6 +143,9 @@ fn compile_yaml_sources_with_base_inner(
         });
     }
 
+    if let Some(config) = merged_config.as_ref() {
+        validate_workflow_publication_contracts(config)?;
+    }
     Ok(merged_config)
 }
 
@@ -319,5 +322,46 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         secrets,
         workspaces,
         environment_routing,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publication_validation_runs_after_all_yaml_sources_are_merged() {
+        let sources = vec![
+            (
+                PathBuf::from(".animus/workflows/10-workflow.yaml"),
+                r#"
+workflows:
+  - id: coding
+    phases: [publish]
+    publication:
+      required: true
+      owner:
+        kind: phase
+        phase_id: publish
+"#
+                .to_string(),
+            ),
+            (
+                PathBuf::from(".animus/workflows/20-phase.yaml"),
+                r#"
+phases:
+  publish:
+    mode: agent
+    output_contract:
+      kind: animus.publication-receipt.v1
+"#
+                .to_string(),
+            ),
+        ];
+
+        let config = compile_yaml_sources_with_base(&builtin_workflow_config(), &sources)
+            .expect("multi-file publication config compiles")
+            .expect("config");
+        assert!(config.workflows[0].publication.is_some());
     }
 }
