@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowPublicationCleanupPolicy",
+  "description": "When a runner may remove a publication workspace.",
+  "oneOf": [
+    {
+      "description": "Keep the workspace even after a verified publication receipt.",
+      "type": "string",
+      "const": "retain"
+    },
+    {
+      "description": "Cleanup is permitted only after the remote ref has been independently\nobserved at the receipt's commit SHA. Failures always retain recovery\nstate.",
+      "type": "string",
+      "const": "after_remote_verified"
+    }
+  ]
+}

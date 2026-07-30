@@ -294,6 +294,7 @@ pub(crate) fn workflow_definition_to_yaml(
             .collect(),
         variables: definition.variables.clone(),
         worktree: definition.worktree.clone().map(YamlPhaseWorktree::Full),
+        publication: definition.publication.clone(),
         budget: definition.budget.clone(),
         environment: definition.environment.clone(),
         workspace: definition.workspace.clone(),
@@ -436,6 +437,7 @@ pub(super) fn yaml_workflow_to_workflow_definition(
         phases,
         variables: yaml.variables,
         worktree,
+        publication: yaml.publication,
         budget: yaml.budget,
         environment: yaml.environment,
         workspace: yaml.workspace,
@@ -749,7 +751,16 @@ pub fn parse_yaml_workflow_config_with_base_and_source(
     base: &WorkflowConfig,
     source_path: Option<&Path>,
 ) -> Result<WorkflowConfig> {
-    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None, None, &BTreeMap::new())
+    let config = parse_yaml_workflow_config_internal(
+        yaml_str,
+        base,
+        source_path,
+        None,
+        None,
+        &BTreeMap::new(),
+    )?;
+    validate_workflow_publication_contracts(&config)?;
+    Ok(config)
 }
 
 /// Variant used by the YAML compiler after `${VAR}` / `${secret.X}`
@@ -840,6 +851,12 @@ const KNOWN_FIELD_KEYS: &[&str] = &[
     "default_tool",
     "idempotency",
     "worktree",
+    "publication",
+    "required",
+    "owner",
+    "cleanup",
+    "kind",
+    "phase_id",
     "evals",
 ];
 
@@ -1886,5 +1903,268 @@ phases:
             with_source.agent_profiles.get("swe").unwrap().system_prompt,
             with_path.agent_profiles.get("swe").unwrap().system_prompt
         );
+    }
+
+    fn valid_phase_publication_yaml() -> &'static str {
+        r#"
+default_workflow_ref: coding
+workflows:
+  - id: coding
+    name: Coding
+    phases: [implement, publish]
+    publication:
+      schema: animus.workflow-publication.v1
+      version: 1
+      required: true
+      owner:
+        kind: phase
+        phase_id: publish
+      cleanup: after_remote_verified
+phases:
+  implement:
+    mode: agent
+    directive: Implement the task.
+  publish:
+    mode: command
+    command:
+      program: ./publish
+      parse_json_output: true
+      expected_result_kind: animus.publication-receipt.v1
+    output_contract:
+      kind: animus.publication-receipt.v1
+"#
+    }
+
+    #[test]
+    fn publication_contract_yaml_round_trips_without_loss() {
+        let config = parse_yaml_workflow_config(valid_phase_publication_yaml())
+            .expect("valid publication contract");
+        let workflow = config
+            .workflows
+            .iter()
+            .find(|workflow| workflow.id == "coding")
+            .expect("coding workflow");
+        let publication = workflow.publication.as_ref().expect("publication");
+        assert_eq!(publication.schema, WORKFLOW_PUBLICATION_SCHEMA_ID);
+        assert_eq!(publication.version, WORKFLOW_PUBLICATION_VERSION);
+        assert_eq!(
+            publication.owner,
+            Some(WorkflowPublicationOwner::Phase {
+                phase_id: "publish".to_string()
+            })
+        );
+        assert_eq!(
+            publication.cleanup,
+            WorkflowPublicationCleanupPolicy::AfterRemoteVerified
+        );
+
+        let rendered = serde_yaml::to_string(&workflow_config_to_yaml_file(&config))
+            .expect("serialize canonical YAML");
+        let reparsed = parse_yaml_workflow_config(&rendered).expect("reparse canonical YAML");
+        let reparsed_publication = reparsed
+            .workflows
+            .iter()
+            .find(|workflow| workflow.id == "coding")
+            .and_then(|workflow| workflow.publication.as_ref())
+            .expect("round-tripped publication");
+        assert_eq!(reparsed_publication, publication);
+    }
+
+    #[test]
+    fn runner_owned_publication_compiles() {
+        let yaml = r#"
+workflows:
+  - id: release
+    phases: [build]
+    publication:
+      required: true
+      owner:
+        kind: runner
+      cleanup: retain
+phases:
+  build:
+    mode: command
+    command:
+      program: ./build
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("runner owner is valid");
+        let publication = config.workflows[0].publication.as_ref().unwrap();
+        assert_eq!(publication.schema, WORKFLOW_PUBLICATION_SCHEMA_ID);
+        assert_eq!(publication.version, WORKFLOW_PUBLICATION_VERSION);
+        assert_eq!(publication.owner, Some(WorkflowPublicationOwner::Runner));
+    }
+
+    #[test]
+    fn required_publication_without_owner_fails_compile() {
+        let yaml = r#"
+workflows:
+  - id: coding
+    phases: [implement]
+    publication:
+      required: true
+phases:
+  implement:
+    mode: agent
+"#;
+        let error = parse_yaml_workflow_config(yaml).expect_err("missing owner must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("requires publication but declares no owner"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn publication_owner_while_not_required_fails_compile() {
+        let yaml = r#"
+workflows:
+  - id: coding
+    phases: [implement]
+    publication:
+      required: false
+      owner:
+        kind: runner
+phases:
+  implement:
+    mode: agent
+"#;
+        let error = parse_yaml_workflow_config(yaml).expect_err("inactive owner must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("while publication.required is false"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn duplicate_publication_owner_keys_fail_deserialization() {
+        let yaml = r#"
+workflows:
+  - id: coding
+    phases: [implement]
+    publication:
+      required: true
+      owner:
+        kind: runner
+      owner:
+        kind: phase
+        phase_id: implement
+phases:
+  implement:
+    mode: agent
+    output_contract:
+      kind: animus.publication-receipt.v1
+"#;
+        let error = parse_yaml_workflow_config(yaml).expect_err("duplicate owner must fail");
+        assert!(
+            format!("{error:#}").contains("duplicate field `owner`"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn unsupported_publication_schema_and_version_fail_compile() {
+        let bad_schema = valid_phase_publication_yaml().replace(
+            "schema: animus.workflow-publication.v1",
+            "schema: animus.workflow-publication.v2",
+        );
+        let schema_error =
+            parse_yaml_workflow_config(&bad_schema).expect_err("unknown schema must fail");
+        assert!(schema_error.to_string().contains("schema"));
+
+        let bad_version = valid_phase_publication_yaml().replace("version: 1", "version: 2");
+        let version_error =
+            parse_yaml_workflow_config(&bad_version).expect_err("unknown version must fail");
+        assert!(version_error
+            .to_string()
+            .contains("version 2 is unsupported"));
+    }
+
+    #[test]
+    fn publication_owner_for_unknown_phase_fails_compile() {
+        let yaml = valid_phase_publication_yaml().replace("phase_id: publish", "phase_id: missing");
+        let error = parse_yaml_workflow_config(&yaml).expect_err("unknown owner must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("is not in the expanded workflow"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn duplicate_publication_owner_occurrence_fails_compile() {
+        let yaml = valid_phase_publication_yaml().replace(
+            "phases: [implement, publish]",
+            "phases: [implement, publish, publish]",
+        );
+        let error = parse_yaml_workflow_config(&yaml).expect_err("ambiguous owner must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("publication ownership must be unambiguous"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn opaque_command_publication_owner_fails_compile() {
+        let yaml = valid_phase_publication_yaml()
+            .replace("      parse_json_output: true\n", "")
+            .replace(
+                "      expected_result_kind: animus.publication-receipt.v1\n",
+                "",
+            );
+        let error = parse_yaml_workflow_config(&yaml).expect_err("opaque command must fail");
+        assert!(
+            error.to_string().contains("command.parse_json_output=true"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn phase_publication_owner_without_receipt_output_contract_fails_compile() {
+        let yaml = valid_phase_publication_yaml().replace(
+            "    output_contract:\n      kind: animus.publication-receipt.v1\n",
+            "",
+        );
+        let error = parse_yaml_workflow_config(&yaml).expect_err("missing contract must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("must declare output_contract.kind"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn invalid_publication_cleanup_policy_fails_compile() {
+        let yaml = valid_phase_publication_yaml()
+            .replace("cleanup: after_remote_verified", "cleanup: after_success");
+        let error = parse_yaml_workflow_config(&yaml).expect_err("unsafe cleanup must fail");
+        assert!(
+            format!("{error:#}").contains("after_success"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn absent_publication_is_not_inferred_and_has_migration_diagnostic() {
+        let yaml = r#"
+workflows:
+  - id: coding
+    phases: [code-open-pr]
+phases:
+  code-open-pr:
+    mode: agent
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("legacy config still parses");
+        assert!(config.workflows[0].publication.is_none());
+        let diagnostics = workflow_publication_migration_diagnostics(&config);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "workflow.publication_unconfigured");
+        assert!(diagnostics[0].message.contains("no owner will be inferred"));
     }
 }

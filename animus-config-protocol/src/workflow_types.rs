@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{anyhow, Result};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,6 +11,18 @@ use crate::agent_types::PhaseExecutionDefinition;
 pub const WORKFLOW_CONFIG_SCHEMA_ID: &str = "animus.workflow-config.v2";
 pub const WORKFLOW_CONFIG_VERSION: u32 = 2;
 pub const WORKFLOW_CONFIG_FILE_NAME: &str = "workflow-config.v2.json";
+
+/// Schema id for the explicit workflow publication ownership contract.
+pub const WORKFLOW_PUBLICATION_SCHEMA_ID: &str = "animus.workflow-publication.v1";
+/// Current workflow publication ownership contract version.
+pub const WORKFLOW_PUBLICATION_VERSION: u32 = 1;
+/// Output-contract kind a phase-owned publisher must declare.
+///
+/// This is deliberately the same identifier as the receipt wire schema in
+/// `animus-workflow-runner-protocol`. Keeping the identifier here avoids a
+/// dependency from config protocol onto the runner protocol while giving the
+/// compiler a stable cross-crate contract to validate.
+pub const PUBLICATION_RECEIPT_OUTPUT_KIND: &str = "animus.publication-receipt.v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseUiDefinition {
@@ -392,6 +405,80 @@ pub(crate) fn default_secret_required() -> bool {
     true
 }
 
+fn default_workflow_publication_schema() -> String {
+    WORKFLOW_PUBLICATION_SCHEMA_ID.to_string()
+}
+
+fn default_workflow_publication_version() -> u32 {
+    WORKFLOW_PUBLICATION_VERSION
+}
+
+/// The sole component authorized to publish a workflow's git result.
+///
+/// A tagged enum makes two owners unrepresentable in canonical JSON. YAML
+/// duplicate keys are rejected by serde, and semantic validation additionally
+/// rejects phase owners that occur more than once after sub-workflow expansion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowPublicationOwner {
+    /// The workflow runner publishes after all phases have completed.
+    Runner,
+    /// One named workflow phase publishes and emits the typed receipt.
+    Phase {
+        /// Phase id, which must resolve exactly once in the expanded workflow.
+        phase_id: String,
+    },
+}
+
+/// When a runner may remove a publication workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowPublicationCleanupPolicy {
+    /// Keep the workspace even after a verified publication receipt.
+    #[default]
+    Retain,
+    /// Cleanup is permitted only after the remote ref has been independently
+    /// observed at the receipt's commit SHA. Failures always retain recovery
+    /// state.
+    AfterRemoteVerified,
+}
+
+/// Explicit publication policy for a workflow.
+///
+/// Older configs deserialize with `publication: None`. That means publication
+/// is unconfigured; consumers MUST NOT infer an owner from workflow or phase
+/// names. A host that previously performed name-based publication should emit
+/// [`WorkflowPublicationMigrationDiagnostic`] and require an explicit policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowPublicationConfig {
+    /// Stable schema id. Defaults only support concise YAML; canonical output
+    /// always includes it.
+    #[serde(default = "default_workflow_publication_schema")]
+    pub schema: String,
+    /// Contract version. Only v1 is accepted by this crate.
+    #[serde(default = "default_workflow_publication_version")]
+    pub version: u32,
+    /// Whether successful completion requires verified publication.
+    #[serde(default)]
+    pub required: bool,
+    /// Exactly one publication owner when `required` is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<WorkflowPublicationOwner>,
+    /// Workspace cleanup policy. Defaults to retaining the workspace.
+    #[serde(default)]
+    pub cleanup: WorkflowPublicationCleanupPolicy,
+}
+
+/// Explicit compatibility notice for workflows that have no publication
+/// contract. It is intentionally data, not an implicit behavioral fallback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowPublicationMigrationDiagnostic {
+    pub workflow_id: String,
+    pub code: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDefinition {
     pub id: String,
@@ -404,6 +491,10 @@ pub struct WorkflowDefinition {
     pub variables: Vec<WorkflowVariable>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeConfig>,
+    /// Explicit publication ownership and cleanup policy. Absence never
+    /// enables legacy name-based publication inference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<WorkflowPublicationConfig>,
     pub budget: Option<BudgetConfig>,
     /// Environment plugin id (or an [`EnvironmentRouting`] rule key) every phase
     /// in this workflow runs in unless the phase overrides it. `None` falls
@@ -424,6 +515,166 @@ impl WorkflowDefinition {
             .filter(|id| !id.is_empty())
             .collect()
     }
+}
+
+/// Validate every explicit publication contract in a compiled config.
+///
+/// This function is public so the kernel can apply the same validation to
+/// canonical configs loaded from YAML, Postgres, or another config source.
+pub fn validate_workflow_publication_contracts(config: &WorkflowConfig) -> Result<()> {
+    for workflow in &config.workflows {
+        let Some(publication) = &workflow.publication else {
+            continue;
+        };
+
+        if publication.schema != WORKFLOW_PUBLICATION_SCHEMA_ID {
+            return Err(anyhow!(
+                "workflow '{}' publication schema '{}' is unsupported; expected '{}'",
+                workflow.id,
+                publication.schema,
+                WORKFLOW_PUBLICATION_SCHEMA_ID
+            ));
+        }
+        if publication.version != WORKFLOW_PUBLICATION_VERSION {
+            return Err(anyhow!(
+                "workflow '{}' publication version {} is unsupported; expected {}",
+                workflow.id,
+                publication.version,
+                WORKFLOW_PUBLICATION_VERSION
+            ));
+        }
+
+        match (publication.required, publication.owner.as_ref()) {
+            (true, None) => {
+                return Err(anyhow!(
+                    "workflow '{}' requires publication but declares no owner",
+                    workflow.id
+                ));
+            }
+            (false, Some(_)) => {
+                return Err(anyhow!(
+                    "workflow '{}' declares a publication owner while publication.required is false",
+                    workflow.id
+                ));
+            }
+            (false, None) | (true, Some(WorkflowPublicationOwner::Runner)) => continue,
+            (true, Some(WorkflowPublicationOwner::Phase { phase_id })) => {
+                let phase_id = phase_id.trim();
+                if phase_id.is_empty() {
+                    return Err(anyhow!(
+                        "workflow '{}' publication phase owner must not be empty",
+                        workflow.id
+                    ));
+                }
+
+                let expanded =
+                    expand_workflow_phases(&config.workflows, &workflow.id).map_err(|err| {
+                        anyhow!(
+                            "workflow '{}' publication owner validation failed: {}",
+                            workflow.id,
+                            err
+                        )
+                    })?;
+                let owner_occurrences = expanded
+                    .iter()
+                    .filter(|entry| entry.phase_id().trim().eq_ignore_ascii_case(phase_id))
+                    .count();
+                if owner_occurrences == 0 {
+                    return Err(anyhow!(
+                        "workflow '{}' publication owner phase '{}' is not in the expanded workflow",
+                        workflow.id,
+                        phase_id
+                    ));
+                }
+                if owner_occurrences > 1 {
+                    return Err(anyhow!(
+                        "workflow '{}' publication owner phase '{}' occurs {} times; publication ownership must be unambiguous",
+                        workflow.id,
+                        phase_id,
+                        owner_occurrences
+                    ));
+                }
+
+                let definition = config
+                    .phase_definitions
+                    .iter()
+                    .find(|(candidate, _)| candidate.eq_ignore_ascii_case(phase_id))
+                    .map(|(_, definition)| definition)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "workflow '{}' publication owner phase '{}' has no phase definition",
+                            workflow.id,
+                            phase_id
+                        )
+                    })?;
+                let output_kind = definition
+                    .output_contract
+                    .as_ref()
+                    .map(|contract| contract.kind.trim());
+                if output_kind != Some(PUBLICATION_RECEIPT_OUTPUT_KIND) {
+                    return Err(anyhow!(
+                        "workflow '{}' publication owner phase '{}' must declare output_contract.kind '{}'",
+                        workflow.id,
+                        phase_id,
+                        PUBLICATION_RECEIPT_OUTPUT_KIND
+                    ));
+                }
+
+                match definition.mode {
+                    crate::agent_types::PhaseExecutionMode::Command => {
+                        let Some(command) = definition.command.as_ref() else {
+                            return Err(anyhow!(
+                                "workflow '{}' command publication owner phase '{}' has no command definition",
+                                workflow.id,
+                                phase_id
+                            ));
+                        };
+                        if !command.parse_json_output
+                            || command.expected_result_kind.as_deref()
+                                != Some(PUBLICATION_RECEIPT_OUTPUT_KIND)
+                        {
+                            return Err(anyhow!(
+                                "workflow '{}' command publication owner phase '{}' must set command.parse_json_output=true and command.expected_result_kind='{}'",
+                                workflow.id,
+                                phase_id,
+                                PUBLICATION_RECEIPT_OUTPUT_KIND
+                            ));
+                        }
+                    }
+                    crate::agent_types::PhaseExecutionMode::Manual => {
+                        return Err(anyhow!(
+                            "workflow '{}' publication owner phase '{}' is manual and cannot emit a publication receipt",
+                            workflow.id,
+                            phase_id
+                        ));
+                    }
+                    crate::agent_types::PhaseExecutionMode::Agent => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Return explicit migration notices for workflows without a publication
+/// declaration. Callers may surface these when upgrading from a runner that
+/// inferred publication from names; the diagnostic never enables publication.
+pub fn workflow_publication_migration_diagnostics(
+    config: &WorkflowConfig,
+) -> Vec<WorkflowPublicationMigrationDiagnostic> {
+    config
+        .workflows
+        .iter()
+        .filter(|workflow| workflow.publication.is_none())
+        .map(|workflow| WorkflowPublicationMigrationDiagnostic {
+            workflow_id: workflow.id.clone(),
+            code: "workflow.publication_unconfigured".to_string(),
+            message: format!(
+                "workflow '{}' has no publication contract; publication is disabled and no owner will be inferred from workflow or phase names",
+                workflow.id
+            ),
+        })
+        .collect()
 }
 
 pub fn expand_workflow_phases(

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicationSubjectGeneration",
+  "description": "Qualified subject identity and generation fenced into a publication.\n\n`qualified_id` uses the canonical `<kind>:<native-id>` shape (for example\n`task:TASK-1173`). `generation` is the subject generation leased for this\nexecution; a receipt for an older generation must never satisfy a newer run.",
+  "type": "object",
+  "properties": {
+    "generation": {
+      "description": "Subject generation leased by this workflow execution.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "qualified_id": {
+      "description": "Canonical qualified subject id.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "qualified_id",
+    "generation"
+  ]
+}

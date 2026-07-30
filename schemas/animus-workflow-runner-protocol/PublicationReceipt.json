@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicationReceipt",
+  "description": "Durable proof that exactly one owner published a workflow result.\n\nCompatibility contract: v0.3+ consumers accept schema\n`animus.publication-receipt.v1`, version `1`. Unknown schema ids or versions\nfail closed. Older v0.2 consumers ignore the additive optional receipt field\non runner results, but MUST NOT be used for workflows whose publication is\nrequired because they cannot verify this proof.",
+  "type": "object",
+  "properties": {
+    "commit_sha": {
+      "description": "Commit SHA produced by the workflow.",
+      "type": "string"
+    },
+    "issued_at": {
+      "description": "UTC RFC 3339 issue timestamp.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "issuer": {
+      "description": "Exact owner/component that issued this receipt.",
+      "$ref": "#/$defs/PublicationReceiptIssuer"
+    },
+    "observed_remote_sha": {
+      "description": "SHA independently observed at `remote_ref` after publication.",
+      "type": "string"
+    },
+    "pull_request": {
+      "description": "Pull-request proof when the publication policy requires a PR.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PublicationPullRequest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recovery_ref": {
+      "description": "Durable ref from which unpublished/recovery work can be restored.",
+      "type": "string"
+    },
+    "remote": {
+      "description": "Canonical remote URL used for publication.",
+      "type": "string"
+    },
+    "remote_ref": {
+      "description": "Fully qualified remote ref, for example `refs/heads/animus/TASK-1173`.",
+      "type": "string"
+    },
+    "schema": {
+      "description": "Stable schema id; must equal [`PUBLICATION_RECEIPT_SCHEMA_ID`].",
+      "type": "string"
+    },
+    "subject": {
+      "description": "Qualified subject/task and its leased generation.",
+      "$ref": "#/$defs/PublicationSubjectGeneration"
+    },
+    "tree_sha": {
+      "description": "Git tree SHA for the published commit.",
+      "type": "string"
+    },
+    "version": {
+      "description": "Receipt version; must equal [`PUBLICATION_RECEIPT_VERSION`].",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "workflow_generation": {
+      "description": "Workflow generation fenced into the publication lease.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "workflow_id": {
+      "description": "Workflow execution id.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "workflow_id",
+    "workflow_generation",
+    "subject",
+    "commit_sha",
+    "tree_sha",
+    "remote",
+    "remote_ref",
+    "observed_remote_sha",
+    "recovery_ref",
+    "issuer",
+    "issued_at"
+  ],
+  "$defs": {
+    "PublicationPullRequest": {
+      "description": "Pull-request proof attached to a publication receipt.",
+      "type": "object",
+      "properties": {
+        "head_sha": {
+          "description": "Head SHA observed from the pull request provider after create/update.",
+          "type": "string"
+        },
+        "number": {
+          "description": "Repository-local pull request number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "url": {
+          "description": "Canonical pull request URL.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "url",
+        "head_sha"
+      ]
+    },
+    "PublicationReceiptIssuer": {
+      "description": "Component that issued a publication receipt.",
+      "oneOf": [
+        {
+          "description": "The workflow runner owns publication.",
+          "type": "object",
+          "properties": {
+            "component": {
+              "description": "Concrete runner/plugin name.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "runner"
+            },
+            "version": {
+              "description": "Concrete runner/plugin version.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "component",
+            "version"
+          ]
+        },
+        {
+          "description": "A named workflow phase owns publication.",
+          "type": "object",
+          "properties": {
+            "component": {
+              "description": "Component or command implementation that emitted the receipt.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "phase"
+            },
+            "phase_id": {
+              "description": "Phase id declared by the workflow publication contract.",
+              "type": "string"
+            },
+            "version": {
+              "description": "Concrete component/command version.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "phase_id",
+            "component",
+            "version"
+          ]
+        }
+      ]
+    },
+    "PublicationSubjectGeneration": {
+      "description": "Qualified subject identity and generation fenced into a publication.\n\n`qualified_id` uses the canonical `<kind>:<native-id>` shape (for example\n`task:TASK-1173`). `generation` is the subject generation leased for this\nexecution; a receipt for an older generation must never satisfy a newer run.",
+      "type": "object",
+      "properties": {
+        "generation": {
+          "description": "Subject generation leased by this workflow execution.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "qualified_id": {
+          "description": "Canonical qualified subject id.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "qualified_id",
+        "generation"
+      ]
+    }
+  }
+}

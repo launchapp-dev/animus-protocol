@@ -285,6 +285,123 @@
         }
       ],
       "title": "DiagnosticSeverity"
+    },
+    "WorkflowPublicationCleanupPolicy": {
+      "description": "When a runner may remove a publication workspace.",
+      "oneOf": [
+        {
+          "const": "retain",
+          "description": "Keep the workspace even after a verified publication receipt.",
+          "type": "string"
+        },
+        {
+          "const": "after_remote_verified",
+          "description": "Cleanup is permitted only after the remote ref has been independently\nobserved at the receipt's commit SHA. Failures always retain recovery\nstate.",
+          "type": "string"
+        }
+      ],
+      "title": "WorkflowPublicationCleanupPolicy"
+    },
+    "WorkflowPublicationConfig": {
+      "additionalProperties": false,
+      "description": "Explicit publication policy for a workflow.\n\nOlder configs deserialize with `publication: None`. That means publication\nis unconfigured; consumers MUST NOT infer an owner from workflow or phase\nnames. A host that previously performed name-based publication should emit\n[`WorkflowPublicationMigrationDiagnostic`] and require an explicit policy.",
+      "properties": {
+        "cleanup": {
+          "$ref": "#/$defs/WorkflowPublicationCleanupPolicy",
+          "default": "retain",
+          "description": "Workspace cleanup policy. Defaults to retaining the workspace."
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowPublicationOwner"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exactly one publication owner when `required` is true."
+        },
+        "required": {
+          "default": false,
+          "description": "Whether successful completion requires verified publication.",
+          "type": "boolean"
+        },
+        "schema": {
+          "default": "animus.workflow-publication.v1",
+          "description": "Stable schema id. Defaults only support concise YAML; canonical output\nalways includes it.",
+          "type": "string"
+        },
+        "version": {
+          "default": 1,
+          "description": "Contract version. Only v1 is accepted by this crate.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "title": "WorkflowPublicationConfig",
+      "type": "object"
+    },
+    "WorkflowPublicationMigrationDiagnostic": {
+      "description": "Explicit compatibility notice for workflows that have no publication\ncontract. It is intentionally data, not an implicit behavioral fallback.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "workflow_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workflow_id",
+        "code",
+        "message"
+      ],
+      "title": "WorkflowPublicationMigrationDiagnostic",
+      "type": "object"
+    },
+    "WorkflowPublicationOwner": {
+      "description": "The sole component authorized to publish a workflow's git result.\n\nA tagged enum makes two owners unrepresentable in canonical JSON. YAML\nduplicate keys are rejected by serde, and semantic validation additionally\nrejects phase owners that occur more than once after sub-workflow expansion.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The workflow runner publishes after all phases have completed.",
+          "properties": {
+            "kind": {
+              "const": "runner",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One named workflow phase publishes and emits the typed receipt.",
+          "properties": {
+            "kind": {
+              "const": "phase",
+              "type": "string"
+            },
+            "phase_id": {
+              "description": "Phase id, which must resolve exactly once in the expanded workflow.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "phase_id"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "WorkflowPublicationOwner"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

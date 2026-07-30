@@ -259,6 +259,8 @@ pub(super) struct YamlWorkflowDefinition {
     pub(super) variables: Vec<WorkflowVariable>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) worktree: Option<YamlPhaseWorktree>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) publication: Option<WorkflowPublicationConfig>,
     pub(super) budget: Option<BudgetConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) environment: Option<String>,

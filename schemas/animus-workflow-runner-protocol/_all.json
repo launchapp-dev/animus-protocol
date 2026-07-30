@@ -160,6 +160,17 @@
           "description": "Phase id (workflow-local).",
           "type": "string"
         },
+        "publication_receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublicationReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Receipt emitted by this phase when it is the declared publication owner."
+        },
         "status": {
           "description": "Status; one of [`phase_status`] values.",
           "type": "string"
@@ -173,6 +184,205 @@
         "metadata"
       ],
       "title": "PhaseResultSnapshot",
+      "type": "object"
+    },
+    "PublicationPullRequest": {
+      "additionalProperties": false,
+      "description": "Pull-request proof attached to a publication receipt.",
+      "properties": {
+        "head_sha": {
+          "description": "Head SHA observed from the pull request provider after create/update.",
+          "type": "string"
+        },
+        "number": {
+          "description": "Repository-local pull request number.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "Canonical pull request URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "url",
+        "head_sha"
+      ],
+      "title": "PublicationPullRequest",
+      "type": "object"
+    },
+    "PublicationReceipt": {
+      "additionalProperties": false,
+      "description": "Durable proof that exactly one owner published a workflow result.\n\nCompatibility contract: v0.3+ consumers accept schema\n`animus.publication-receipt.v1`, version `1`. Unknown schema ids or versions\nfail closed. Older v0.2 consumers ignore the additive optional receipt field\non runner results, but MUST NOT be used for workflows whose publication is\nrequired because they cannot verify this proof.",
+      "properties": {
+        "commit_sha": {
+          "description": "Commit SHA produced by the workflow.",
+          "type": "string"
+        },
+        "issued_at": {
+          "description": "UTC RFC 3339 issue timestamp.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "issuer": {
+          "$ref": "#/$defs/PublicationReceiptIssuer",
+          "description": "Exact owner/component that issued this receipt."
+        },
+        "observed_remote_sha": {
+          "description": "SHA independently observed at `remote_ref` after publication.",
+          "type": "string"
+        },
+        "pull_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublicationPullRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Pull-request proof when the publication policy requires a PR."
+        },
+        "recovery_ref": {
+          "description": "Durable ref from which unpublished/recovery work can be restored.",
+          "type": "string"
+        },
+        "remote": {
+          "description": "Canonical remote URL used for publication.",
+          "type": "string"
+        },
+        "remote_ref": {
+          "description": "Fully qualified remote ref, for example `refs/heads/animus/TASK-1173`.",
+          "type": "string"
+        },
+        "schema": {
+          "description": "Stable schema id; must equal [`PUBLICATION_RECEIPT_SCHEMA_ID`].",
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/PublicationSubjectGeneration",
+          "description": "Qualified subject/task and its leased generation."
+        },
+        "tree_sha": {
+          "description": "Git tree SHA for the published commit.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Receipt version; must equal [`PUBLICATION_RECEIPT_VERSION`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_generation": {
+          "description": "Workflow generation fenced into the publication lease.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow_id": {
+          "description": "Workflow execution id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "version",
+        "workflow_id",
+        "workflow_generation",
+        "subject",
+        "commit_sha",
+        "tree_sha",
+        "remote",
+        "remote_ref",
+        "observed_remote_sha",
+        "recovery_ref",
+        "issuer",
+        "issued_at"
+      ],
+      "title": "PublicationReceipt",
+      "type": "object"
+    },
+    "PublicationReceiptIssuer": {
+      "description": "Component that issued a publication receipt.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The workflow runner owns publication.",
+          "properties": {
+            "component": {
+              "description": "Concrete runner/plugin name.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "runner",
+              "type": "string"
+            },
+            "version": {
+              "description": "Concrete runner/plugin version.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "component",
+            "version"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A named workflow phase owns publication.",
+          "properties": {
+            "component": {
+              "description": "Component or command implementation that emitted the receipt.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "phase",
+              "type": "string"
+            },
+            "phase_id": {
+              "description": "Phase id declared by the workflow publication contract.",
+              "type": "string"
+            },
+            "version": {
+              "description": "Concrete component/command version.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "phase_id",
+            "component",
+            "version"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "PublicationReceiptIssuer"
+    },
+    "PublicationSubjectGeneration": {
+      "additionalProperties": false,
+      "description": "Qualified subject identity and generation fenced into a publication.\n\n`qualified_id` uses the canonical `<kind>:<native-id>` shape (for example\n`task:TASK-1173`). `generation` is the subject generation leased for this\nexecution; a receipt for an older generation must never satisfy a newer run.",
+      "properties": {
+        "generation": {
+          "description": "Subject generation leased by this workflow execution.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "qualified_id": {
+          "description": "Canonical qualified subject id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "qualified_id",
+        "generation"
+      ],
+      "title": "PublicationSubjectGeneration",
       "type": "object"
     },
     "SubjectDispatch": {
@@ -443,7 +653,18 @@
           "type": "integer"
         },
         "post_success": {
-          "description": "Post-success action outcome (push, PR creation, merge, etc.)."
+          "description": "Legacy opaque post-success action outcome. New publication-aware\nconsumers use [`Self::publication_receipt`] instead."
+        },
+        "publication_receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublicationReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Typed, versioned publication proof. Required by the host before it marks\na workflow with `publication.required=true` completed."
         },
         "subject_id": {
           "description": "Subject id this run targeted.",
@@ -641,6 +862,17 @@
           "description": "One of `\"completed\"`, `\"manual_pending\"`, `\"failed\"`.",
           "type": "string"
         },
+        "publication_receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublicationReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Receipt emitted by this phase when it is the declared publication owner."
+        },
         "signals": {
           "default": [],
           "description": "Execution signals emitted during the phase.",
@@ -685,6 +917,11 @@
         "post_success_actions": {
           "default": false,
           "description": "Plugin executes post-success actions (push / merge / PR).",
+          "type": "boolean"
+        },
+        "publication_receipt_v1": {
+          "default": false,
+          "description": "Plugin validates and returns `animus.publication-receipt.v1` and obeys\nexplicit single-owner publication config.",
           "type": "boolean"
         },
         "rework_context_support": {

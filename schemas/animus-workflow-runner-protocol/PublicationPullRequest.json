@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicationPullRequest",
+  "description": "Pull-request proof attached to a publication receipt.",
+  "type": "object",
+  "properties": {
+    "head_sha": {
+      "description": "Head SHA observed from the pull request provider after create/update.",
+      "type": "string"
+    },
+    "number": {
+      "description": "Repository-local pull request number.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "url": {
+      "description": "Canonical pull request URL.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "number",
+    "url",
+    "head_sha"
+  ]
+}

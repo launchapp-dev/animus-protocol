@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowPublicationConfig",
+  "description": "Explicit publication policy for a workflow.\n\nOlder configs deserialize with `publication: None`. That means publication\nis unconfigured; consumers MUST NOT infer an owner from workflow or phase\nnames. A host that previously performed name-based publication should emit\n[`WorkflowPublicationMigrationDiagnostic`] and require an explicit policy.",
+  "type": "object",
+  "properties": {
+    "cleanup": {
+      "description": "Workspace cleanup policy. Defaults to retaining the workspace.",
+      "$ref": "#/$defs/WorkflowPublicationCleanupPolicy",
+      "default": "retain"
+    },
+    "owner": {
+      "description": "Exactly one publication owner when `required` is true.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowPublicationOwner"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "required": {
+      "description": "Whether successful completion requires verified publication.",
+      "type": "boolean",
+      "default": false
+    },
+    "schema": {
+      "description": "Stable schema id. Defaults only support concise YAML; canonical output\nalways includes it.",
+      "type": "string",
+      "default": "animus.workflow-publication.v1"
+    },
+    "version": {
+      "description": "Contract version. Only v1 is accepted by this crate.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 1,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "WorkflowPublicationCleanupPolicy": {
+      "description": "When a runner may remove a publication workspace.",
+      "oneOf": [
+        {
+          "description": "Keep the workspace even after a verified publication receipt.",
+          "type": "string",
+          "const": "retain"
+        },
+        {
+          "description": "Cleanup is permitted only after the remote ref has been independently\nobserved at the receipt's commit SHA. Failures always retain recovery\nstate.",
+          "type": "string",
+          "const": "after_remote_verified"
+        }
+      ]
+    },
+    "WorkflowPublicationOwner": {
+      "description": "The sole component authorized to publish a workflow's git result.\n\nA tagged enum makes two owners unrepresentable in canonical JSON. YAML\nduplicate keys are rejected by serde, and semantic validation additionally\nrejects phase owners that occur more than once after sub-workflow expansion.",
+      "oneOf": [
+        {
+          "description": "The workflow runner publishes after all phases have completed.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "runner"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "One named workflow phase publishes and emits the typed receipt.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "phase"
+            },
+            "phase_id": {
+              "description": "Phase id, which must resolve exactly once in the expanded workflow.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "phase_id"
+          ]
+        }
+      ]
+    }
+  }
+}

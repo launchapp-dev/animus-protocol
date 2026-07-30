@@ -24,6 +24,11 @@
       "type": "boolean",
       "default": false
     },
+    "publication_receipt_v1": {
+      "description": "Plugin validates and returns `animus.publication-receipt.v1` and obeys\nexplicit single-owner publication config.",
+      "type": "boolean",
+      "default": false
+    },
     "rework_context_support": {
       "description": "Plugin propagates `rework_context` to subsequent phases.",
       "type": "boolean",

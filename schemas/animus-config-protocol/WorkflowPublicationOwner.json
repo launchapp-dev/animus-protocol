@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowPublicationOwner",
+  "description": "The sole component authorized to publish a workflow's git result.\n\nA tagged enum makes two owners unrepresentable in canonical JSON. YAML\nduplicate keys are rejected by serde, and semantic validation additionally\nrejects phase owners that occur more than once after sub-workflow expansion.",
+  "oneOf": [
+    {
+      "description": "The workflow runner publishes after all phases have completed.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "runner"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "One named workflow phase publishes and emits the typed receipt.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "phase"
+        },
+        "phase_id": {
+          "description": "Phase id, which must resolve exactly once in the expanded workflow.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "phase_id"
+      ]
+    }
+  ]
+}
