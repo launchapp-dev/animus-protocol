@@ -597,6 +597,14 @@ pub struct ReapRequest {
     /// Only reap nodes at least this many seconds old.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub older_than_secs: Option<u64>,
+    /// Run ids whose owning workflow is still live (non-terminal) in the
+    /// caller's journal. When present, the reaper treats this as the
+    /// authoritative ownership set: healthy nodes belonging to any run NOT in
+    /// this list are reaped without requiring `all`/`force` (an age grace
+    /// floor still applies plugin-side). When absent, ownership is unknown
+    /// and healthy nodes are only reaped under `all` + `force`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_run_ids: Option<Vec<String>>,
 }
 
 /// Response payload for [`METHOD_ENVIRONMENT_REAP`].
@@ -646,10 +654,15 @@ mod tests {
             force: true,
             dry_run: true,
             older_than_secs: Some(60),
+            live_run_ids: Some(vec!["run-1".to_string()]),
         };
         let decoded: ReapRequest =
             serde_json::from_value(serde_json::to_value(&full).expect("ser")).expect("round-trips");
         assert_eq!(decoded, full);
+        // Older peers omit `live_run_ids`; it decodes as None.
+        let legacy: ReapRequest = serde_json::from_value(serde_json::json!({"all": true}))
+            .expect("legacy payload decodes");
+        assert_eq!(legacy.live_run_ids, None);
     }
 
     #[test]

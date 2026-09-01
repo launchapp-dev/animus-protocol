@@ -16,6 +16,16 @@
       "description": "Required alongside `all` — guards a fresh (no-liveness) reaper from\ntreating every healthy node as an orphan.",
       "type": "boolean"
     },
+    "live_run_ids": {
+      "description": "Run ids whose owning workflow is still live (non-terminal) in the\ncaller's journal. When present, the reaper treats this as the\nauthoritative ownership set: healthy nodes belonging to any run NOT in\nthis list are reaped without requiring `all`/`force` (an age grace\nfloor still applies plugin-side). When absent, ownership is unknown\nand healthy nodes are only reaped under `all` + `force`.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
     "older_than_secs": {
       "description": "Only reap nodes at least this many seconds old.",
       "type": [
