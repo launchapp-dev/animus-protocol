@@ -1,0 +1,226 @@
+{
+  "$defs": {
+    "ChannelDelivery": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_message_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "$ref": "#/$defs/ChannelVersion"
+        },
+        "scope": {
+          "$ref": "#/$defs/ChannelScope"
+        },
+        "state": {
+          "$ref": "#/$defs/ChannelDeliveryState"
+        }
+      },
+      "required": [
+        "schema",
+        "scope",
+        "delivery_id",
+        "state"
+      ],
+      "title": "ChannelDelivery",
+      "type": "object"
+    },
+    "ChannelDeliveryState": {
+      "enum": [
+        "queued",
+        "sending",
+        "accepted",
+        "delivered",
+        "read",
+        "failed",
+        "unknown"
+      ],
+      "title": "ChannelDeliveryState",
+      "type": "string"
+    },
+    "ChannelMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "occurred_at": {
+          "type": "string"
+        },
+        "peer_id": {
+          "type": "string"
+        },
+        "schema": {
+          "$ref": "#/$defs/ChannelVersion"
+        },
+        "scope": {
+          "$ref": "#/$defs/ChannelScope"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "scope",
+        "message_id",
+        "peer_id",
+        "occurred_at",
+        "text"
+      ],
+      "title": "ChannelMessage",
+      "type": "object"
+    },
+    "ChannelReceiveResult": {
+      "additionalProperties": false,
+      "properties": {
+        "duplicate": {
+          "type": "boolean"
+        },
+        "schema": {
+          "$ref": "#/$defs/ChannelVersion"
+        }
+      },
+      "required": [
+        "schema",
+        "duplicate"
+      ],
+      "title": "ChannelReceiveResult",
+      "type": "object"
+    },
+    "ChannelSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "providers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "$ref": "#/$defs/ChannelVersion"
+        },
+        "supports_delivery_status": {
+          "type": "boolean"
+        },
+        "supports_durable_receive": {
+          "type": "boolean"
+        },
+        "supports_media": {
+          "type": "boolean"
+        },
+        "supports_templates": {
+          "type": "boolean"
+        },
+        "supports_text": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "providers",
+        "supports_text",
+        "supports_media",
+        "supports_templates",
+        "supports_delivery_status",
+        "supports_durable_receive"
+      ],
+      "title": "ChannelSchema",
+      "type": "object"
+    },
+    "ChannelScope": {
+      "additionalProperties": false,
+      "properties": {
+        "connection_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "connection_id"
+      ],
+      "title": "ChannelScope",
+      "type": "object"
+    },
+    "ChannelSendParams": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {
+          "type": "string"
+        },
+        "peer_id": {
+          "type": "string"
+        },
+        "reply_to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "$ref": "#/$defs/ChannelVersion"
+        },
+        "scope": {
+          "$ref": "#/$defs/ChannelScope"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "scope",
+        "delivery_id",
+        "peer_id",
+        "text"
+      ],
+      "title": "ChannelSendParams",
+      "type": "object"
+    },
+    "ChannelStatusParams": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {
+          "type": "string"
+        },
+        "schema": {
+          "$ref": "#/$defs/ChannelVersion"
+        },
+        "scope": {
+          "$ref": "#/$defs/ChannelScope"
+        }
+      },
+      "required": [
+        "schema",
+        "scope",
+        "delivery_id"
+      ],
+      "title": "ChannelStatusParams",
+      "type": "object"
+    },
+    "ChannelVersion": {
+      "enum": [
+        "animus.channel.v1"
+      ],
+      "title": "ChannelVersion",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-channel-protocol"
+}

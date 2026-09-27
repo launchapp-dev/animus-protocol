@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChannelDelivery",
+  "type": "object",
+  "properties": {
+    "delivery_id": {
+      "type": "string"
+    },
+    "error_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider_message_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema": {
+      "$ref": "#/$defs/ChannelVersion"
+    },
+    "scope": {
+      "$ref": "#/$defs/ChannelScope"
+    },
+    "state": {
+      "$ref": "#/$defs/ChannelDeliveryState"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scope",
+    "delivery_id",
+    "state"
+  ],
+  "$defs": {
+    "ChannelDeliveryState": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "sending",
+        "accepted",
+        "delivered",
+        "read",
+        "failed",
+        "unknown"
+      ]
+    },
+    "ChannelScope": {
+      "type": "object",
+      "properties": {
+        "connection_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "connection_id"
+      ]
+    },
+    "ChannelVersion": {
+      "type": "string",
+      "enum": [
+        "animus.channel.v1"
+      ]
+    }
+  }
+}
