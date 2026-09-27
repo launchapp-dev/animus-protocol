@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChannelDeliveryState",
+  "type": "string",
+  "enum": [
+    "queued",
+    "sending",
+    "accepted",
+    "delivered",
+    "read",
+    "failed",
+    "unknown"
+  ]
+}

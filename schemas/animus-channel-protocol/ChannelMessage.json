@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChannelMessage",
+  "type": "object",
+  "properties": {
+    "message_id": {
+      "type": "string"
+    },
+    "occurred_at": {
+      "type": "string"
+    },
+    "peer_id": {
+      "type": "string"
+    },
+    "schema": {
+      "$ref": "#/$defs/ChannelVersion"
+    },
+    "scope": {
+      "$ref": "#/$defs/ChannelScope"
+    },
+    "text": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scope",
+    "message_id",
+    "peer_id",
+    "occurred_at",
+    "text"
+  ],
+  "$defs": {
+    "ChannelScope": {
+      "type": "object",
+      "properties": {
+        "connection_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "connection_id"
+      ]
+    },
+    "ChannelVersion": {
+      "type": "string",
+      "enum": [
+        "animus.channel.v1"
+      ]
+    }
+  }
+}

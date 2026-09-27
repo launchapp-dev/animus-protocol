@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChannelStatusParams",
+  "type": "object",
+  "properties": {
+    "delivery_id": {
+      "type": "string"
+    },
+    "schema": {
+      "$ref": "#/$defs/ChannelVersion"
+    },
+    "scope": {
+      "$ref": "#/$defs/ChannelScope"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scope",
+    "delivery_id"
+  ],
+  "$defs": {
+    "ChannelScope": {
+      "type": "object",
+      "properties": {
+        "connection_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "connection_id"
+      ]
+    },
+    "ChannelVersion": {
+      "type": "string",
+      "enum": [
+        "animus.channel.v1"
+      ]
+    }
+  }
+}

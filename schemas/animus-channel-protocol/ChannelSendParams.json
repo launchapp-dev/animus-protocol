@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChannelSendParams",
+  "type": "object",
+  "properties": {
+    "delivery_id": {
+      "type": "string"
+    },
+    "peer_id": {
+      "type": "string"
+    },
+    "reply_to": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema": {
+      "$ref": "#/$defs/ChannelVersion"
+    },
+    "scope": {
+      "$ref": "#/$defs/ChannelScope"
+    },
+    "text": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scope",
+    "delivery_id",
+    "peer_id",
+    "text"
+  ],
+  "$defs": {
+    "ChannelScope": {
+      "type": "object",
+      "properties": {
+        "connection_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "connection_id"
+      ]
+    },
+    "ChannelVersion": {
+      "type": "string",
+      "enum": [
+        "animus.channel.v1"
+      ]
+    }
+  }
+}

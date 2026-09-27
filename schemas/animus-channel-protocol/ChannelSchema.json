@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChannelSchema",
+  "type": "object",
+  "properties": {
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "schema": {
+      "$ref": "#/$defs/ChannelVersion"
+    },
+    "supports_delivery_status": {
+      "type": "boolean"
+    },
+    "supports_durable_receive": {
+      "type": "boolean"
+    },
+    "supports_media": {
+      "type": "boolean"
+    },
+    "supports_templates": {
+      "type": "boolean"
+    },
+    "supports_text": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "providers",
+    "supports_text",
+    "supports_media",
+    "supports_templates",
+    "supports_delivery_status",
+    "supports_durable_receive"
+  ],
+  "$defs": {
+    "ChannelVersion": {
+      "type": "string",
+      "enum": [
+        "animus.channel.v1"
+      ]
+    }
+  }
+}

@@ -21,6 +21,7 @@ members = [
     "protocol",
     "animus-config-protocol",
     "animus-application-protocol",
+    "animus-channel-protocol",
 ]
 resolver = "2"
 

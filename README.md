@@ -52,6 +52,8 @@ Crash-safe coding schedulers use the generation and lease rules in
 reconciliation signal; it is never permission to create a second workflow or
 node.
 
+Messaging adapters use the versioned, text-first [channel contract](docs/channel-contract.md).
+
 ## Subject backend quickstart (Rust)
 
 Cargo.toml:

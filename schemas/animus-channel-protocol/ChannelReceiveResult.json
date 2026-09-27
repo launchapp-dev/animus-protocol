@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChannelReceiveResult",
+  "type": "object",
+  "properties": {
+    "duplicate": {
+      "type": "boolean"
+    },
+    "schema": {
+      "$ref": "#/$defs/ChannelVersion"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "duplicate"
+  ],
+  "$defs": {
+    "ChannelVersion": {
+      "type": "string",
+      "enum": [
+        "animus.channel.v1"
+      ]
+    }
+  }
+}
